@@ -24,6 +24,7 @@ import {
 } from "@binflip/core";
 import { createDb, schema, type Db } from "@binflip/db";
 import { startSwapBack } from "./swapback.js";
+import { startManagement } from "./management.js";
 
 type PositionRow = typeof schema.positions.$inferSelect;
 type EventRow = typeof schema.leaderEvents.$inferSelect;
@@ -50,14 +51,23 @@ await runService("executor", async ({ config, log }) => {
   const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const notifications = new Queue<NotificationJob>(QUEUES.NOTIFICATIONS, { connection });
   const live = config.mode === "live" ? await setupLive(db, config, log) : null;
+  // Leader events and management decisions touch the same positions and balances: run them one at a time.
+  let chain: Promise<unknown> = Promise.resolve();
+  const serial = <T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = chain.then(fn);
+    chain = run.catch(() => undefined);
+    return run;
+  };
+  let management: ReturnType<typeof startManagement> | null = null;
   if (live) {
     live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
+    management = startManagement({ db, connection, builder: live.builder, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
   }
 
   const worker = new Worker<ExecutionJob>(
     QUEUES.EXECUTION,
     async (job) => {
-      const r = await handleEvent(db, job.data.leaderEventId, config, live, log);
+      const r = await serial(() => handleEvent(db, job.data.leaderEventId, config, live, log));
       if (!r) return { duplicate: true };
       log.info({ leader: r.leaderLabel, kind: r.kind, outcome: r.outcome }, r.text);
       await notifications.add("notify", { userId: r.userId, text: r.text }, { removeOnComplete: 1000 });
@@ -81,6 +91,7 @@ await runService("executor", async ({ config, log }) => {
       () => notifications.close(),
       () => worker.close(),
       ...(live?.swapback ? [() => live.swapback!.close()] : []),
+      ...(management ? [() => management!.close()] : []),
     ],
   };
 });
@@ -242,10 +253,10 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     if (exits && tokenMint && action.pool) {
       const received = (await l.builder.tokenBalance(tokenMint)) - before;
       if (received > 0n) {
-        await l.swapback!.enqueue({ userId: ev.userId, leaderEventId: ev.id, mint: tokenMint, pool: action.pool, amount: received.toString(), label: leader.label });
+        await l.swapback!.enqueue({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, mint: tokenMint, pool: action.pool, amount: received.toString(), label: leader.label });
         after.push("🔁 Çıkan token SOL'e çevrilmek üzere kuyruğa alındı.");
       } else if (plan.do === "close") {
-        await l.swapback!.sweepAfterClose({ userId: ev.userId, leaderEventId: ev.id, txId: "", mint: tokenMint, pool: action.pool, amount: "0", label: leader.label });
+        await l.swapback!.sweepAfterClose({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, txId: "", mint: tokenMint, pool: action.pool, amount: "0", label: leader.label });
       }
     }
     return {

@@ -163,6 +163,63 @@ export class DlmmTxBuilder {
     return { txs, extraSigners: new Map(), position: p.position };
   }
 
+  /** Remove bps from a bin sub-range only (flip: the token bins above price). */
+  async removeRange(p: { pool: string; position: string; fromBinId: number; toBinId: number; bps: number }): Promise<BuiltTxs> {
+    const d = await this.pool(p.pool);
+    const txs = await d.removeLiquidity({
+      user: this.owner,
+      position: new PublicKey(p.position),
+      fromBinId: p.fromBinId,
+      toBinId: p.toBinId,
+      bps: new BN(p.bps),
+      shouldClaimAndClose: false,
+    });
+    return { txs, extraSigners: new Map(), position: p.position };
+  }
+
+  /**
+   * Add the pool's non-SOL token single-sided ABOVE the price (the "ask" side of a
+   * flip). Bins outside the position's range are added by the SDK's auto-expand.
+   */
+  async addToken(p: {
+    pool: string;
+    position: string;
+    fromBinId: number;
+    toBinId: number;
+    amount: bigint;
+    strategy: Strategy | null;
+    slippagePct: number;
+  }): Promise<BuiltTxs> {
+    const d = await this.pool(p.pool);
+    const solIsY = d.lbPair.tokenYMint.toBase58() === WSOL_MINT;
+    if (!solIsY) throw new Error("flip supports SOL-as-Y pools only");
+    const active = d.lbPair.activeId;
+    const from = Math.max(p.fromBinId, active + 1);
+    if (p.toBinId < from) throw new Error(`ask range ${p.fromBinId}..${p.toBinId} is not above active ${active}`);
+    const txs = await d.addLiquidityByStrategyChunkable({
+      positionPubKey: new PublicKey(p.position),
+      user: this.owner,
+      totalXAmount: new BN(p.amount.toString()),
+      totalYAmount: new BN(0),
+      strategy: { minBinId: from, maxBinId: p.toBinId, strategyType: toStrategyType(p.strategy), singleSidedX: true },
+      slippage: p.slippagePct,
+    });
+    return { txs, extraSigners: new Map(), position: p.position };
+  }
+
+  /** On-chain bins of a position in raw units (x = token, y = SOL for SOL-as-Y pools). */
+  async positionBins(pool: string, position: string): Promise<{ bins: Array<{ id: number; x: number; y: number }>; lower: number; upper: number; feeX: bigint; feeY: bigint }> {
+    const p = await this.position(pool, position);
+    const pd = p.positionData;
+    return {
+      bins: pd.positionBinData.map((b) => ({ id: b.binId, x: Number(b.positionXAmount), y: Number(b.positionYAmount) })),
+      lower: pd.lowerBinId,
+      upper: pd.upperBinId,
+      feeX: BigInt(pd.feeX.toString()),
+      feeY: BigInt(pd.feeY.toString()),
+    };
+  }
+
   async claim(p: { pool: string; position: string }): Promise<BuiltTxs> {
     const d = await this.pool(p.pool);
     const pos = await d.getPosition(new PublicKey(p.position));

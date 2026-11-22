@@ -112,7 +112,7 @@ export function startSwapBack(p: {
     if (!amount) return;
     const [row] = await db
       .insert(schema.txs)
-      .values({ userId: j.userId, leaderEventId: j.leaderEventId, idempotencyKey: `sweep_${j.leaderEventId}`, kind: "swap", status: "planned", reason: "profit_sweep", dryRun: false, solDelta: -amount })
+      .values({ userId: j.userId, leaderEventId: j.leaderEventId, positionId: j.positionId, idempotencyKey: `sweep_${j.key}`, kind: "swap", status: "planned", reason: "profit_sweep", dryRun: false, solDelta: -amount })
       .onConflictDoNothing()
       .returning({ id: schema.txs.id });
     if (!row) return;
@@ -131,12 +131,12 @@ export function startSwapBack(p: {
     async enqueue(j: Omit<SwapBackJob, "txId">) {
       const [row] = await db
         .insert(schema.txs)
-        .values({ userId: j.userId, leaderEventId: j.leaderEventId, idempotencyKey: `swap_${j.leaderEventId}`, kind: "swap", status: "planned", dryRun: false, tokenDelta: (-BigInt(j.amount)).toString() })
+        .values({ userId: j.userId, leaderEventId: j.leaderEventId, positionId: j.positionId, idempotencyKey: `swap_${j.key}`, kind: "swap", status: "planned", dryRun: false, tokenDelta: (-BigInt(j.amount)).toString() })
         .onConflictDoNothing()
         .returning({ id: schema.txs.id });
       if (!row) return;
       await queue.add("swapback", { ...j, txId: row.id }, {
-        jobId: `swap_${j.leaderEventId}`,
+        jobId: `swap_${j.key}`,
         attempts: SWAPBACK_MAX_ATTEMPTS,
         backoff: { type: "custom" },
         removeOnComplete: { age: 7 * 86_400 },

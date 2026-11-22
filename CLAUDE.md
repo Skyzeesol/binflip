@@ -390,6 +390,10 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 
 **Manager servisi (`apps/manager`):** her `MANAGER_TICK_MS`'de (varsayılan 30 sn) ACTIVE pozisyonları gerçek havuz fiyatıyla değerlendirir.
 - Deneme modunda her pozisyon `positions.sim_state` içinde sanal bir modeldir. Executor'ın aynaladığı eklemeler modele eklenir. Flip ve kapanış kararları `txs`'e `planned` olarak yazılır ve bildirim gider.
-- Canlı mod: kararlar hesaplanıyor ama **icra henüz yok** (sonraki adım: manager → executor kuyruğu; flip = aralığı çek + `addLiquidityByStrategyChunkable` ile ask tarafı, ya da tek işlemde `rebalance_liquidity`).
+- **Canlı mod:** manager pozisyonu zincirden okur (`readLivePosition`; claim edilmemiş fee'ler değere dahil), karar verir ve `management` kuyruğuna koyar. Job id'si `mgmt_<pozisyon>_<tür>_<aktifBin>`, yani aynı bin'de tek aksiyon. Executor işi **uygulamadan önce zincirde tekrar okuyup kararı yeniden doğrular**; eski kararlar düşürülür. Lider olayları ve yönetim kararları executor'da **tek kilitle sırayla** çalışır.
+  - **Kapanış (TP/SL/trailing):** %100 çek + kapat, çıkan token swap-back kuyruğuna gider, pozisyon CLOSED olur.
+  - **Flip:** token bin'leri çekilir, çıkan token miktarı ölçülür ve **sadece o miktar** güncel fiyatın hemen üstüne (0 spread) ask tarafına eklenir. İlerleme `txs.plan.stage` alanında tutulur (planned → removed → added); ekleme başarısız olursa yeniden denemede sadece ekleme yapılır, token satılmaz.
+  - Doğrulama: Karınca'nın gerçek pozisyonunda flip (token bin'i çek + fiyatın üstüne 20 bine bid-ask ekle) tek işlemde mainnet simülasyonunu geçti (~395k CU). SDK pozisyon aralığını yukarı doğru kendisi genişletiyor. Zincirden okuma + karar akışı da gerçek pozisyonla test edildi.
+- Not: bin step 20 havuzlarda %10 düşüş = **53 bin** (`binsForDrop`).
 
 **Kalanlar:** canlı yönetim icrası, auto-compound (fee claim + geri ekleme, maliyet eşiğiyle), Precision Hybrid / reshape, SOL'ün X olduğu havuzlar, kullanıcının kendi açtığı pozisyonları bulup yönetme ("Manage Manual Position").

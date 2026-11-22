@@ -17,6 +17,11 @@ import {
   type Decision,
   type Logger,
   type ManagedPosition,
+  type ManagementJob,
+  type ExitRules,
+  type FlipParams,
+  type ManagementMode,
+  readLivePosition,
   type NotificationJob,
   type PoolInfo,
   type Shape,
@@ -45,25 +50,30 @@ interface SimState {
  *
  * Dry-run: each position is a virtual bin-level model fed by the REAL pool
  * price, so flips and exits happen exactly when they would live.
- * Live: decisions are computed from on-chain bins; execution goes through the
- * executor (next step), so for now live decisions are logged only.
+ * Live: decisions are computed from on-chain bins and queued for the executor,
+ * which re-checks them on chain before acting (one action per position per bin).
  */
 await runService("manager", async ({ config, log }) => {
   const { db, ping, close } = createDb(config.DATABASE_URL, { max: 3 });
   const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const notifications = new Queue<NotificationJob>(QUEUES.NOTIFICATIONS, { connection });
+  const management = new Queue<ManagementJob>(QUEUES.MANAGEMENT, { connection });
   // Read-only: the owner key is irrelevant for price/position reads.
   const builder = new DlmmTxBuilder(createConnection(config.SOLANA_RPC_URL), PublicKey.default);
   const dryRun = config.mode === "dry_run";
-  if (!dryRun) log.warn("live position management: decisions are logged, execution lands in the next step");
 
   let running = false;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
-      await manageAll(db, builder, dryRun, log, (userId, text) =>
-        notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined),
+      await manageAll(
+        db,
+        builder,
+        dryRun,
+        log,
+        (userId, text) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined),
+        management,
       );
     } catch (err) {
       log.error({ err: (err as Error).message }, "tick failed");
@@ -77,7 +87,7 @@ await runService("manager", async ({ config, log }) => {
   await ping();
   return {
     checks: { postgres: ping, redis: async () => void (await connection.ping()) },
-    cleanups: [() => clearInterval(timer), () => close(), async () => void (await connection.quit()), () => notifications.close()],
+    cleanups: [() => clearInterval(timer), () => close(), async () => void (await connection.quit()), () => notifications.close(), () => management.close()],
   };
 });
 
@@ -87,6 +97,7 @@ async function manageAll(
   dryRun: boolean,
   log: Logger,
   notify: (userId: string, text: string) => Promise<void>,
+  management: Queue<ManagementJob>,
 ) {
   const rows = await db
     .select()
@@ -117,7 +128,10 @@ async function manageAll(
     const flip = flipParamsFrom(cs?.managementParams);
     const label = leader?.label ?? "manuel";
 
-    if (!dryRun) continue; // live: see header comment
+    if (!dryRun) {
+      await manageLive(db, builder, pos, mode, exits, flip, management, log);
+      continue;
+    }
 
     let sim = (pos.simState as SimState | null) ?? initSim(pos, info);
     // Mirror adds the executor recorded since the last tick into the model.
@@ -202,4 +216,34 @@ const reasonTr = (r: string) => ({ take_profit: "TP", stop_loss: "SL", trailing_
 function describeFlip(label: string, pool: string, d: Extract<Decision, { do: "flip" }>, thresholdBps: number) {
   const kind = d.kind === "staged" ? `kademeli flip (eşik %${thresholdBps / 100})` : "dipte flip";
   return `[DENEME] ${label}: ${kind} ${pool.slice(0, 6)}… → fiyat %${(-d.dropBps / 100).toFixed(1)} düştü; ${d.withdraw.from}..${d.withdraw.to} bin'lerindeki token çekilip ${d.ask.from}..${d.ask.to} aralığına (fiyatın üstü, ${d.ask.shape}) konurdu. Aşağıdaki SOL bin'lerine dokunulmaz. PnL %${(d.pnlBps / 100).toFixed(2)}`;
+}
+
+async function manageLive(
+  db: Db,
+  builder: DlmmTxBuilder,
+  pos: typeof schema.positions.$inferSelect,
+  mode: ManagementMode,
+  exits: ExitRules,
+  flip: FlipParams,
+  management: Queue<ManagementJob>,
+  log: Logger,
+) {
+  if (!pos.ourPosition) return;
+  const { state, activeId } = await readLivePosition(builder, pos);
+  const d = decide(state, mode, exits, flip);
+  const peak = Math.max(state.peakY, d.valueY);
+  await db
+    .update(schema.positions)
+    .set({ peakValue: String(peak / 1e9), lastManagedAt: new Date() })
+    .where(eq(schema.positions.id, pos.id));
+  if (d.do === "hold") return;
+  const kind = d.do;
+  const reason = d.do === "close" ? d.reason : `${d.kind}_flip`;
+  await management.add(
+    "manage",
+    { positionId: pos.id, kind, reason, activeId },
+    // One action per position per active bin; exits are retried, flips re-decided next tick.
+    { jobId: `mgmt_${pos.id}_${kind}_${activeId}`, attempts: kind === "close" ? 5 : 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } },
+  );
+  log.info({ position: pos.id, kind, reason, activeId, pnlBps: d.pnlBps }, "live decision queued");
 }

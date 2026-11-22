@@ -17,6 +17,8 @@ export const QUEUES = {
   NOTIFICATIONS: "notifications",
   /** Sell tokens that came out of a remove/close back to SOL, retried until sold. */
   SWAPBACK: "swapback",
+  /** manager → executor: a management decision (flip / exit) for one of our live positions. */
+  MANAGEMENT: "management",
 } as const;
 
 /** Position lifecycle (HANDOFF §5). */

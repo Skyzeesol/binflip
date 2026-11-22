@@ -17,7 +17,10 @@ export interface ExecutionJob {
 /** executor → swapback worker: sell `amount` of `mint` back to SOL. */
 export interface SwapBackJob {
   userId: string;
-  leaderEventId: string;
+  /** Idempotency key suffix: the leader event id, or the management txs id. */
+  key: string;
+  leaderEventId: string | null;
+  positionId: string | null;
   txId: string;
   mint: string;
   pool: string;
@@ -30,6 +33,15 @@ export function swapBackDelayMs(attemptsMade: number): number {
   return Math.min(15 * 60_000, 30_000 * 2 ** Math.max(0, attemptsMade - 1));
 }
 export const SWAPBACK_MAX_ATTEMPTS = 1000;
+
+/** manager → executor: act on a management decision. The executor re-checks it on chain first. */
+export interface ManagementJob {
+  positionId: string;
+  kind: "close" | "flip";
+  reason: string;
+  /** Active bin when the manager decided; part of the job id so one bin = one action. */
+  activeId: number;
+}
 
 /** anyone → telegram: a human-readable notification. */
 export interface NotificationJob {
