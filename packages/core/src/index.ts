@@ -13,3 +13,4 @@ export * from "./queues.js";
 export * from "./keystore.js";
 export * from "./meteora/dlmmTx.js";
 export * from "./solana/sender.js";
+export * from "./sweep.js";

@@ -352,3 +352,18 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 2. Kullanıcının kendi açtığı pozisyonlar → ana cüzdanda kalır, operatör + sınırlı delegate ile bota devredilir. Panelde tek tıkla "bota devret" işlemi hazırlanır, kullanıcı Phantom'da imzalar.
 
 **Henüz test edilmedi:** operatörün pozisyonu kapatması (rent nereye gider), operatörün `rebalance_liquidity` çağırması (flip'i tek işlemde ve token transferi olmadan yapabilir), Token-2022 transfer-fee'li token'lar.
+
+**KARAR (kullanıcı, 22 Kasım 2026): Ayrı bot cüzdanı.** Ana cüzdan anahtarı sunucuya hiç gelmez. Kopyalar ve kullanıcının kendi pozisyonları aynı bot (agent) cüzdanında olur; kullanıcı kendi pozisyonlarını bu cüzdanı Phantom'a ekleyip açar, bot cüzdandaki her pozisyonu bulup yönetir (LP Agent "Manage Manual Position" eşdeğeri, 4. aşamada). Operatör modeli ileride isteğe bağlı seçenek. Risk azaltma: bot cüzdanında sadece çalışan sermaye tutulur, kâr eşiği aşınca **ana cüzdana otomatik süpürülür**, sunucu sağlamlaştırılır.
+
+**Sıra (kullanıcı):** 1) kapanışta token → SOL, 2) 4. aşama (kademeli flip, compound, TP/SL, trailing), 3) rebalance aynalama. Panel planlandığı gibi 5. aşamada.
+
+---
+
+## 18. Kapanışta token → SOL ve kâr süpürme (madde 1, tamam)
+
+- `DlmmTxBuilder.swapTokenToSol`: kalan token **aynı DLMM havuzunda** SOL'e çevrilir (ek servis yok, ek ücret yok). Teklifteki fiyat etkisi `MAX_SWAP_IMPACT_BPS`'i (varsayılan %5) aşarsa swap yapılmaz, token cüzdanda kalır ve bildirim gider (`tokens_left_price_impact`). Slippage `user_risk_settings.slippage_bps`'ten alınır.
+- Sadece **kapanışta** swap yapılır. Kısmi çekmelerde yapılmaz, çünkü lider token'ı geri ekleyebilir.
+- **Kâr süpürme:** kapanıştan sonra bakiye `SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS`'u aşarsa fazlası `SWEEP_TO_ADDRESS`'e (ana cüzdanın public adresi) gönderilir. Adres sadece sunucu ayarından okunur.
+- Swap ve süpürme ayrı `txs` satırlarıdır (`swap_<event>`, `sweep_<event>`): idempotenttir ve başarısız olmaları kapanışı geri almaz.
+- Doğrulama: mainnet simülasyonunda aynı işlem içinde 0,01 SOL alım + geri satış geçti. Dev bir satışta %28,5 fiyat etkisi tespit edildi ve swap yapılmadı.
+- Jupiter (daha iyi fiyat için) ileride ikinci yol olarak eklenebilir; `lite-api.jup.ag` ağ izni gerekir.
