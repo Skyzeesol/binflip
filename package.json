@@ -1,0 +1,25 @@
+{
+  "name": "binflip",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Copy LP + bid-ask flip bot for Meteora DLMM / DAMM V2",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "db:generate": "pnpm --filter @binflip/db generate",
+    "db:migrate": "pnpm --filter @binflip/db migrate",
+    "up": "docker compose up -d --build",
+    "down": "docker compose down"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

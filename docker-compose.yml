@@ -1,0 +1,102 @@
+name: binflip
+
+# Shared settings for every Binflip service.
+x-app: &app
+  image: binflip:local
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DATABASE_URL: postgres://binflip:${POSTGRES_PASSWORD:-binflip}@postgres:5432/binflip
+    REDIS_URL: redis://redis:6379
+    HEALTH_PORT: "8080"
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 20s
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: binflip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-binflip}
+      POSTGRES_DB: binflip
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U binflip -d binflip"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    image: binflip:local
+    restart: "no"
+    command: ["node", "packages/db/dist/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://binflip:${POSTGRES_PASSWORD:-binflip}@postgres:5432/binflip
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  listener:
+    <<: *app
+    command: ["node", "apps/listener/dist/main.js"]
+
+  executor:
+    <<: *app
+    command: ["node", "apps/executor/dist/main.js"]
+
+  manager:
+    <<: *app
+    command: ["node", "apps/manager/dist/main.js"]
+
+  telegram:
+    <<: *app
+    command: ["node", "apps/telegram/dist/main.js"]
+
+  api:
+    <<: *app
+    command: ["node", "apps/api/dist/main.js"]
+    environment:
+      <<: *app-env
+      API_PORT: "3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Only on localhost; put a reverse proxy with TLS in front on the VPS.
+    ports:
+      - "127.0.0.1:3001:3001"
+
+volumes:
+  pgdata:
+  redisdata:
