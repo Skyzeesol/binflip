@@ -34,8 +34,6 @@ const EnvSchema = z.object({
   PRIORITY_FEE_MICROLAMPORTS: z.coerce.number().int().min(0).default(50_000),
   /** SOL kept free for rent and fees on top of each copy (lamports). */
   SOL_RESERVE_LAMPORTS: z.coerce.number().int().min(0).default(100_000_000),
-  /** Skip the token → SOL swap after a close when the quote's price impact is above this. */
-  MAX_SWAP_IMPACT_BPS: z.coerce.number().int().min(0).max(10_000).default(500),
   /**
    * Profit sweep: after a close, anything above SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS
    * goes to SWEEP_TO_ADDRESS (your main wallet's PUBLIC address). Set only here, on the server.

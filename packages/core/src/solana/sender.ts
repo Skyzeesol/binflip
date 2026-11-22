@@ -97,14 +97,33 @@ export class TxSender {
     await this.simulate(tx);
     const signature = await this.sign(tx, extra);
     await opts.onSignature?.(signature);
+    return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
+  }
 
-    const raw = tx.serialize();
+  /**
+   * Send a prebuilt versioned transaction (e.g. from Jupiter, which already set
+   * blockhash, fee payer and priority fee). Same guarantees as send().
+   */
+  async sendVersioned(tx: VersionedTransaction, lastValidBlockHeight: number, opts: SendOptions = {}): Promise<SendResult> {
+    const payer = tx.message.staticAccountKeys[0]?.toBase58();
+    if (payer !== this.signer.publicKey) throw new Error(`fee payer ${payer} is not our agent wallet`);
+    const sim = await this.connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: false, commitment: "confirmed" });
+    if (sim.value.err) throw new SimulationError(`simulation failed: ${JSON.stringify(sim.value.err)}`, sim.value.logs ?? []);
+    const sig = await this.signer.signMessage(tx.message.serialize());
+    tx.addSignature(new PublicKey(this.signer.publicKey), sig);
+    const signature = bs58.encode(sig);
+    await opts.onSignature?.(signature);
+    const lastValid = lastValidBlockHeight || (await this.connection.getBlockHeight("confirmed")) + 150;
+    return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
+  }
+
+  private async broadcastAndConfirm(raw: Uint8Array, signature: string, lastValid: number, opts: SendOptions): Promise<SendResult> {
     const deadline = Date.now() + (opts.confirmTimeoutMs ?? 90_000);
     let next = 0;
     while (Date.now() < deadline) {
       if (Date.now() >= next) {
         await this.connection
-          .sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 })
+          .sendRawTransaction(Buffer.from(raw), { skipPreflight: true, maxRetries: 0 })
           .catch(() => undefined); // rebroadcast errors are expected once it lands
         next = Date.now() + (opts.rebroadcastMs ?? 2_000);
       }

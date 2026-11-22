@@ -178,15 +178,13 @@ export class DlmmTxBuilder {
 
   /**
    * Swap `amount` of the pool's non-SOL token back to SOL through the same pool.
-   * Returns null (no tx) when the quote's price impact exceeds maxImpactBps, so
-   * a thin pool never dumps the token for nothing; the caller leaves it in the wallet.
+   * Fallback route when Jupiter has none; slippage comes from the user's setting.
    */
   async swapTokenToSol(p: {
     pool: string;
     amount: bigint;
     slippageBps: number;
-    maxImpactBps: number;
-  }): Promise<{ built: BuiltTxs; outLamports: bigint; minOutLamports: bigint; impactBps: number } | { skipped: "price_impact"; impactBps: number } | null> {
+  }): Promise<{ built: BuiltTxs; outLamports: bigint; minOutLamports: bigint; impactBps: number } | null> {
     if (p.amount <= 0n) return null;
     const d = await this.pool(p.pool);
     const solIsY = d.lbPair.tokenYMint.toBase58() === WSOL_MINT;
@@ -195,8 +193,6 @@ export class DlmmTxBuilder {
     const outToken = solIsY ? d.lbPair.tokenYMint : d.lbPair.tokenXMint;
     const binArrays = await d.getBinArrayForSwap(swapForY, 10);
     const quote = d.swapQuote(new BN(p.amount.toString()), swapForY, new BN(p.slippageBps), binArrays, true);
-    const impactBps = Math.round(Number(quote.priceImpact.toString()) * 100);
-    if (impactBps > p.maxImpactBps) return { skipped: "price_impact", impactBps };
     const tx = await d.swap({
       inToken,
       outToken,
@@ -210,7 +206,7 @@ export class DlmmTxBuilder {
       built: { txs: [tx], extraSigners: new Map(), position: null },
       outLamports: BigInt(quote.outAmount.toString()),
       minOutLamports: BigInt(quote.minOutAmount.toString()),
-      impactBps,
+      impactBps: Math.round(Number(quote.priceImpact.toString()) * 100),
     };
   }
 

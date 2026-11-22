@@ -359,11 +359,16 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 
 ---
 
-## 18. Kapanışta token → SOL ve kâr süpürme (madde 1, tamam)
+## 18. Çıkışta token → SOL ve kâr süpürme (madde 1, tamam)
 
-- `DlmmTxBuilder.swapTokenToSol`: kalan token **aynı DLMM havuzunda** SOL'e çevrilir (ek servis yok, ek ücret yok). Teklifteki fiyat etkisi `MAX_SWAP_IMPACT_BPS`'i (varsayılan %5) aşarsa swap yapılmaz, token cüzdanda kalır ve bildirim gider (`tokens_left_price_impact`). Slippage `user_risk_settings.slippage_bps`'ten alınır.
-- Sadece **kapanışta** swap yapılır. Kısmi çekmelerde yapılmaz, çünkü lider token'ı geri ekleyebilir.
-- **Kâr süpürme:** kapanıştan sonra bakiye `SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS`'u aşarsa fazlası `SWEEP_TO_ADDRESS`'e (ana cüzdanın public adresi) gönderilir. Adres sadece sunucu ayarından okunur.
-- Swap ve süpürme ayrı `txs` satırlarıdır (`swap_<event>`, `sweep_<event>`): idempotenttir ve başarısız olmaları kapanışı geri almaz.
-- Doğrulama: mainnet simülasyonunda aynı işlem içinde 0,01 SOL alım + geri satış geçti. Dev bir satışta %28,5 fiyat etkisi tespit edildi ve swap yapılmadı.
-- Jupiter (daha iyi fiyat için) ileride ikinci yol olarak eklenebilir; `lite-api.jup.ag` ağ izni gerekir.
+**LP Agent davranışı (kullanıcı kararı: "lpagent nasıl yapıyorsa"):**
+- Lider **çektiğinde ya da kapattığında**, o işlemden çıkan token SOL'e satılır. Miktar, işlemden önceki ve sonraki bakiye farkıyla ölçülür; cüzdandaki başka token'lara dokunulmaz.
+- **Rota:** önce Jupiter (`lite-api.jup.ag/swap/v1`, platform ücreti istenmiyor), rota yoksa ya da Jupiter hata verirse aynı DLMM havuzu. Slippage `user_risk_settings.slippage_bps`'ten alınır.
+- **Satılana kadar tekrar:** `swapback` kuyruğu, 30 sn → 1 → 2 → 4 → 8 dk → en fazla 15 dk aralıkla, toplam 1000 deneme (7 günden fazla). Fiyat etkisi yüzünden token bırakılmaz. İlk başarısızlıkta ve satışta bildirim gider.
+- **Çift satış koruması:** her denemeden önce kayıttaki son imzanın durumu ve güncel bakiye kontrol edilir. Satılacak miktar, olaydan çıkan miktar ile bakiyenin küçüğüdür.
+- Swap işlemi `swap_<event>` satırıdır. Durumlar: planned → submitted → confirmed; tekrar beklerken `tokens_left_retrying`.
+- **Smart Token Retention** (lider geri eklerse tut) henüz yok; eklendiğinde satış onun ayarlarına göre bekletilecek.
+
+**Kâr süpürme:** satış (ya da token'sız kapanış) sonrası bakiye `SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS`'u aşarsa fazlası `SWEEP_TO_ADDRESS`'e (ana cüzdanın public adresi) gönderilir. Adres sadece sunucu ayarından okunur. Kayıt `sweep_<event>` satırıdır.
+
+**Doğrulama:** Jupiter ile, cüzdanda gerçekten bulunan bir token'ın satışı mainnet'te simüle edildi (~120k CU, OK). Rotası olmayan bir token için Jupiter hata verdi; bu durumda havuz yoluna düşülüyor. Havuz yolu: aynı işlem içinde alım + geri satış simülasyonu OK.

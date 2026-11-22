@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import {
   DlmmTxBuilder,
   KeystoreSigner,
@@ -12,7 +12,6 @@ import {
   planCopy,
   readPassphraseFile,
   runService,
-  sweepAmount,
   WSOL_MINT,
   type BuiltTxs,
   type Config,
@@ -24,6 +23,7 @@ import {
   type Strategy,
 } from "@binflip/core";
 import { createDb, schema, type Db } from "@binflip/db";
+import { startSwapBack } from "./swapback.js";
 
 type PositionRow = typeof schema.positions.$inferSelect;
 type EventRow = typeof schema.leaderEvents.$inferSelect;
@@ -33,6 +33,7 @@ interface Live {
   sender: TxSender;
   agentWalletId: string;
   publicKey: string;
+  swapback?: ReturnType<typeof startSwapBack>;
 }
 
 /**
@@ -49,6 +50,9 @@ await runService("executor", async ({ config, log }) => {
   const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const notifications = new Queue<NotificationJob>(QUEUES.NOTIFICATIONS, { connection });
   const live = config.mode === "live" ? await setupLive(db, config, log) : null;
+  if (live) {
+    live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
+  }
 
   const worker = new Worker<ExecutionJob>(
     QUEUES.EXECUTION,
@@ -71,7 +75,13 @@ await runService("executor", async ({ config, log }) => {
       redis: async () => void (await connection.ping()),
       ...(live ? { rpc: async () => void (await live.builder.connection.getSlot()) } : {}),
     },
-    cleanups: [() => close(), async () => void (await connection.quit()), () => notifications.close(), () => worker.close()],
+    cleanups: [
+      () => close(),
+      async () => void (await connection.quit()),
+      () => notifications.close(),
+      () => worker.close(),
+      ...(live?.swapback ? [() => live.swapback!.close()] : []),
+    ],
   };
 });
 
@@ -217,6 +227,9 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .where(eq(schema.txs.id, t.id));
   };
   try {
+    const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
+    const exits = plan.do === "remove" || plan.do === "close";
+    const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
     const ourPosition = await executeLive(l, plan, action, ours, saveSig, config, log);
     const fees = await totalFees(l, signatures);
     await db
@@ -224,8 +237,17 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "confirmed", feeLamports: BigInt(fees) })
       .where(eq(schema.txs.id, t.id));
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId);
-    // After a close: sell leftover token back to SOL, then sweep profit. Failures here never undo the close.
-    const after = plan.do === "close" ? await afterClose(db, l, ev, ours, action, risk.slippageBps, config, log) : [];
+    // Like LP Agent: whatever token this exit produced is sold back to SOL (retried until sold).
+    const after: string[] = [];
+    if (exits && tokenMint && action.pool) {
+      const received = (await l.builder.tokenBalance(tokenMint)) - before;
+      if (received > 0n) {
+        await l.swapback!.enqueue({ userId: ev.userId, leaderEventId: ev.id, mint: tokenMint, pool: action.pool, amount: received.toString(), label: leader.label });
+        after.push("🔁 Çıkan token SOL'e çevrilmek üzere kuyruğa alındı.");
+      } else if (plan.do === "close") {
+        await l.swapback!.sweepAfterClose({ userId: ev.userId, leaderEventId: ev.id, txId: "", mint: tokenMint, pool: action.pool, amount: "0", label: leader.label });
+      }
+    }
     return {
       ...base,
       outcome: "confirmed",
@@ -309,88 +331,6 @@ async function executeLive(
     case "skip":
       return null;
   }
-}
-
-/**
- * Close follow-ups, each recorded as its own txs row (swap_<event>, sweep_<event>)
- * so they are idempotent and visible in the copy log. Returns notification lines.
- */
-async function afterClose(
-  db: Db,
-  l: Live,
-  ev: EventRow,
-  ours: PositionRow | null,
-  a: LeaderAction,
-  slippageBps: number,
-  config: Config,
-  log: Logger,
-): Promise<string[]> {
-  const lines: string[] = [];
-  const record = async (key: string, values: Partial<typeof schema.txs.$inferInsert>) => {
-    const [row] = await db
-      .insert(schema.txs)
-      .values({ userId: ev.userId, positionId: ours?.id ?? null, leaderEventId: ev.id, idempotencyKey: key, kind: "swap", status: "planned", dryRun: false, ...values })
-      .onConflictDoNothing()
-      .returning({ id: schema.txs.id });
-    return row?.id ?? null;
-  };
-  const update = (id: string, values: Partial<typeof schema.txs.$inferInsert>) =>
-    db.update(schema.txs).set(values).where(eq(schema.txs.id, id));
-
-  // 1) token → SOL through the same pool
-  const tokenMint = a.mintY === WSOL_MINT ? a.mintX : a.mintX === WSOL_MINT ? a.mintY : null;
-  if (tokenMint && a.pool) {
-    const id = await record(`swap_${ev.id}`, { kind: "swap" });
-    if (id) {
-      try {
-        const amount = await l.builder.tokenBalance(tokenMint);
-        const q = await l.builder.swapTokenToSol({ pool: a.pool, amount, slippageBps, maxImpactBps: config.MAX_SWAP_IMPACT_BPS });
-        if (!q) {
-          await update(id, { status: "skipped", reason: "no_tokens_left" });
-        } else if ("skipped" in q) {
-          await update(id, { status: "skipped", reason: "tokens_left_price_impact", plan: { impactBps: q.impactBps, amount: amount.toString() } });
-          lines.push(`⚠️ Token cüzdanda bırakıldı: fiyat etkisi %${(q.impactBps / 100).toFixed(1)} (sınır %${config.MAX_SWAP_IMPACT_BPS / 100}).`);
-        } else {
-          const r = await l.sender.send(q.built.txs[0]!, [], {
-            priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS,
-            onSignature: async (sig) => void (await update(id, { status: "submitted", signature: sig })),
-          });
-          await update(id, { status: "confirmed", solDelta: q.outLamports, tokenDelta: (-amount).toString(), feeLamports: BigInt(r.feeLamports ?? 0) });
-          lines.push(`🔁 Token → ~${sol(q.outLamports)} SOL (aynı havuz, etki %${(q.impactBps / 100).toFixed(2)})`);
-        }
-      } catch (err) {
-        await update(id, { status: "failed", reason: "tokens_left_swap_failed", error: (err as Error).message.slice(0, 2000) });
-        lines.push(`⚠️ Token SOL'e çevrilemedi, cüzdanda kaldı: ${(err as Error).message.slice(0, 120)}`);
-        log.warn({ err: (err as Error).message }, "swap back failed");
-      }
-    }
-  }
-
-  // 2) profit sweep to the main wallet (address only from server config)
-  if (config.SWEEP_TO_ADDRESS) {
-    const balance = BigInt(await l.builder.connection.getBalance(new PublicKey(l.publicKey)));
-    const amount = sweepAmount(balance, BigInt(config.SWEEP_KEEP_LAMPORTS), BigInt(config.SWEEP_MIN_LAMPORTS));
-    if (amount) {
-      const id = await record(`sweep_${ev.id}`, { kind: "swap", reason: "profit_sweep", solDelta: -amount });
-      if (id) {
-        try {
-          const tx = new Transaction().add(
-            SystemProgram.transfer({ fromPubkey: new PublicKey(l.publicKey), toPubkey: new PublicKey(config.SWEEP_TO_ADDRESS), lamports: amount }),
-          );
-          const r = await l.sender.send(tx, [], {
-            priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS,
-            onSignature: async (sig) => void (await update(id, { status: "submitted", signature: sig })),
-          });
-          await update(id, { status: "confirmed", feeLamports: BigInt(r.feeLamports ?? 0) });
-          lines.push(`💸 ${sol(amount)} SOL ana cüzdana süpürüldü (bot cüzdanında ${sol(BigInt(config.SWEEP_KEEP_LAMPORTS))} SOL kaldı)`);
-        } catch (err) {
-          await update(id, { status: "failed", error: (err as Error).message.slice(0, 2000) });
-          lines.push(`⚠️ Kâr süpürme başarısız: ${(err as Error).message.slice(0, 120)}`);
-        }
-      }
-    }
-  }
-  return lines;
 }
 
 async function hasLiquidity(l: Live, pool: string, position: string) {
@@ -527,7 +467,7 @@ function describe(label: string, a: LeaderAction, plan: Plan, dryRun: boolean): 
     case "add":
       return `${head} → ${sol(plan.amountSol)} SOL ${verb("eklerdim", "eklendi")} (lider ${sol(leaderSol)} SOL, oran %${(Number(plan.ratioPpm) / 10_000).toFixed(2)})${plan.capped ? `, sınır: ${plan.capped}` : ""}`;
     case "remove":
-      return `${head} → pozisyonun %${plan.bps / 100}'i ${verb("çekilirdi", "çekildi")}`;
+      return `${head} → pozisyonun %${plan.bps / 100}'i ${verb("çekilirdi, çıkan token SOL'e çevrilirdi", "çekildi")}`;
     case "close":
       return `${head} → pozisyon ${verb("kapatılırdı, kalan token aynı havuzda SOL'e çevrilirdi", "kapatıldı")}`;
     case "claim":

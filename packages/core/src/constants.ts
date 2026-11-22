@@ -15,6 +15,8 @@ export const QUEUES = {
   LEADER_EVENTS: "leader-events",
   EXECUTION: "execution",
   NOTIFICATIONS: "notifications",
+  /** Sell tokens that came out of a remove/close back to SOL, retried until sold. */
+  SWAPBACK: "swapback",
 } as const;
 
 /** Position lifecycle (HANDOFF §5). */
