@@ -7,6 +7,8 @@ import {
   decide,
   flipParamsFrom,
   readLivePosition,
+  shouldCompound,
+  compoundRanges,
   type BuiltTxs,
   type Config,
   type DlmmTxBuilder,
@@ -81,8 +83,14 @@ export function startManagement(p: {
     // Re-check on chain unless we are resuming a flip whose token is already out.
     const exits: ExitRules = { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
     const flip = flipParamsFrom(cs?.managementParams);
-    const { state, activeId } = await readLivePosition(builder, pos);
+    const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
     const d = progress.stage === "removed" ? null : decide(state, cs?.managementMode ?? pos.managementMode, exits, flip);
+    if (j.kind === "compound") {
+      // Exits and flips win over compounding; and fees must still be worth it.
+      const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: cs?.compoundIntervalMinutes ?? null, minLamports: BigInt(config.COMPOUND_MIN_LAMPORTS) });
+      if (d?.do !== "hold" || c.do !== "compound") return { skipped: "stale" };
+      return compound(pos, label, key, feeX, feeY, activeId);
+    }
     if (d && d.do !== j.kind) {
       log.info({ position: pos.id, wanted: j.kind, now: d.do }, "management decision is stale, dropped");
       return { skipped: "stale" };
@@ -148,6 +156,51 @@ export function startManagement(p: {
       .where(eq(schema.positions.id, pos.id));
     await notify(pos.userId, `[CANLI] ${label}: ${j.reason.replace("_", " ")} yapıldı (${progress.signatures.length} işlem); token fiyatın üstüne kondu.`);
     return { flipped: true };
+  }
+
+  /** Claim fees, add SOL fees back below price and token fees above it (or sell them). */
+  async function compound(pos: typeof schema.positions.$inferSelect, label: string, key: string, feeX: bigint, feeY: bigint, activeId: number) {
+    const [t] = await db
+      .insert(schema.txs)
+      .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: "compound", status: "planned", reason: "auto_compound", dryRun: false })
+      .onConflictDoNothing()
+      .returning();
+    if (!t) return { skipped: "duplicate" };
+    const sigs: string[] = [];
+    const onSignature = async (sig: string) => {
+      sigs.push(sig);
+      await db.update(schema.txs).set({ status: "submitted", signature: sig }).where(eq(schema.txs.id, t.id));
+    };
+    const sendAll = async (built: BuiltTxs) => {
+      for (const [i, tx] of built.txs.entries()) await sender.send(tx, built.extraSigners.get(i) ?? [], opts(onSignature));
+    };
+    const pool = pos.pool;
+    const position = pos.ourPosition!;
+    await sendAll(await builder.claim({ pool, position }));
+    const chain = await builder.positionBins(pool, position);
+    const ranges = compoundRanges(chain.lower, chain.upper, activeId);
+    const shape = "spot" as const; // HawkFi default: compounded fees spread evenly over the range
+    const lines: string[] = [];
+    if (feeY > 0n && ranges.sol) {
+      await sendAll(await builder.add({ pool, position, lowerBinId: ranges.sol.from, upperBinId: ranges.sol.to, amountSol: feeY, strategy: shape, slippagePct: 1 }));
+      lines.push(`${(Number(feeY) / 1e9).toFixed(4)} SOL`);
+    }
+    if (feeX > 0n) {
+      const info = await builder.poolInfo(pool);
+      const tokenMint = info.mintY === WSOL_MINT ? info.mintX : info.mintY;
+      if (ranges.token) {
+        await sendAll(await builder.addToken({ pool, position, fromBinId: ranges.token.from, toBinId: ranges.token.to, amount: feeX, strategy: shape, slippagePct: 1 }));
+        lines.push("token fee'leri fiyatın üstüne");
+      } else {
+        await p.swapback.enqueue({ userId: pos.userId, key: t.id, leaderEventId: null, positionId: pos.id, mint: tokenMint, pool, amount: feeX.toString(), label });
+        lines.push("token fee'leri SOL'e çevrilmek üzere kuyrukta");
+      }
+    }
+    await db.update(schema.txs).set({ status: "confirmed", solDelta: -feeY, plan: { signatures: sigs, feeX: feeX.toString(), feeY: feeY.toString() } as never }).where(eq(schema.txs.id, t.id));
+    // Compounded fees are profit, not new capital: depositedSol stays, so PnL shows them as gain.
+    await db.update(schema.positions).set({ lastCompoundAt: new Date() }).where(eq(schema.positions.id, pos.id));
+    await notify(pos.userId, `[CANLI] ${label}: auto-compound (${lines.join(", ") || "sadece claim"}), ${sigs.length} işlem`);
+    return { compounded: true };
   }
 
   return { close: () => worker.close() };

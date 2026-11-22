@@ -43,6 +43,13 @@
       "when": 1795382325118,
       "tag": "0005_overjoyed_cerebro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795383079666,
+      "tag": "0006_whole_paladin",
+      "breakpoints": true
     }
   ]
 }

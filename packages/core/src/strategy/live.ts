@@ -19,7 +19,7 @@ export interface LivePositionRow {
 export async function readLivePosition(
   builder: DlmmTxBuilder,
   row: LivePositionRow,
-): Promise<{ state: ManagedPosition; activeId: number; binStep: number }> {
+): Promise<{ state: ManagedPosition; activeId: number; binStep: number; feeX: bigint; feeY: bigint }> {
   if (!row.ourPosition) throw new Error("position has no on-chain address");
   const info = await builder.poolInfo(row.pool);
   const pb = await builder.positionBins(row.pool, row.ourPosition);
@@ -29,6 +29,8 @@ export async function readLivePosition(
   return {
     activeId: info.activeBinId,
     binStep: info.binStep,
+    feeX: pb.feeX,
+    feeY: pb.feeY,
     state: {
       bins: pb.bins,
       activeId: info.activeBinId,

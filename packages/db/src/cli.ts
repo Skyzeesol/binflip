@@ -15,6 +15,7 @@ import * as schema from "./schema.js";
  *   node packages/db/dist/cli.js leader:add --address <addr> --label <name> [--pct 50] [--max-per-tx 2]
  *        [--max-per-position 10] [--tp 5] [--sl 5] [--trailing 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
  *        [--mode mirror|staged_flip|bottom_flip|precision_hybrid] [--flip-threshold 10]   (flip threshold in %, default 10)
+ *        [--compound 60]   (auto-compound every N minutes when fees ≥ COMPOUND_MIN_LAMPORTS; 0 = off)
  *   node packages/db/dist/cli.js leader:list
  *   node packages/db/dist/cli.js leader:pause|leader:resume|leader:remove --address <addr>
  *   node packages/db/dist/cli.js wallet:create --label agent [--out keystore/agent.json] [--passphrase-file secrets/keystore_passphrase]
@@ -48,6 +49,7 @@ const { values: o } = parseArgs({
     "max-per-day": { type: "string" },
     mode: { type: "string" },
     "flip-threshold": { type: "string" },
+    compound: { type: "string" },
     reason: { type: "string" },
   },
 });
@@ -104,6 +106,7 @@ try {
         trailingStopBps: toBps(o.trailing),
         ...(o.mode ? { managementMode: parseMode(o.mode) } : {}),
         ...(o["flip-threshold"] ? { managementParams: { flipThresholdBps: toBps(o["flip-threshold"]) } } : {}),
+        ...(o.compound ? { compoundIntervalMinutes: Number(o.compound) || null } : {}),
         copyDammV2: !o["no-damm"],
         memeProtection: !o["no-meme"],
         ...(o.strategies
@@ -128,7 +131,8 @@ try {
         const exit = c.takeProfitBps || c.stopLossBps ? `TP ${(c.takeProfitBps ?? 0) / 100}% / SL ${(c.stopLossBps ?? 0) / 100}%` : "liderle çık";
         const flip = (c.managementParams as { flipThresholdBps?: number }).flipThresholdBps ?? 1000;
         const mode = c.managementMode === "mirror" ? "aynala" : `${c.managementMode}${c.managementMode === "staged_flip" ? ` %${flip / 100}` : ""}`;
-        console.log(`${l.status.padEnd(6)} ${l.label.padEnd(20)} ${l.address}  ${pct} ${max}  ${exit}  yönetim:${mode}  DAMM:${c.copyDammV2 ? "açık" : "kapalı"} meme:${c.memeProtection ? "açık" : "kapalı"}`);
+        const comp = c.compoundIntervalMinutes ? ` compound:${c.compoundIntervalMinutes}dk` : "";
+        console.log(`${l.status.padEnd(6)} ${l.label.padEnd(20)} ${l.address}  ${pct} ${max}  ${exit}  yönetim:${mode}${comp}  DAMM:${c.copyDammV2 ? "açık" : "kapalı"} meme:${c.memeProtection ? "açık" : "kapalı"}`);
       }
       if (!rows.length) console.log("(no leaders)");
       break;

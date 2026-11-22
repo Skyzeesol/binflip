@@ -38,6 +38,8 @@ const EnvSchema = z.object({
    * Profit sweep: after a close, anything above SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS
    * goes to SWEEP_TO_ADDRESS (your main wallet's PUBLIC address). Set only here, on the server.
    */
+  /** Auto-compound only when unclaimed fees are worth at least this (lamports). */
+  COMPOUND_MIN_LAMPORTS: z.coerce.number().int().min(0).default(20_000_000),
   SWEEP_TO_ADDRESS: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "base58 address").optional(),
   SWEEP_KEEP_LAMPORTS: z.coerce.number().int().min(0).default(5_000_000_000),
   SWEEP_MIN_LAMPORTS: z.coerce.number().int().min(0).default(500_000_000),

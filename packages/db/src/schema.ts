@@ -278,6 +278,7 @@ export const positions = pgTable(
     /** Dry-run only: the virtual bin-level position the manager simulates (see core/strategy/bins.ts). */
     simState: jsonb("sim_state").$type<Record<string, unknown>>(),
     lastManagedAt: ts("last_managed_at"),
+    lastCompoundAt: ts("last_compound_at"),
     openedAt: ts("opened_at"),
     closedAt: ts("closed_at"),
     closeReason: text("close_reason"),

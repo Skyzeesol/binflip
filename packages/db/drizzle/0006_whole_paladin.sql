@@ -1,0 +1,1 @@
+ALTER TABLE "positions" ADD COLUMN "last_compound_at" timestamp with time zone;

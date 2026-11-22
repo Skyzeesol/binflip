@@ -22,6 +22,7 @@ import {
   type FlipParams,
   type ManagementMode,
   readLivePosition,
+  shouldCompound,
   type NotificationJob,
   type PoolInfo,
   type Shape,
@@ -74,6 +75,7 @@ await runService("manager", async ({ config, log }) => {
         log,
         (userId, text) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined),
         management,
+        BigInt(config.COMPOUND_MIN_LAMPORTS),
       );
     } catch (err) {
       log.error({ err: (err as Error).message }, "tick failed");
@@ -98,6 +100,7 @@ async function manageAll(
   log: Logger,
   notify: (userId: string, text: string) => Promise<void>,
   management: Queue<ManagementJob>,
+  compoundMin: bigint,
 ) {
   const rows = await db
     .select()
@@ -129,7 +132,7 @@ async function manageAll(
     const label = leader?.label ?? "manuel";
 
     if (!dryRun) {
-      await manageLive(db, builder, pos, mode, exits, flip, management, log);
+      await manageLive(db, builder, pos, mode, exits, flip, management, log, cs?.compoundIntervalMinutes ?? null, compoundMin);
       continue;
     }
 
@@ -227,16 +230,26 @@ async function manageLive(
   flip: FlipParams,
   management: Queue<ManagementJob>,
   log: Logger,
+  compoundMinutes: number | null,
+  compoundMin: bigint,
 ) {
   if (!pos.ourPosition) return;
-  const { state, activeId } = await readLivePosition(builder, pos);
+  const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
   const d = decide(state, mode, exits, flip);
   const peak = Math.max(state.peakY, d.valueY);
   await db
     .update(schema.positions)
     .set({ peakValue: String(peak / 1e9), lastManagedAt: new Date() })
     .where(eq(schema.positions.id, pos.id));
-  if (d.do === "hold") return;
+  if (d.do === "hold") {
+    const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: compoundMinutes, minLamports: compoundMin });
+    if (c.do === "compound") {
+      const slot = Math.floor(Date.now() / (compoundMinutes! * 60_000));
+      await management.add("manage", { positionId: pos.id, kind: "compound", reason: "auto_compound", activeId }, { jobId: `mgmt_${pos.id}_compound_${slot}`, attempts: 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
+      log.info({ position: pos.id, feesSol: Number(c.feesValueY) / 1e9 }, "compound queued");
+    }
+    return;
+  }
   const kind = d.do;
   const reason = d.do === "close" ? d.reason : `${d.kind}_flip`;
   await management.add(
