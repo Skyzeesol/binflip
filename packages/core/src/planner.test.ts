@@ -112,6 +112,19 @@ describe("planCopy", () => {
     expect(daily).toMatchObject({ reason: "daily_limit" });
   });
 
+  it("safety cap on first funding locks the smaller share (live Karınca case: 3.579 SOL, cap 1)", () => {
+    const first = planCopy(action({ added: { x: 0n, y: 3_579_100_000n } }), settings({ maxSolPerTx: SOL }), ours());
+    expect(first).toMatchObject({ do: "add", amountSol: SOL, firstFunding: true });
+    if (first.do !== "add") throw new Error();
+    expect(first.ratioPpm).toBe(279_399n);
+    const next = planCopy(
+      action({ added: { x: 0n, y: 1_158_900_000n } }),
+      settings({ maxSolPerTx: SOL }),
+      ours({ depositedSol: SOL, ratioPpm: first.ratioPpm, fundedAt: new Date() }),
+    );
+    expect(next).toMatchObject({ do: "add", amountSol: 323_795_501n, firstFunding: false });
+  });
+
   it("DAMM V2 respects the pool-type toggle", () => {
     const a = action({ protocol: "damm_v2", kind: "open", created: true, added: { x: 0n, y: SOL } });
     expect(planCopy(a, settings({ copyDammV2: false }), null)).toMatchObject({ reason: "pool_type_not_copied" });

@@ -1,7 +1,7 @@
 import { WSOL_MINT } from "./constants.js";
 import type { ActionKind, LeaderAction } from "./meteora/actions.js";
 import type { Strategy } from "./meteora/strategy.js";
-import { mirrorRemoveBps, sizeDeposit, type SizingSettings } from "./sizing.js";
+import { PPM, mirrorRemoveBps, sizeDeposit, type SizingSettings } from "./sizing.js";
 
 /** Settings the planner needs, a subset of copy_settings + user_risk_settings. */
 export interface PlannerSettings {
@@ -111,19 +111,17 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
   if (!sized.ok) return skip(sized.reason);
 
   let amount = sized.amount;
+  let ratioPpm = sized.ratioPpm;
   let capped: string | null = sized.capped;
+  const firstFunding = (ours?.depositedSol ?? 0n) === 0n;
   if (amount > s.maxSolPerTx) {
     amount = s.maxSolPerTx;
     capped = "max_sol_per_tx";
+    // Same rule as a capped open: later adds keep the smaller share we actually got.
+    if (firstFunding) ratioPpm = (amount * PPM) / side.sol;
   }
   if (amount > s.dailyRoom) return skip("daily_limit");
 
-  if (a.kind === "open") return { do: "open", amountSol: amount, ratioPpm: sized.ratioPpm, capped, empty: false };
-  return {
-    do: "add",
-    amountSol: amount,
-    ratioPpm: sized.ratioPpm,
-    capped,
-    firstFunding: (ours?.depositedSol ?? 0n) === 0n,
-  };
+  if (a.kind === "open") return { do: "open", amountSol: amount, ratioPpm, capped, empty: false };
+  return { do: "add", amountSol: amount, ratioPpm, capped, firstFunding };
 }
