@@ -13,7 +13,8 @@ import * as schema from "./schema.js";
  *
  *   node packages/db/dist/cli.js user:init --wallet <login wallet>
  *   node packages/db/dist/cli.js leader:add --address <addr> --label <name> [--pct 50] [--max-per-tx 2]
- *        [--max-per-position 10] [--tp 5] [--sl 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
+ *        [--max-per-position 10] [--tp 5] [--sl 5] [--trailing 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
+ *        [--mode mirror|staged_flip|bottom_flip|precision_hybrid] [--flip-threshold 10]   (flip threshold in %, default 10)
  *   node packages/db/dist/cli.js leader:list
  *   node packages/db/dist/cli.js leader:pause|leader:resume|leader:remove --address <addr>
  *   node packages/db/dist/cli.js wallet:create --label agent [--out keystore/agent.json] [--passphrase-file secrets/keystore_passphrase]
@@ -45,6 +46,8 @@ const { values: o } = parseArgs({
     out: { type: "string", default: "keystore/agent.json" },
     "passphrase-file": { type: "string" },
     "max-per-day": { type: "string" },
+    mode: { type: "string" },
+    "flip-threshold": { type: "string" },
     reason: { type: "string" },
   },
 });
@@ -99,6 +102,8 @@ try {
         takeProfitBps: toBps(o.tp),
         stopLossBps: toBps(o.sl),
         trailingStopBps: toBps(o.trailing),
+        ...(o.mode ? { managementMode: parseMode(o.mode) } : {}),
+        ...(o["flip-threshold"] ? { managementParams: { flipThresholdBps: toBps(o["flip-threshold"]) } } : {}),
         copyDammV2: !o["no-damm"],
         memeProtection: !o["no-meme"],
         ...(o.strategies
@@ -121,7 +126,9 @@ try {
         const pct = c.sizingPercentBps !== null ? `%${c.sizingPercentBps / 100}` : "-";
         const max = c.maxSolPerAdd !== null ? `${Number(c.maxSolPerAdd) / SOL} SOL/tx` : "sınırsız";
         const exit = c.takeProfitBps || c.stopLossBps ? `TP ${(c.takeProfitBps ?? 0) / 100}% / SL ${(c.stopLossBps ?? 0) / 100}%` : "liderle çık";
-        console.log(`${l.status.padEnd(6)} ${l.label.padEnd(20)} ${l.address}  ${pct} ${max}  ${exit}  DAMM:${c.copyDammV2 ? "açık" : "kapalı"} meme:${c.memeProtection ? "açık" : "kapalı"}`);
+        const flip = (c.managementParams as { flipThresholdBps?: number }).flipThresholdBps ?? 1000;
+        const mode = c.managementMode === "mirror" ? "aynala" : `${c.managementMode}${c.managementMode === "staged_flip" ? ` %${flip / 100}` : ""}`;
+        console.log(`${l.status.padEnd(6)} ${l.label.padEnd(20)} ${l.address}  ${pct} ${max}  ${exit}  yönetim:${mode}  DAMM:${c.copyDammV2 ? "açık" : "kapalı"} meme:${c.memeProtection ? "açık" : "kapalı"}`);
       }
       if (!rows.length) console.log("(no leaders)");
       break;
@@ -224,4 +231,9 @@ async function promptPassphrase(): Promise<string> {
   const b = await ask("Repeat: ");
   if (a !== b) throw new Error("passphrases do not match");
   return a;
+}
+
+function parseMode(m: string): "mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid" {
+  if (m === "mirror" || m === "staged_flip" || m === "bottom_flip" || m === "precision_hybrid") return m;
+  throw new Error(`--mode must be mirror, staged_flip, bottom_flip or precision_hybrid`);
 }

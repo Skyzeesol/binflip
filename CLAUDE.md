@@ -372,3 +372,24 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 **Kâr süpürme:** satış (ya da token'sız kapanış) sonrası bakiye `SWEEP_KEEP_LAMPORTS + SWEEP_MIN_LAMPORTS`'u aşarsa fazlası `SWEEP_TO_ADDRESS`'e (ana cüzdanın public adresi) gönderilir. Adres sadece sunucu ayarından okunur. Kayıt `sweep_<event>` satırıdır.
 
 **Doğrulama:** Jupiter ile, cüzdanda gerçekten bulunan bir token'ın satışı mainnet'te simüle edildi (~120k CU, OK). Rotası olmayan bir token için Jupiter hata verdi; bu durumda havuz yoluna düşülüyor. Havuz yolu: aynı işlem içinde alım + geri satış simülasyonu OK.
+
+---
+
+## 19. Aşama 4: pozisyon yöneticisi (devam ediyor)
+
+**Karar (kullanıcı):** kademeli flip varsayılan eşiği **%10**. Lider bazında değiştirilebilir: `copy_settings.management_params.flipThresholdBps`, CLI'da `leader:add … --mode staged_flip --flip-threshold 12`. Panelde de ayarlanabilir olacak.
+
+**Motor (`packages/core/src/strategy`), saf fonksiyonlar, fiyat simülasyonu testleriyle:**
+- `bins.ts`: bin bazında model. `price(bin) = (1+binStep/1e4)^binId`. Fiyat düşerken geçtiği bin'lerdeki SOL token'a, yükselirken geçtiği bin'lerdeki token SOL'e dönüşür. Şekiller: spot (eşit), bid-ask (fiyattan uzaklaştıkça artar), curve (azalır). `binsForDrop(1000, 100) = 11` (1,01^-11 ≈ −%10,4).
+- `manage.ts` `decide()`: önce çıkışlar (TP, SL, trailing), sonra flip.
+  - **Trailing** sadece pozisyon bir kez kâra geçtikten sonra devreye girer (yunus: "önce tepki beklenir"). Kârda değilken düşüşü normal SL yönetir.
+  - **Kademeli flip:** girişten ya da son flip'ten itibaren fiyat ≥ eşik kadar düşünce, sadece fiyatın içinden geçtiği **token bin'leri** (aktif binin üstü) çekilir ve 0 spread ile fiyatın hemen üstünden başlayan bid-ask ask tarafına konur. Aşağıdaki SOL bin'lerine dokunulmaz. Sonraki eşik son flip'ten ölçülür.
+  - **Dipte flip:** aralığın altına çıkınca (hepsi token) tamamı fiyatın üstüne konur.
+  - Claim edilmiş fee'ler PnL'e dahil.
+- `applyFlip()` testleri: SOL bin'leri korunuyor, token miktarı ve pozisyon değeri flip anında korunuyor, sonrasında toparlanma token'ı fiyatın üstünde satıyor.
+
+**Manager servisi (`apps/manager`):** her `MANAGER_TICK_MS`'de (varsayılan 30 sn) ACTIVE pozisyonları gerçek havuz fiyatıyla değerlendirir.
+- Deneme modunda her pozisyon `positions.sim_state` içinde sanal bir modeldir. Executor'ın aynaladığı eklemeler modele eklenir. Flip ve kapanış kararları `txs`'e `planned` olarak yazılır ve bildirim gider.
+- Canlı mod: kararlar hesaplanıyor ama **icra henüz yok** (sonraki adım: manager → executor kuyruğu; flip = aralığı çek + `addLiquidityByStrategyChunkable` ile ask tarafı, ya da tek işlemde `rebalance_liquidity`).
+
+**Kalanlar:** canlı yönetim icrası, auto-compound (fee claim + geri ekleme, maliyet eşiğiyle), Precision Hybrid / reshape, SOL'ün X olduğu havuzlar, kullanıcının kendi açtığı pozisyonları bulup yönetme ("Manage Manual Position").

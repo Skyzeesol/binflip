@@ -18,7 +18,7 @@ export interface ExitRules {
 }
 
 export interface FlipParams {
-  /** Staged flip trigger: price drop from entry / last flip (bps). Default 1400 = 14%. */
+  /** Staged flip trigger: price drop from entry / last flip (bps). Default 1000 = 10% (user decision), per leader. */
   thresholdBps: number;
   /** Bins used for the ask side above price. Default: as many as were withdrawn (min 10). */
   askBins: number | null;
@@ -26,9 +26,20 @@ export interface FlipParams {
   askShape: Shape;
 }
 
-export const DEFAULT_FLIP: FlipParams = { thresholdBps: 1400, askBins: null, askShape: "bid_ask" };
+export const DEFAULT_FLIP: FlipParams = { thresholdBps: 1000, askBins: null, askShape: "bid_ask" };
 
-export interface PositionState {
+/** Read flip params from copy_settings.management_params, falling back to defaults. */
+export function flipParamsFrom(p: Record<string, unknown> | null | undefined): FlipParams {
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const shape = p?.askShape;
+  return {
+    thresholdBps: n(p?.flipThresholdBps) ?? DEFAULT_FLIP.thresholdBps,
+    askBins: n(p?.askBins) ?? DEFAULT_FLIP.askBins,
+    askShape: shape === "spot" || shape === "curve" || shape === "bid_ask" ? shape : DEFAULT_FLIP.askShape,
+  };
+}
+
+export interface ManagedPosition {
   bins: Bin[];
   activeId: number;
   binStep: number;
@@ -61,7 +72,7 @@ export type Decision =
       valueY: number;
     };
 
-export function pnlBps(s: PositionState): { pnlBps: number; valueY: number } {
+export function pnlBps(s: ManagedPosition): { pnlBps: number; valueY: number } {
   const valueY = valueInY(s.bins, s.activeId, s.binStep) + s.claimedFeesY;
   const pnl = s.depositedY > 0 ? Math.round((valueY / s.depositedY - 1) * 10_000) : 0;
   return { pnlBps: pnl, valueY };
@@ -72,7 +83,7 @@ export function pnlBps(s: PositionState): { pnlBps: number; valueY: number } {
  * Trailing stop only arms once the position has been in profit, so a fresh
  * position that dips is handled by the plain stop loss ("wait for a reaction").
  */
-export function decide(s: PositionState, mode: ManagementMode, exits: ExitRules, flip: FlipParams = DEFAULT_FLIP): Decision {
+export function decide(s: ManagedPosition, mode: ManagementMode, exits: ExitRules, flip: FlipParams = DEFAULT_FLIP): Decision {
   const { pnlBps: pnl, valueY } = pnlBps(s);
 
   if (exits.takeProfitBps !== null && pnl >= exits.takeProfitBps) return { do: "close", reason: "take_profit", pnlBps: pnl, valueY };
@@ -101,7 +112,7 @@ export function decide(s: PositionState, mode: ManagementMode, exits: ExitRules,
   return { do: "hold", pnlBps: pnl, valueY };
 }
 
-function flipDecision(kind: "staged" | "bottom", s: PositionState, tokenBins: Bin[], flip: FlipParams, ref: number, pnl: number, valueY: number): Decision {
+function flipDecision(kind: "staged" | "bottom", s: ManagedPosition, tokenBins: Bin[], flip: FlipParams, ref: number, pnl: number, valueY: number): Decision {
   const from = tokenBins[0]!.id;
   const to = tokenBins[tokenBins.length - 1]!.id;
   const n = Math.max(10, flip.askBins ?? tokenBins.length);
@@ -119,15 +130,17 @@ function flipDecision(kind: "staged" | "bottom", s: PositionState, tokenBins: Bi
 }
 
 /** Apply a flip to a virtual position (dry-run and simulations). SOL bins below are untouched. */
-export function applyFlip(s: PositionState, d: Extract<Decision, { do: "flip" }>): PositionState {
-  const kept = s.bins.filter((b) => !(b.id >= d.withdraw.from && b.id <= d.withdraw.to && b.x > 0 && b.y === 0) || (d.kind === "bottom" ? false : false));
-  const remaining = d.kind === "bottom" ? s.bins.filter((b) => b.y > 0 && b.x === 0) : kept;
+export function applyFlip(s: ManagedPosition, d: Extract<Decision, { do: "flip" }>): ManagedPosition {
+  const withdrawn = (b: Bin) =>
+    d.kind === "bottom" ? b.x > 0 : b.id >= d.withdraw.from && b.id <= d.withdraw.to && b.x > 0 && b.y === 0;
+  const remaining = s.bins.filter((b) => !withdrawn(b));
   const ask = distribute(d.tokenAmount, d.ask.from, d.ask.to, d.ask.shape, "x", d.ask.from);
+  const bins = mergeBins(remaining, ask);
   return {
     ...s,
-    bins: mergeBins(remaining, ask),
+    bins,
     lastFlipActiveId: s.activeId,
-    upperBinId: Math.max(s.upperBinId, d.ask.to),
-    lowerBinId: Math.min(s.lowerBinId, ...remaining.map((b) => b.id), d.ask.from),
+    lowerBinId: Math.min(...bins.map((b) => b.id)),
+    upperBinId: Math.max(...bins.map((b) => b.id)),
   };
 }

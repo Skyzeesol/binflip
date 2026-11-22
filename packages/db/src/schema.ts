@@ -275,6 +275,9 @@ export const positions = pgTable(
     depositedToken: rawAmount("deposited_token").notNull().default("0"),
     /** High-water mark for the trailing stop, in exit currency. */
     peakValue: numeric("peak_value", { precision: 30, scale: 9 }),
+    /** Dry-run only: the virtual bin-level position the manager simulates (see core/strategy/bins.ts). */
+    simState: jsonb("sim_state").$type<Record<string, unknown>>(),
+    lastManagedAt: ts("last_managed_at"),
     openedAt: ts("opened_at"),
     closedAt: ts("closed_at"),
     closeReason: text("close_reason"),
