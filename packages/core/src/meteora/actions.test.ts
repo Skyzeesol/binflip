@@ -40,6 +40,13 @@ describe("extractActions on Karınca fixtures", () => {
     expect(a.mintY).toBe(WSOL_MINT);
   });
 
+  it("rebalance_liquidity carries the full move detail (old/new range, add segments)", () => {
+    const a = only("dlmm-2JLH3PoCgr");
+    expect(a.rebalance).toMatchObject({ oldMin: -599, oldMax: -512, newMin: -599, newMax: -512, favorX: false });
+    expect(a.rebalance?.adds).toHaveLength(1);
+    expect(a.rebalance?.adds[0]).toMatchObject({ min_delta_id: -17, max_delta_id: 0 });
+  });
+
   it("close: remove_by_range2 + claim_fee2 + close_position_if_empty", () => {
     const a = only("dlmm-2oxGTs22bM");
     expect(a.kind).toBe("close");

@@ -13,6 +13,7 @@ import {
   readPassphraseFile,
   runService,
   WSOL_MINT,
+  compoundRanges,
   type BuiltTxs,
   type Config,
   type ExecutionJob,
@@ -241,7 +242,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
     const exits = plan.do === "remove" || plan.do === "close";
     const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
-    const ourPosition = await executeLive(l, plan, action, ours, saveSig, config, log);
+    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log);
     const fees = await totalFees(l, signatures);
     await db
       .update(schema.txs)
@@ -250,6 +251,11 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId);
     // Like LP Agent: whatever token this exit produced is sold back to SOL (retried until sold).
     const after: string[] = [];
+    if (plan.do === "rebalance" && leftoverToken && leftoverToken > 0n && tokenMint && action.pool) {
+      // The leader's new range has no bins above price: sell the token, like any exit.
+      await l.swapback!.enqueue({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, mint: tokenMint, pool: action.pool, amount: leftoverToken.toString(), label: leader.label });
+      after.push("🔁 Yeni aralıkta fiyatın üstü yok: token SOL'e çevrilmek üzere kuyrukta.");
+    }
     if (exits && tokenMint && action.pool) {
       const received = (await l.builder.tokenBalance(tokenMint)) - before;
       if (received > 0n) {
@@ -288,7 +294,20 @@ async function executeLive(
   onSignature: (sig: string) => Promise<void>,
   config: Config,
   log: Logger,
-): Promise<string | null> {
+): Promise<{ position: string | null; leftoverToken?: bigint }> {
+  const res = await executeLiveInner(l, plan, a, ours, onSignature, config, log);
+  return typeof res === "object" && res !== null ? res : { position: res };
+}
+
+async function executeLiveInner(
+  l: Live,
+  plan: Plan,
+  a: LeaderAction,
+  ours: PositionRow | null,
+  onSignature: (sig: string) => Promise<void>,
+  config: Config,
+  log: Logger,
+): Promise<string | null | { position: string | null; leftoverToken?: bigint }> {
   const opts = { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature };
   const sendAll = async (built: BuiltTxs) => {
     for (const [i, tx] of built.txs.entries()) {
@@ -339,6 +358,26 @@ async function executeLive(
       return sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: 10_000, close: true }));
     case "claim":
       return sendAll(await l.builder.claim({ pool, position: ours!.ourPosition! }));
+    case "rebalance": {
+      // Mirror a full move (see core/meteora/rebalance.ts): read what we hold, close, reopen on the new range.
+      const r = a.rebalance!;
+      const before = await l.builder.positionBins(pool, ours!.ourPosition!);
+      const ourY = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.y, 0)));
+      const ourX = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.x, 0)));
+      await sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: 10_000, close: true }));
+      const opened = await l.builder.open({ pool, lowerBinId: r.newMin, upperBinId: r.newMax, amountSol: ourY, strategy: a.strategy, slippagePct });
+      const position = (await sendAll(opened))!;
+      if (ourY > 0n && !(await hasLiquidity(l, pool, position))) {
+        await sendAll(await l.builder.add({ pool, position, lowerBinId: r.newMin, upperBinId: r.newMax, amountSol: ourY, strategy: a.strategy, slippagePct }));
+      }
+      const info = await l.builder.poolInfo(pool);
+      const above = compoundRanges(r.newMin, r.newMax, info.activeBinId).token;
+      if (ourX > 0n && above) {
+        await sendAll(await l.builder.addToken({ pool, position, fromBinId: above.from, toBinId: above.to, amount: ourX, strategy: a.strategy, slippagePct }));
+        return { position };
+      }
+      return { position, leftoverToken: ourX };
+    }
     case "skip":
       return null;
   }
@@ -420,6 +459,21 @@ async function applyToPositions(
       .update(schema.positions)
       .set({ state: "CLOSED", closedAt: now, closeReason: "leader_exit" })
       .where(eq(schema.positions.id, ours.id));
+  } else if (plan.do === "rebalance" && a.rebalance) {
+    // New range (and, live, a new position account). Flip/entry references restart from here.
+    await db
+      .update(schema.positions)
+      .set({
+        lowerBinId: a.rebalance.newMin,
+        upperBinId: a.rebalance.newMax,
+        entryActiveBinId: a.activeBinId,
+        lastFlipBinId: null,
+        strategy: a.strategy ?? ours.strategy,
+        ...(ourPosition ? { ourPosition } : {}),
+        // Dry-run: rebuild the virtual model on the new range at the next manager tick.
+        ...(dryRun ? { simState: null } : {}),
+      })
+      .where(eq(schema.positions.id, ours.id));
   }
 }
 
@@ -483,6 +537,8 @@ function describe(label: string, a: LeaderAction, plan: Plan, dryRun: boolean): 
       return `${head} → pozisyon ${verb("kapatılırdı, kalan token aynı havuzda SOL'e çevrilirdi", "kapatıldı")}`;
     case "claim":
       return `${head} → fee ${verb("claim edilirdi", "claim edildi")}`;
+    case "rebalance":
+      return `${head} → kopya liderle aynı şekilde ${a.rebalance ? `${a.rebalance.oldMin}..${a.rebalance.oldMax} → ${a.rebalance.newMin}..${a.rebalance.newMax}` : ""} ${verb("taşınırdı", "taşındı")}`;
     case "skip":
       return `${head} → atlandı: ${plan.reason}`;
   }

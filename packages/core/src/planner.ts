@@ -1,6 +1,7 @@
 import { WSOL_MINT } from "./constants.js";
 import type { ActionKind, LeaderAction } from "./meteora/actions.js";
 import type { Strategy } from "./meteora/strategy.js";
+import { classifyRebalance } from "./meteora/rebalance.js";
 import { PPM, mirrorRemoveBps, sizeDeposit, type SizingSettings } from "./sizing.js";
 
 /** Settings the planner needs, a subset of copy_settings + user_risk_settings. */
@@ -43,7 +44,10 @@ export type SkipReason =
   | "copy_size_zero"
   | "no_sizing_rule"
   | "position_cap_reached"
-  | "rebalance_not_supported"
+  | "rebalance_partial"
+  | "rebalance_topup"
+  | "rebalance_take_profit"
+  | "rebalance_unknown"
   // live-only, decided by the executor with chain state
   | "low_balance"
   | "damm_live_not_supported";
@@ -54,7 +58,9 @@ export type Plan =
   | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean }
   | { do: "remove"; bps: number }
   | { do: "close" }
-  | { do: "claim" };
+  | { do: "claim" }
+  /** Repeat the leader's full move: same withdrawals, same new range and shape, scaled to us. */
+  | { do: "rebalance" };
 
 const EXITS: ReadonlySet<ActionKind> = new Set(["remove", "close", "claim"]);
 
@@ -84,7 +90,10 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
     if (ours.state === "CLOSED") return skip("already_closed");
     if (a.kind === "close") return { do: "close" };
     if (a.kind === "claim") return { do: "claim" };
-    if (a.kind === "rebalance") return skip("rebalance_not_supported"); // stage 3
+    if (a.kind === "rebalance") {
+      const c = classifyRebalance(a);
+      return c.ok ? { do: "rebalance" } : skip(c.reason);
+    }
     const full = a.removeRanges.some((r) => r.bps >= 10_000 && r.minBinId === null);
     const bps = full ? 10_000 : Math.max(0, ...a.removeRanges.map((r) => r.bps));
     return { do: "remove", bps: mirrorRemoveBps(bps || 10_000) };

@@ -1,5 +1,5 @@
 import type { Decoded, DecodedEvent, DecodedIx, Protocol } from "./decode.js";
-import { classifyRebalanceAdds, strategyFromType, type Strategy } from "./strategy.js";
+import { classifyRebalanceAdds, strategyFromType, type RebalanceAdd, type Strategy } from "./strategy.js";
 
 export type ActionKind = "open" | "add" | "remove" | "close" | "claim" | "rebalance";
 
@@ -38,6 +38,18 @@ export interface LeaderAction {
   activeBinId: number | null;
   /** Range-based removals (DLMM). Executor maps these onto our own position. */
   removeRanges: RemoveRange[];
+  /** Full detail of a rebalance_liquidity move, so we can repeat it scaled to our size. */
+  rebalance: RebalanceDetail | null;
+}
+
+export interface RebalanceDetail {
+  oldMin: number;
+  oldMax: number;
+  newMin: number;
+  newMax: number;
+  /** The leader's add segments, relative to the active bin (signed via bit_flag). */
+  adds: RebalanceAdd[];
+  favorX: boolean;
 }
 
 const ZERO: Pair = { x: 0n, y: 0n };
@@ -92,6 +104,9 @@ class Builder {
   removeRanges: RemoveRange[] = [];
   rebalanced = false;
   dammRemove = false;
+  rebalanceAdds: RebalanceAdd[] = [];
+  favorX = false;
+  oldRange: [number, number] | null = null;
 
   constructor(
     readonly protocol: Protocol,
@@ -158,7 +173,11 @@ class Builder {
         for (const r of p?.removes ?? []) {
           this.removeRanges.push({ minBinId: r.min_bin_id, maxBinId: r.max_bin_id, bps: Number(r.bps) });
         }
-        if (p?.adds?.length) this.strategy = classifyRebalanceAdds(p.adds);
+        if (p?.adds?.length) {
+          this.strategy = classifyRebalanceAdds(p.adds);
+          this.rebalanceAdds.push(...p.adds);
+          this.favorX ||= p.adds.some((x) => Boolean((x as { favor_x_in_active_id?: boolean }).favor_x_in_active_id));
+        }
         break;
       }
     }
@@ -195,6 +214,7 @@ class Builder {
         this.removed.y += d.y_withdrawn_amount;
         this.fees.x += d.x_fee_amount;
         this.fees.y += d.y_fee_amount;
+        this.oldRange ??= [Number(d.old_min_id), Number(d.old_max_id)];
         this.lower = Number(d.new_min_id);
         this.upper = Number(d.new_max_id);
         break;
@@ -264,6 +284,10 @@ class Builder {
       upperBinId: this.upper,
       activeBinId: this.active,
       removeRanges: this.removeRanges,
+      rebalance:
+        this.rebalanced && this.oldRange && this.lower !== null && this.upper !== null
+          ? { oldMin: this.oldRange[0], oldMax: this.oldRange[1], newMin: this.lower, newMax: this.upper, adds: this.rebalanceAdds, favorX: this.favorX }
+          : null,
     };
   }
 }

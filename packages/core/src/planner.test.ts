@@ -26,6 +26,7 @@ const action = (o: Partial<LeaderAction>): LeaderAction => ({
   upperBinId: null,
   activeBinId: null,
   removeRanges: [],
+  rebalance: null,
   ...o,
 });
 
@@ -123,6 +124,22 @@ describe("planCopy", () => {
       ours({ depositedSol: SOL, ratioPpm: first.ratioPpm, fundedAt: new Date() }),
     );
     expect(next).toMatchObject({ do: "add", amountSol: 323_795_501n, firstFunding: false });
+  });
+
+  it("rebalance: full move is mirrored, partial / top-up are skipped", () => {
+    const rebalance = {
+      oldMin: -599,
+      oldMax: -512,
+      newMin: -620,
+      newMax: -533,
+      adds: [{ min_delta_id: -87, max_delta_id: 0, x0: 0n, y0: 10n, delta_x: 0n, delta_y: 1n, bit_flag: 0 }],
+      favorX: false,
+    };
+    const full = action({ kind: "rebalance", added: { x: 0n, y: SOL }, removed: { x: 0n, y: SOL }, removeRanges: [{ minBinId: -599, maxBinId: -512, bps: 10_000 }], rebalance });
+    expect(planCopy(full, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "rebalance" });
+    expect(planCopy({ ...full, removeRanges: [{ minBinId: -599, maxBinId: -512, bps: 3_000 }] }, settings(), ours({ state: "ACTIVE" }))).toMatchObject({ reason: "rebalance_partial" });
+    expect(planCopy({ ...full, added: { x: 0n, y: 2n * SOL } }, settings(), ours({ state: "ACTIVE" }))).toMatchObject({ reason: "rebalance_topup" });
+    expect(planCopy(full, settings(), null)).toMatchObject({ reason: "position_not_copied" });
   });
 
   it("DAMM V2 respects the pool-type toggle", () => {

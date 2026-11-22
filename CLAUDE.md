@@ -301,7 +301,7 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 
 **Açık konu: gecikme.** İlk canlı testte (public RPC) WS bildirimleri Karınca için gelmedi, olaylar 13–18 sn'de poll'dan yakalandı. Public RPC'de mention aboneliği genel olarak çalışıyor (test edildi). Geçici çözüm olarak poll 5 sn'ye indirildi. VPS'te Helius ile ölçülecek; gerekirse Parsed Streams'e geçilecek.
 
-**Henüz yok:** rebalance aynalama (şimdilik `rebalance_not_supported` ile atlanıyor), meme koruması için iki taraflı eklemelerde fiyat bazlı oran, token filtreleri (market cap/hacim/holder fiyat verisi ister), Telegram komutları, Parsed Streams kaynağı.
+**Henüz yok:** meme koruması için iki taraflı eklemelerde fiyat bazlı oran, token filtreleri (market cap/hacim/holder fiyat verisi ister), Telegram komutları, Parsed Streams kaynağı.
 
 ---
 
@@ -403,3 +403,23 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 **Manuel pozisyonlar ("Manage Manual Position"):** kullanıcı bot cüzdanını Phantom'a ekleyip kendi pozisyonunu açar. Manager canlı modda ~5 dakikada bir `getAllLbPairPositionsByUser` ile cüzdanı tarar ve bilmediği pozisyonları `leader_id = null` ile yönetime alır (bildirim gider). Ayarlar kullanıcı başına `manual_settings` tablosunda: mod, flip eşiği, TP/SL/trailing, compound. CLI: `manual:set --mode staged_flip --flip-threshold 10 --tp 10 --sl 10 --compound 60`, `manual:set --off`, `manual:show`. Yatırılan miktar bilinmediği için **PnL, yönetime alındığı andaki değerden** ölçülür. Zincirde artık olmayan pozisyonlar (Phantom'dan kapatılanlar) `closed_externally` olarak kapatılır. Doğrulama: geçici bir test kullanıcısıyla Karınca'nın public adresi taratıldı, 8 pozisyonun hepsi değerleriyle bulundu; test verisi sonra silindi.
 
 **Madde 2 (4. aşama) durumu:** kademeli flip, dipte flip, TP/SL/trailing, auto-compound ve manuel pozisyon yönetimi tamam (deneme + canlı icra). Kalanlar: Precision Hybrid / reshape (6. aşama), SOL'ün X olduğu havuzlar, deneme modunda fee simülasyonu.
+
+---
+
+## 20. Rebalance aynalama (madde 3, tamam)
+
+**Kural (LP Agent):** "Rebalance: kopyayı aynı şekilde taşır. Lider pozisyonun sadece bir kısmını taşırsa, ya da aynı hamlede kâr alır veya para eklerse aynalanmaz, atlanır." `core/meteora/rebalance.ts` `classifyRebalance`:
+- **Tam taşıma:** eski aralığın tamamı %100 çekilmiş ve her tarafta eklenen ≈ çekilen (±%3; rebalance swapless olduğu için taraflar ayrı karşılaştırılır) → aynalanır.
+- Kısmi çekme → `rebalance_partial`. Eklenen > çekilen → `rebalance_topup`. Eklenen < çekilen → `rebalance_take_profit`.
+- Decoder artık `rebalance` ayrıntısını taşıyor: eski/yeni aralık (`Rebalancing` event'i) ve liderin ekleme segmentleri (gerçek fixture ile test edildi).
+
+**Uygulama yöntemi: kapat ve yeniden aç.** SDK'nın `RebalancePosition` yolu (tek `rebalance_liquidity`) 348 binlik pozisyonda mainnet simülasyonunda `ComputationalBudgetExceeded` verdi ve SDK bunu parçalara bölmüyor. Bu yüzden zaten simüle edilmiş parçalar kullanılıyor:
+1. Pozisyondaki SOL ve token miktarını oku, %100 çek ve kapat (parçalı).
+2. Liderin yeni aralığında yeni pozisyon aç, SOL'ü liderin şekliyle (spot/curve/bid-ask) fiyatın altına koy (geniş aralıkta boş açılış + parçalı ekleme).
+3. Token'ı yeni aralıkta fiyatın üstüne koy. Yeni aralıkta fiyatın üstünde bin yoksa token swap-back ile SOL'e satılır.
+
+`positions` kaydında yeni aralık, yeni pozisyon adresi ve giriş bini güncellenir; flip referansı sıfırlanır. Deneme modunda sanal model bir sonraki manager turunda yeni aralıkta yeniden kurulur (yaklaşık).
+
+**Maliyet:** pozisyon rent'i eski pozisyondan iade edilir, yenisi için ödenir; ayrıca yeni aralıktaki bin array rent'i ve birkaç işlem ücreti. Sık rebalance yapan liderlerde bu maliyet loglanır (`txs.fee_lamports`).
+
+**Doğrulanmadı:** yeni açılan pozisyona eklemenin uçtan uca simülasyonu (pozisyon zincirde var olmadan simüle edilemiyor). Parçaların her biri ayrı ayrı mainnet simülasyonunu geçti.
