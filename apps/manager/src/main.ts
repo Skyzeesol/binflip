@@ -23,6 +23,7 @@ import {
   type ManagementMode,
   readLivePosition,
   shouldCompound,
+  valueInY,
   type NotificationJob,
   type PoolInfo,
   type Shape,
@@ -64,16 +65,22 @@ await runService("manager", async ({ config, log }) => {
   const dryRun = config.mode === "dry_run";
 
   let running = false;
+  let ticks = 0;
+  const notifyFn = (userId: string, text: string) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined);
   const tick = async () => {
     if (running) return;
     running = true;
     try {
+      // Live only: find positions the user opened themselves in the bot wallet (~every 5 min).
+      if (!dryRun && ticks++ % Math.max(1, Math.round(300_000 / TICK_MS)) === 0) {
+        await discoverManual(db, builder, log, notifyFn).catch((err) => log.warn({ err: (err as Error).message }, "discovery failed"));
+      }
       await manageAll(
         db,
         builder,
         dryRun,
         log,
-        (userId, text) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined),
+        notifyFn,
         management,
         BigInt(config.COMPOUND_MIN_LAMPORTS),
       );
@@ -119,9 +126,15 @@ async function manageAll(
     }
   }
 
-  for (const { positions: pos, copy_settings: cs, leaders: leader } of rows) {
+  const manual = new Map((await db.select().from(schema.manualSettings)).map((m) => [m.userId, m]));
+
+  for (const { positions: pos, copy_settings: copySet, leaders: leader } of rows) {
     const info = pools.get(pos.pool);
     if (!info || !info.solIsY) continue; // stage 4 models SOL-as-Y pools (all of Karınca's so far)
+    // Copies use their leader's settings; positions the user opened use manual_settings.
+    const m = pos.leaderId ? null : manual.get(pos.userId);
+    if (!pos.leaderId && m && !m.enabled) continue;
+    const cs = copySet ?? (m ? { ...m } : null);
     const mode = cs?.managementMode ?? pos.managementMode;
     const exits = {
       takeProfitBps: cs?.takeProfitBps ?? null,
@@ -259,4 +272,62 @@ async function manageLive(
     { jobId: `mgmt_${pos.id}_${kind}_${activeId}`, attempts: kind === "close" ? 5 : 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } },
   );
   log.info({ position: pos.id, kind, reason, activeId, pnlBps: d.pnlBps }, "live decision queued");
+}
+
+/**
+ * Adopt positions in the bot wallet that we did not open (the user opened them
+ * in Phantom), and close our records of positions that vanished on chain.
+ * PnL of an adopted position is measured from its value at adoption.
+ */
+async function discoverManual(db: Db, builder: DlmmTxBuilder, log: Logger, notify: (userId: string, text: string) => Promise<void>) {
+  const wallets = await db.select().from(schema.agentWallets);
+  for (const w of wallets) {
+    const onChain = await builder.listPositions(new PublicKey(w.publicKey));
+    const known = await db.select().from(schema.positions).where(and(eq(schema.positions.userId, w.userId), eq(schema.positions.dryRun, false)));
+    const byAddress = new Map(known.filter((k) => k.ourPosition).map((k) => [k.ourPosition!, k]));
+    const live = new Set(onChain.map((p) => p.position));
+
+    // Closed from outside (e.g. the user closed it in Phantom).
+    for (const k of known) {
+      if (k.state === "ACTIVE" && k.ourPosition && !live.has(k.ourPosition)) {
+        await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "closed_externally" }).where(eq(schema.positions.id, k.id));
+        log.info({ position: k.ourPosition }, "position closed outside the bot");
+      }
+    }
+
+    const [m] = await db.select().from(schema.manualSettings).where(eq(schema.manualSettings.userId, w.userId));
+    if (m && !m.enabled) continue;
+    for (const p of onChain) {
+      if (byAddress.has(p.position)) continue;
+      const info = await builder.poolInfo(p.pool);
+      if (!info.solIsY) continue;
+      const pb = await builder.positionBins(p.pool, p.position);
+      const value = valueInY(pb.bins, info.activeBinId, info.binStep);
+      const [row] = await db
+        .insert(schema.positions)
+        .values({
+          userId: w.userId,
+          leaderId: null,
+          agentWalletId: w.id,
+          protocol: "dlmm",
+          pool: p.pool,
+          ourPosition: p.position,
+          state: "ACTIVE",
+          dryRun: false,
+          managementMode: m?.managementMode ?? "staged_flip",
+          lowerBinId: p.lower,
+          upperBinId: p.upper,
+          entryActiveBinId: info.activeBinId,
+          depositedSol: BigInt(Math.round(value)),
+          fundedAt: new Date(),
+          openedAt: new Date(),
+          peakValue: String(value / 1e9),
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.positions.id });
+      if (!row) continue;
+      log.info({ position: p.position, pool: p.pool, valueSol: value / 1e9 }, "manual position adopted");
+      await notify(w.userId, `🧭 Bot cüzdanında yeni pozisyon bulundu ve yönetime alındı: ${p.pool.slice(0, 6)}… (${(value / 1e9).toFixed(4)} SOL, mod ${m?.managementMode ?? "staged_flip"}). PnL bu değerden ölçülecek.`);
+    }
+  }
 }

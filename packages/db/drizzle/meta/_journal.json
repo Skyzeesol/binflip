@@ -50,6 +50,13 @@
       "when": 1795383079666,
       "tag": "0006_whole_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795383171706,
+      "tag": "0007_vengeful_darkhawk",
+      "breakpoints": true
     }
   ]
 }

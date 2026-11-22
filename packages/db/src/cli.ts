@@ -21,6 +21,9 @@ import * as schema from "./schema.js";
  *   node packages/db/dist/cli.js wallet:create --label agent [--out keystore/agent.json] [--passphrase-file secrets/keystore_passphrase]
  *     Generates a NEW agent wallet (never import your main wallet), writes it encrypted, prints only the public key.
  *   node packages/db/dist/cli.js risk:show | risk:set [--max-per-tx 1] [--max-per-day 10] | kill | unkill
+ *   node packages/db/dist/cli.js manual:set [--mode staged_flip] [--flip-threshold 10] [--tp 10] [--sl 10] [--trailing 5] [--compound 60] [--off]
+ *     How the bot manages positions YOU open in the bot wallet (found automatically every 5 min, live mode).
+ *   node packages/db/dist/cli.js manual:show
  *
  * Single-user for now: commands act on the only owner user.
  */
@@ -51,6 +54,7 @@ const { values: o } = parseArgs({
     "flip-threshold": { type: "string" },
     compound: { type: "string" },
     reason: { type: "string" },
+    off: { type: "boolean", default: false },
   },
 });
 
@@ -171,6 +175,33 @@ try {
       console.log(`keystore written to ${o.out} (encrypted). Fund this address with a SMALL amount of SOL to test.`);
       break;
     }
+    case "manual:set": {
+      const u = await owner();
+      const v = {
+        userId: u.id,
+        enabled: !o.off,
+        ...(o.mode ? { managementMode: parseMode(o.mode) } : {}),
+        ...(o["flip-threshold"] ? { managementParams: { flipThresholdBps: toBps(o["flip-threshold"]) } } : {}),
+        ...(o.tp !== undefined ? { takeProfitBps: toBps(o.tp) } : {}),
+        ...(o.sl !== undefined ? { stopLossBps: toBps(o.sl) } : {}),
+        ...(o.trailing !== undefined ? { trailingStopBps: toBps(o.trailing) } : {}),
+        ...(o.compound !== undefined ? { compoundIntervalMinutes: Number(o.compound) || null } : {}),
+      };
+      await db.insert(schema.manualSettings).values(v).onConflictDoUpdate({ target: schema.manualSettings.userId, set: v });
+      console.log(`manual positions: ${o.off ? "off" : "managed"}`);
+      break;
+    }
+    case "manual:show": {
+      const u = await owner();
+      const [m] = await db.select().from(schema.manualSettings).where(eq(schema.manualSettings.userId, u.id));
+      if (!m) {
+        console.log("manual positions: not configured (defaults: staged_flip 10%, no TP/SL). Run manual:set.");
+        break;
+      }
+      const f = (m.managementParams as { flipThresholdBps?: number }).flipThresholdBps ?? 1000;
+      console.log(`manual positions: ${m.enabled ? "managed" : "off"} | mode ${m.managementMode}${m.managementMode === "staged_flip" ? ` %${f / 100}` : ""} | TP ${m.takeProfitBps ? m.takeProfitBps / 100 + "%" : "-"} SL ${m.stopLossBps ? m.stopLossBps / 100 + "%" : "-"} trailing ${m.trailingStopBps ? m.trailingStopBps / 100 + "%" : "-"} | compound ${m.compoundIntervalMinutes ? m.compoundIntervalMinutes + " dk" : "kapalı"}`);
+      break;
+    }
     case "risk:show": {
       const u = await owner();
       const [r] = await db.select().from(schema.userRiskSettings).where(eq(schema.userRiskSettings.userId, u.id));
@@ -201,7 +232,7 @@ try {
       break;
     }
     default:
-      console.log("commands: user:init, leader:add, leader:list, leader:pause, leader:resume, leader:remove, wallet:create, risk:show, risk:set, kill, unkill");
+      console.log("commands: user:init, leader:add, leader:list, leader:pause, leader:resume, leader:remove, wallet:create, risk:show, risk:set, kill, unkill, manual:set, manual:show");
       process.exitCode = cmd ? 1 : 0;
   }
 } catch (err) {

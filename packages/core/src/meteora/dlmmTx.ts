@@ -227,6 +227,18 @@ export class DlmmTxBuilder {
     return { txs, extraSigners: new Map(), position: p.position };
   }
 
+  /** All DLMM positions owned by `owner`, across pools. */
+  async listPositions(owner: PublicKey = this.owner): Promise<Array<{ pool: string; position: string; lower: number; upper: number }>> {
+    const m = await DLMM.getAllLbPairPositionsByUser(this.connection, owner);
+    const out: Array<{ pool: string; position: string; lower: number; upper: number }> = [];
+    for (const [pool, info] of m) {
+      for (const p of info.lbPairPositionsData) {
+        out.push({ pool, position: p.publicKey.toBase58(), lower: p.positionData.lowerBinId, upper: p.positionData.upperBinId });
+      }
+    }
+    return out;
+  }
+
   /** Raw balance of a mint held by the owner, across SPL Token and Token-2022 accounts. */
   async tokenBalance(mint: string): Promise<bigint> {
     const res = await this.connection.getParsedTokenAccountsByOwner(this.owner, { mint: new PublicKey(mint) });

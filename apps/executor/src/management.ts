@@ -72,7 +72,11 @@ export function startManagement(p: {
       .leftJoin(schema.leaders, eq(schema.leaders.id, schema.positions.leaderId))
       .where(eq(schema.positions.id, j.positionId));
     if (!row) return { skipped: "missing" };
-    const { positions: pos, copy_settings: cs, leaders: leader } = row;
+    const { positions: pos, copy_settings: copySet, leaders: leader } = row;
+    // Positions the user opened themselves follow manual_settings instead of a leader's copy settings.
+    const manual = pos.leaderId ? null : (await db.select().from(schema.manualSettings).where(eq(schema.manualSettings.userId, pos.userId)))[0];
+    if (!pos.leaderId && manual && !manual.enabled) return { skipped: "manual_off" };
+    const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
     if (pos.state !== "ACTIVE" || !pos.ourPosition || pos.dryRun) return { skipped: `state_${pos.state}` };
 

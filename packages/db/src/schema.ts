@@ -214,6 +214,24 @@ export const copySettings = pgTable("copy_settings", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * How to manage positions the user opens themselves in the bot wallet
+ * (LP Agent "Manage Manual Position"). One row per user.
+ */
+export const manualSettings = pgTable("manual_settings", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(true),
+  managementMode: managementMode("management_mode").notNull().default("staged_flip"),
+  managementParams: jsonb("management_params").$type<Record<string, unknown>>().notNull().default({}),
+  takeProfitBps: integer("take_profit_bps"),
+  stopLossBps: integer("stop_loss_bps"),
+  trailingStopBps: integer("trailing_stop_bps"),
+  compoundIntervalMinutes: integer("compound_interval_minutes"),
+  updatedAt: updatedAt(),
+});
+
 // ── Chain events & positions ─────────────────────────────────────────────
 /** Raw leader activity as decoded by the listener. Idempotent on (signature, ix_index). */
 export const leaderEvents = pgTable(
