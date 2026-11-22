@@ -325,3 +325,30 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 - Kapanışta kalan token → SOL swap'ı (Jupiter) yok. Token cüzdanda kalır (LP Agent'taki "Tokens left in wallet" durumu).
 - Rebalance aynalama ve DAMM V2 canlı kopya yok (`damm_live_not_supported` ile atlanıyor).
 - Gerçek mainnet testi kullanıcının adımı: `wallet:create` → küçük SOL gönder → `docker-compose.live.yml`. VPS'te `./keystore` klasörü container kullanıcısına (uid 1000) okunabilir olmalı.
+
+---
+
+## 17. Operatör modeli araştırması (22 Kasım 2026, mainnet simülasyonu)
+
+**Yöntem:** Karınca'nın gerçek pozisyonu (`8SQhSEg6…`, havuz `CcG3fy…`) üzerinde, tek bir simüle işlem içinde (sigVerify kapalı, zincire hiçbir şey gönderilmedi) sahip `update_position_operator` ile rastgele bir test operatörü atadı, ardından operatör ve karşılaştırma için bir yabancı adres işlemleri denedi. Betik: geliştirme sırasında scratchpad'de `opertest.cjs`.
+
+| Deneme | Sonuç |
+|---|---|
+| Operatör %50 çeker → **sahibin** token hesaplarına | ✅ |
+| Operatör %50 çeker → **kendi** token hesaplarına | ❌ `WithdrawToWrongTokenAccount` (remove_liquidity2.rs:91) |
+| Operatör fee claim → sahibin hesaplarına | ✅ |
+| Operatör fee claim → kendi hesaplarına | ❌ `WithdrawToWrongTokenAccount` (claim_fee2.rs:71) |
+| Operatör sahibin parasıyla ekler, SPL delegate **yok** | ❌ token programı `OwnerMismatch` (0x4) |
+| Operatör sahibin parasıyla ekler, sahip operatöre SPL **delegate** vermiş (SOL + token hesabı) | ✅ |
+| Yabancı adres (operatör değil): çekme / claim / ekleme | ❌ `ConstraintRaw` (pozisyon yetki kontrolü) |
+
+**Sonuç:**
+- **Kendi pozisyonlarını bota devretmek (0xyunss tarzı yönetim) non-custodial olarak MÜMKÜN.** Kullanıcı pozisyonu ana cüzdanıyla açar ve bir kez imzalar: (1) `update_position_operator(bot)`, (2) SOL ve token hesapları için bota SPL delegate izni. Bundan sonra bot çekme, claim ve ekleme yapabilir (yani flip ve compound). **Çekilen her şey programın kuralı gereği sahibin cüzdanına döner.** Ana cüzdanın anahtarı sunucuya hiç gelmez.
+- **Risk sınırı:** SPL delegate, izin verilen miktar kadar token'ı herhangi bir yere transfer etme yetkisi de verir. Bot anahtarı ele geçirilirse risk delegate edilen miktarla sınırlıdır (native SOL, diğer token'lar ve NFT'ler güvende). Bu yüzden izin miktarı sınırlı tutulmalı ve panelde "izni geri al" (revoke) olmalı.
+- **Kopya trading için operatör modeli yetmez:** Her yeni pozisyon için sahibin operatör ataması (imza) gerekir, bu da otomatik kopyayla uyuşmaz. `initialize_position_by_operator` ise launch pool'lar için ve token launch kanıtı istiyor (`MissingTokenAmountAsTokenLaunchProof`). **Kopyalar ayrı agent cüzdanında kalmalı.**
+
+**Karar önerisi (hibrit):**
+1. Kopyalar → ayrı agent cüzdanı (bot pozisyonların sahibi). Sadece bu cüzdandaki para risktedir.
+2. Kullanıcının kendi açtığı pozisyonlar → ana cüzdanda kalır, operatör + sınırlı delegate ile bota devredilir. Panelde tek tıkla "bota devret" işlemi hazırlanır, kullanıcı Phantom'da imzalar.
+
+**Henüz test edilmedi:** operatörün pozisyonu kapatması (rent nereye gider), operatörün `rebalance_liquidity` çağırması (flip'i tek işlemde ve token transferi olmadan yapabilir), Token-2022 transfer-fee'li token'lar.
