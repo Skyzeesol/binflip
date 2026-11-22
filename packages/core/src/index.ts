@@ -10,3 +10,6 @@ export * from "./sizing.js";
 export * from "./solana/rpc.js";
 export * from "./planner.js";
 export * from "./queues.js";
+export * from "./keystore.js";
+export * from "./meteora/dlmmTx.js";
+export * from "./solana/sender.js";

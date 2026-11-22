@@ -43,7 +43,10 @@ export type SkipReason =
   | "copy_size_zero"
   | "no_sizing_rule"
   | "position_cap_reached"
-  | "rebalance_not_supported";
+  | "rebalance_not_supported"
+  // live-only, decided by the executor with chain state
+  | "low_balance"
+  | "damm_live_not_supported";
 
 export type Plan =
   | { do: "skip"; kind: ActionKind; reason: SkipReason }

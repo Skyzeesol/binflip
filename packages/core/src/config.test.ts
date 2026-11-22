@@ -19,8 +19,12 @@ describe("loadConfig safety gates", () => {
     expect(() => loadConfig({ ...base, DRY_RUN: "0" })).toThrow(ConfigError);
   });
 
-  it("goes live only with both flags", () => {
-    expect(loadConfig({ ...base, DRY_RUN: "0", LIVE_CONFIRMED: "1" }).mode).toBe("live");
+  it("goes live only with both flags and a keystore", () => {
+    const live = { ...base, DRY_RUN: "0", LIVE_CONFIRMED: "1" };
+    expect(() => loadConfig(live)).toThrow(/KEYSTORE_PATH/);
+    expect(
+      loadConfig({ ...live, KEYSTORE_PATH: "/keystore/agent.json", KEYSTORE_PASSPHRASE_FILE: "/run/secrets/p" }).mode,
+    ).toBe("live");
   });
 
   it("rejects unknown flag values instead of guessing", () => {

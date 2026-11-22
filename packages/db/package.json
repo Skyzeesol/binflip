@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@binflip/core": "workspace:*",
+    "@solana/web3.js": "^1.99.0",
     "drizzle-orm": "^0.45.4",
     "postgres": "^4.1.1"
   },

@@ -1,0 +1,24 @@
+# CANLI MOD: sadece kullanıcının kendisi açar (HANDOFF §6).
+#   1. Agent cüzdanı oluştur:  docker compose run --rm -it migrate node packages/db/dist/cli.js wallet:create --out /keystore/agent.json
+#      (keystore klasörü aşağıdaki volume ile ./keystore'a yazılır)
+#   2. Parolayı ./secrets/keystore_passphrase dosyasına yaz (chmod 600). Repoya girmez (.gitignore).
+#   3. Cüzdana KÜÇÜK miktarda SOL gönder.
+#   4. docker compose -f docker-compose.yml -f docker-compose.live.yml up -d
+services:
+  migrate:
+    volumes:
+      - ./keystore:/keystore
+  executor:
+    environment:
+      DRY_RUN: "0"
+      LIVE_CONFIRMED: "1"
+      KEYSTORE_PATH: /keystore/agent.json
+      KEYSTORE_PASSPHRASE_FILE: /run/secrets/keystore_passphrase
+    volumes:
+      - ./keystore:/keystore:ro
+    secrets:
+      - keystore_passphrase
+
+secrets:
+  keystore_passphrase:
+    file: ./secrets/keystore_passphrase

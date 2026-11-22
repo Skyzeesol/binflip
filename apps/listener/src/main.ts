@@ -17,7 +17,6 @@ import { LogsWatcher } from "./logsWatcher.js";
 
 const METEORA_PROGRAMS = [PROGRAM_IDS.DLMM, PROGRAM_IDS.DAMM_V2];
 const REFRESH_LEADERS_MS = 30_000;
-const POLL_MS = 20_000;
 
 /**
  * listener — watches leader wallets and turns their Meteora transactions into
@@ -159,7 +158,7 @@ await runService("listener", async ({ config, log }) => {
   await refreshLeaders();
   watcher.start();
   const t1 = setInterval(() => void refreshLeaders().catch((e) => log.error({ err: e }, "leader refresh failed")), REFRESH_LEADERS_MS);
-  const t2 = setInterval(() => void pollAll(), POLL_MS);
+  const t2 = setInterval(() => void pollAll(), config.LISTENER_POLL_MS);
 
   return {
     checks: {

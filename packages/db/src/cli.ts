@@ -1,5 +1,10 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
+import { Keypair } from "@solana/web3.js";
 import { eq } from "drizzle-orm";
+import { encryptKeypair, readPassphraseFile } from "@binflip/core";
 import { createDb } from "./client.js";
 import * as schema from "./schema.js";
 
@@ -11,6 +16,9 @@ import * as schema from "./schema.js";
  *        [--max-per-position 10] [--tp 5] [--sl 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
  *   node packages/db/dist/cli.js leader:list
  *   node packages/db/dist/cli.js leader:pause|leader:resume|leader:remove --address <addr>
+ *   node packages/db/dist/cli.js wallet:create --label agent [--out keystore/agent.json] [--passphrase-file secrets/keystore_passphrase]
+ *     Generates a NEW agent wallet (never import your main wallet), writes it encrypted, prints only the public key.
+ *   node packages/db/dist/cli.js risk:show | risk:set [--max-per-tx 1] [--max-per-day 10] | kill | unkill
  *
  * Single-user for now: commands act on the only owner user.
  */
@@ -34,6 +42,10 @@ const { values: o } = parseArgs({
     strategies: { type: "string" },
     "no-damm": { type: "boolean", default: false },
     "no-meme": { type: "boolean", default: false },
+    out: { type: "string", default: "keystore/agent.json" },
+    "passphrase-file": { type: "string" },
+    "max-per-day": { type: "string" },
+    reason: { type: "string" },
   },
 });
 
@@ -130,8 +142,55 @@ try {
       console.log(`${l.label} removed`);
       break;
     }
+    case "wallet:create": {
+      const u = await owner();
+      if (existsSync(o.out!)) throw new Error(`${o.out} already exists; refusing to overwrite a keystore`);
+      const pass = o["passphrase-file"] ? readPassphraseFile(o["passphrase-file"]) : await promptPassphrase();
+      const kp = Keypair.generate();
+      const file = encryptKeypair(kp, pass);
+      mkdirSync(dirname(o.out!), { recursive: true, mode: 0o700 });
+      writeFileSync(o.out!, JSON.stringify(file, null, 2), { mode: 0o600, flag: "wx" });
+      await db.insert(schema.agentWallets).values({
+        userId: u.id,
+        label: o.label ?? "agent",
+        publicKey: file.publicKey,
+        keystoreRef: basename(o.out!),
+      });
+      console.log(`agent wallet ${file.publicKey}`);
+      console.log(`keystore written to ${o.out} (encrypted). Fund this address with a SMALL amount of SOL to test.`);
+      break;
+    }
+    case "risk:show": {
+      const u = await owner();
+      const [r] = await db.select().from(schema.userRiskSettings).where(eq(schema.userRiskSettings.userId, u.id));
+      if (!r) throw new Error("no risk settings; run user:init");
+      console.log(
+        `kill switch: ${r.killSwitch ? `ON (${r.killSwitchReason ?? ""})` : "off"} | per tx: ${Number(r.maxSolPerTx) / SOL} SOL | per day: ${Number(r.maxSolPerDay) / SOL} SOL | fund protection: ${r.fundProtectionEnabled ? `${r.fundProtectionLossBps / 100}%` : "off"}${r.fundProtectionTrippedAt ? " (TRIPPED)" : ""}`,
+      );
+      break;
+    }
+    case "risk:set": {
+      const u = await owner();
+      const set: Partial<typeof schema.userRiskSettings.$inferInsert> = {};
+      if (o["max-per-tx"]) set.maxSolPerTx = toLamports(o["max-per-tx"])!;
+      if (o["max-per-day"]) set.maxSolPerDay = toLamports(o["max-per-day"])!;
+      if (!Object.keys(set).length) throw new Error("nothing to set (--max-per-tx / --max-per-day)");
+      await db.update(schema.userRiskSettings).set(set).where(eq(schema.userRiskSettings.userId, u.id));
+      console.log("risk settings updated");
+      break;
+    }
+    case "kill":
+    case "unkill": {
+      const u = await owner();
+      await db
+        .update(schema.userRiskSettings)
+        .set({ killSwitch: cmd === "kill", killSwitchReason: cmd === "kill" ? (o.reason ?? "manual") : null })
+        .where(eq(schema.userRiskSettings.userId, u.id));
+      console.log(cmd === "kill" ? "KILL SWITCH ON: no new opens/adds (exits still follow leaders)" : "kill switch off");
+      break;
+    }
     default:
-      console.log("commands: user:init, leader:add, leader:list, leader:pause, leader:resume, leader:remove");
+      console.log("commands: user:init, leader:add, leader:list, leader:pause, leader:resume, leader:remove, wallet:create, risk:show, risk:set, kill, unkill");
       process.exitCode = cmd ? 1 : 0;
   }
 } catch (err) {
@@ -139,4 +198,30 @@ try {
   process.exitCode = 1;
 } finally {
   await close();
+}
+
+/** Read a passphrase twice from the TTY without echoing it. */
+async function promptPassphrase(): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error("no TTY: use --passphrase-file");
+  const ask = (q: string) =>
+    new Promise<string>((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+      const out = rl as unknown as { _writeToOutput: (s: string) => void; output: NodeJS.WriteStream };
+      let prompted = false;
+      out._writeToOutput = (s: string) => {
+        if (!prompted) {
+          out.output.write(s);
+          prompted = true;
+        }
+      };
+      rl.question(q, (a) => {
+        rl.close();
+        process.stdout.write("\n");
+        resolve(a);
+      });
+    });
+  const a = await ask("Keystore passphrase (min 12 chars): ");
+  const b = await ask("Repeat: ");
+  if (a !== b) throw new Error("passphrases do not match");
+  return a;
 }

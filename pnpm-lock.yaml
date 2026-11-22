@@ -44,6 +44,9 @@ importers:
       '@binflip/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@solana/web3.js':
+        specifier: ^1.99.0
+        version: 1.99.0(bufferutil@4.2.0)(typescript@7.0.2)(utf-8-validate@6.1.0)
       bullmq:
         specifier: ^6.7.8
         version: 6.7.8(ioredis@5.11.1)
@@ -132,15 +135,25 @@ importers:
       pino:
         specifier: ^10.4.0
         version: 10.4.0
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
       zod:
         specifier: ^4.6.7
         version: 4.6.7
+    devDependencies:
+      '@types/bn.js':
+        specifier: ^5.2.0
+        version: 5.2.0
 
   packages/db:
     dependencies:
       '@binflip/core':
         specifier: workspace:*
         version: link:../core
+      '@solana/web3.js':
+        specifier: ^1.99.0
+        version: 1.99.0(bufferutil@4.2.0)(typescript@7.0.2)(utf-8-validate@6.1.0)
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(postgres@4.1.1)
@@ -2056,6 +2069,9 @@ packages:
     engines: {node: '>=18.0.0'}
     hasBin: true
 
+  tweetnacl@1.0.3:
+    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
+
   type-is@1.6.18:
     resolution: {integrity: sha512-TkRKr9sUTxEH8MdfuCSP7VizJyzRNMjj2J2do2Jr3Kym598JVdEksuzPQCnlFPW4ky9Q+iA+ma9BGm06XQBy8g==}
     engines: {node: '>= 0.6'}
@@ -3889,6 +3905,8 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+
+  tweetnacl@1.0.3: {}
 
   type-is@1.6.18:
     dependencies:

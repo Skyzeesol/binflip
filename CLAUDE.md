@@ -279,7 +279,7 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 
 ## 15. Aşama 2: dinleyici + deneme modu (devam ediyor)
 
-**Akış:** `listener` (WS `logsSubscribe` mentions=lider + 20 sn'de bir `getSignaturesForAddress` ile kaçanları yakalama) → `leader-events` kuyruğu → `getTransaction` → decode → `leader_events` (kullanıcı başına, `(user, signature, ix_index)` idempotent) → `execution` kuyruğu → `executor` planlar → `txs` (`planned` / `skipped` + `reason`) ve `positions` (dry-run aynası) → `notifications` → `telegram` (token yoksa sadece loglar).
+**Akış:** `listener` (WS `logsSubscribe` mentions=lider + `LISTENER_POLL_MS` (varsayılan 5 sn) aralıkla `getSignaturesForAddress` ile kaçanları yakalama) → `leader-events` kuyruğu → `getTransaction` → decode → `leader_events` (kullanıcı başına, `(user, signature, ix_index)` idempotent) → `execution` kuyruğu → `executor` planlar → `txs` (`planned` / `skipped` + `reason`) ve `positions` (dry-run aynası) → `notifications` → `telegram` (token yoksa sadece loglar).
 
 **Decoder (`packages/core/src/meteora`):** Anchor `BorshCoder` + SDK IDL'leri. Instruction'lardan isim, hesap ve argümanlar alınır, **miktarlar programın emit ettiği event'lerden** okunur (`AddLiquidity`, `RemoveLiquidity`, `Rebalancing`, `ClaimFee2`, `PositionCreate`, `PositionClose`, DAMM V2'de `Evt*`). CPI (router/bot üzerinden) çağrılar da yakalanır. Testler Karınca'nın gerçek mainnet işlemleriyle yapılıyor (`packages/core/test/fixtures/tx`).
 
@@ -299,4 +299,29 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 - Lider yönetimi panel gelene kadar CLI ile: `node packages/db/dist/cli.js leader:add --address … --label … --pct 50 --tp 5 --sl 5` (ayrıca `user:init`, `leader:list`, `leader:pause`, `leader:resume`, `leader:remove`).
 - Geliştirme: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis` → servisler host'ta çalışır.
 
+**Açık konu: gecikme.** İlk canlı testte (public RPC) WS bildirimleri Karınca için gelmedi, olaylar 13–18 sn'de poll'dan yakalandı. Public RPC'de mention aboneliği genel olarak çalışıyor (test edildi). Geçici çözüm olarak poll 5 sn'ye indirildi. VPS'te Helius ile ölçülecek; gerekirse Parsed Streams'e geçilecek.
+
 **Henüz yok:** rebalance aynalama (şimdilik `rebalance_not_supported` ile atlanıyor), meme koruması için iki taraflı eklemelerde fiyat bazlı oran, token filtreleri (market cap/hacim/holder fiyat verisi ister), Telegram komutları, Parsed Streams kaynağı.
+
+---
+
+## 16. Aşama 3: canlı kopya (kod hazır, gerçek parayla test edilmedi)
+
+**Parçalar:**
+- `packages/core/src/keystore.ts`: agent cüzdanı **scrypt (N=2^17) + AES-256-GCM** ile şifreli. Public key AAD olarak doğrulanıyor. Parola dosyadan (Docker secret) okunuyor. `KeystoreSigner` anahtarı dışarı vermiyor (`toJSON`/`inspect` sadece public key döndürüyor).
+- `packages/core/src/meteora/dlmmTx.ts`: resmi SDK ile open / add / remove / close / claim. **70 binden genişse** extended empty position + `addLiquidityByStrategyChunkable` kullanılıyor. Sadece tek taraflı SOL; aralık aktif binin SOL tarafına kırpılıyor.
+- `packages/core/src/solana/sender.ts`: priority fee, simülasyon (sigVerify kapalı), imza, **imza yayından ÖNCE DB'ye yazılıyor**, onaylanana kadar 2 sn'de bir yeniden yayın, blockhash süresi dolunca hata.
+- `apps/executor`: canlı modda keystore + kayıtlı agent wallet zorunlu. Açılışlardan (boş açılış dahil) ve eklemelerden önce bakiye kontrolü yapılıyor (tutar + `SOL_RESERVE_LAMPORTS`, varsayılan 0,1 SOL). Status akışı: planned → submitted → confirmed / failed. Yarıda kalan bir iş **asla yeniden gönderilmiyor**, `interrupted_needs_review` olarak işaretleniyor ve bildirim gidiyor.
+- CLI: `wallet:create` (yeni cüzdan üretir, ana cüzdan import edilemez; üzerine yazmayı reddeder; dosya izni 0600), `risk:show`, `risk:set --max-per-tx --max-per-day`, `kill` / `unkill`.
+- `docker-compose.live.yml`: canlı mod sadece bu override ile açılır.
+
+**Doğrulama (gerçek para olmadan):**
+- Mainnet simülasyonu (Karınca'nın `CcG3fy…` havuzu ve pozisyonu, sigVerify kapalı): dar bid-ask açılış (61 bin, ~243k CU), 348 binlik boş extended açılış (~48k CU), chunked ekleme, %50 çekme, %100 çekme + kapama ve claim. **Hepsi geçti.**
+- Canlı mod kapıları: keystore yoksa başlamıyor, parola yanlışsa başlamıyor, bakiyesiz cüzdanla açılış/ekleme `low_balance` ile atlanıyor.
+
+**Maliyet notu:** Karınca'nın 348 binlik pozisyonları SDK'da **5 işleme** bölünüyor (ekleme, çekme, claim), yani her hareket ~5 işlem ücreti ve ~5 × 300-700k CU demek. Bin array rent'i de ilk kez dokunulan bin'lerde bizden çıkar. Küçük boyutlarda bu maliyet fee gelirini geçebilir (LP Agent de en az 5 SOL net varlık öneriyor).
+
+**Henüz yok / bilinen sınırlar:**
+- Kapanışta kalan token → SOL swap'ı (Jupiter) yok. Token cüzdanda kalır (LP Agent'taki "Tokens left in wallet" durumu).
+- Rebalance aynalama ve DAMM V2 canlı kopya yok (`damm_live_not_supported` ile atlanıyor).
+- Gerçek mainnet testi kullanıcının adımı: `wallet:create` → küçük SOL gönder → `docker-compose.live.yml`. VPS'te `./keystore` klasörü container kullanıcısına (uid 1000) okunabilir olmalı.

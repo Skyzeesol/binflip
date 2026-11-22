@@ -24,6 +24,16 @@ const EnvSchema = z.object({
 
   HEALTH_PORT: z.coerce.number().int().positive().default(8080),
   API_PORT: z.coerce.number().int().positive().default(3001),
+  /** Backup polling interval for leader signatures (gap recovery when WS is late or drops). */
+  LISTENER_POLL_MS: z.coerce.number().int().min(1000).default(5000),
+
+  /** Encrypted agent-wallet keystore (JSON) and the file holding its passphrase (Docker secret). */
+  KEYSTORE_PATH: z.string().min(1).optional(),
+  KEYSTORE_PASSPHRASE_FILE: z.string().min(1).optional(),
+  /** Priority fee in micro-lamports per compute unit. */
+  PRIORITY_FEE_MICROLAMPORTS: z.coerce.number().int().min(0).default(50_000),
+  /** SOL kept free for rent and fees on top of each copy (lamports). */
+  SOL_RESERVE_LAMPORTS: z.coerce.number().int().min(0).default(100_000_000),
 
   // Safety gates (HANDOFF §6). Dry-run is the default; going live needs BOTH flags.
   DRY_RUN: flag("1"),
@@ -65,5 +75,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const mode: ExecutionMode = !DRY_RUN && LIVE_CONFIRMED ? "live" : "dry_run";
+  if (mode === "live" && (!rest.KEYSTORE_PATH || !rest.KEYSTORE_PASSPHRASE_FILE)) {
+    throw new ConfigError("Live mode requires KEYSTORE_PATH and KEYSTORE_PASSPHRASE_FILE.");
+  }
   return { ...rest, mode };
 }
