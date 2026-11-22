@@ -1,0 +1,10 @@
+# Local development: expose Postgres and Redis on localhost so services can
+# run on the host with `pnpm`/`node` while the databases run in Docker.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis migrate
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

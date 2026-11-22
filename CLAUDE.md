@@ -274,3 +274,29 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 
 ### 14.3 Şemaya yansıyanlar (migration 0001)
 `user_risk_settings`: fund protection (%20 varsayılan, peak'ten, tetiklenme zamanı), token filtreleri, slippage. `copy_settings`: `follow_exits_while_paused`, meme eşiği (9500 bps), STR parametreleri, DAMM V2 varsayılan açık. Pozisyon durumu `HOLDING` eklendi. `txs.reason` eklendi (skip/fail nedeni). AR/RL/AC/TP-SL tetik detayları mod bazında `management_params` (jsonb) içinde tutulacak; şekli 4. aşamada zod ile sabitlenecek.
+
+---
+
+## 15. Aşama 2: dinleyici + deneme modu (devam ediyor)
+
+**Akış:** `listener` (WS `logsSubscribe` mentions=lider + 20 sn'de bir `getSignaturesForAddress` ile kaçanları yakalama) → `leader-events` kuyruğu → `getTransaction` → decode → `leader_events` (kullanıcı başına, `(user, signature, ix_index)` idempotent) → `execution` kuyruğu → `executor` planlar → `txs` (`planned` / `skipped` + `reason`) ve `positions` (dry-run aynası) → `notifications` → `telegram` (token yoksa sadece loglar).
+
+**Decoder (`packages/core/src/meteora`):** Anchor `BorshCoder` + SDK IDL'leri. Instruction'lardan isim, hesap ve argümanlar alınır, **miktarlar programın emit ettiği event'lerden** okunur (`AddLiquidity`, `RemoveLiquidity`, `Rebalancing`, `ClaimFee2`, `PositionCreate`, `PositionClose`, DAMM V2'de `Evt*`). CPI (router/bot üzerinden) çağrılar da yakalanır. Testler Karınca'nın gerçek mainnet işlemleriyle yapılıyor (`packages/core/test/fixtures/tx`).
+
+**Karınca'nın gerçek davranışı (fixture'lardan):**
+- Açma iki ayrı işlemde: `initialize_position2 + increase_position_length2` (boş pozisyon), birkaç saniye sonra `rebalance_liquidity` ile fonlama. Yani `add_liquidity_by_strategy` değil **`rebalance_liquidity`** kullanıyor. Biz de boş açıp ilk fonlamayı "ilk boyutlandırma" sayıyoruz (LP Agent da böyle yapıyor).
+- Şekil: `rebalance_liquidity.adds` içindeki delta'dan çıkarılıyor (SDK builder'larıyla doğrulandı): delta 0 = Spot, negatif (bit_flag 4/8) = Curve, pozitif = Bid-Ask. Karınca tek taraflı SOL ile **bid-ask** açıyor.
+- Kapama: `remove_liquidity_by_range2 (bps 10000) + claim_fee2 + close_position_if_empty`. `PositionClose` event'i yoksa pozisyon kapanmamıştır, "remove" sayılır.
+- Sık `claim_fee2` yapıyor. Swap'larını DLMM üzerinden routelanmış Jupiter ile yapıyor; bunlar pozisyon olmadığı için yok sayılıyor.
+
+**Boyutlandırma (`sizing.ts`) ve planlama (`planner.ts`):** LP Agent kuralları birebir uygulanıyor, dokümandaki örnekler test olarak yazıldı. Oran ppm cinsinden tutuluyor. Duraklatma, kill switch ve fon koruması girişleri engeller ama çıkışları engellemez.
+
+**Teknik notlar:**
+- Helius API anahtarını **sadece URL parametresi** olarak kabul ediyor (`?api-key=`), header ile çalışmıyor. VPS'te `SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...` olarak `.env`'e yazılacak (bu bir RPC anahtarı, cüzdan anahtarı değil). Geliştirmede public RPC kullanılıyor.
+- Helius **Parsed Streams** (program + instruction filtreli, decode edilmiş WS akışı, ücretsiz planda da var) ikinci kaynak olarak eklenecek.
+- `@meteora-ag/dlmm` ESM build'i Node'da kırık (dizin importu). SDK'lar `createRequire` ile CJS üzerinden yükleniyor.
+- Sandbox'ta Node `fetch`'inin proxy'yi kullanması için `NODE_USE_ENV_PROXY=1` gerekiyor; WS için `HTTPS_PROXY` varsa `https-proxy-agent` kullanılıyor. VPS'te ikisi de gerekmez.
+- Lider yönetimi panel gelene kadar CLI ile: `node packages/db/dist/cli.js leader:add --address … --label … --pct 50 --tp 5 --sl 5` (ayrıca `user:init`, `leader:list`, `leader:pause`, `leader:resume`, `leader:remove`).
+- Geliştirme: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis` → servisler host'ta çalışır.
+
+**Henüz yok:** rebalance aynalama (şimdilik `rebalance_not_supported` ile atlanıyor), meme koruması için iki taraflı eklemelerde fiyat bazlı oran, token filtreleri (market cap/hacim/holder fiyat verisi ister), Telegram komutları, Parsed Streams kaynağı.

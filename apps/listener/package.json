@@ -12,6 +12,13 @@
   "dependencies": {
     "@binflip/core": "workspace:*",
     "@binflip/db": "workspace:*",
-    "ioredis": "^5.11.1"
+    "bullmq": "^6.7.8",
+    "drizzle-orm": "^0.45.4",
+    "https-proxy-agent": "^9.1.0",
+    "ioredis": "^5.11.1",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
   }
 }

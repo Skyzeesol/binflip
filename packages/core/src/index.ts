@@ -5,3 +5,8 @@ export * from "./signer.js";
 export * from "./health.js";
 export * from "./lifecycle.js";
 export * from "./service.js";
+export * from "./meteora/index.js";
+export * from "./sizing.js";
+export * from "./solana/rpc.js";
+export * from "./planner.js";
+export * from "./queues.js";

@@ -71,6 +71,7 @@ export const txKind = pgEnum("tx_kind", [
   "compound",
   "close",
   "swap",
+  "rebalance",
 ]);
 
 // ── Users & wallets ──────────────────────────────────────────────────────
@@ -265,8 +266,9 @@ export const positions = pgTable(
     managementMode: managementMode("management_mode").notNull(),
     lowerBinId: integer("lower_bin_id"),
     upperBinId: integer("upper_bin_id"),
-    /** Size ratio fixed at open; later leader adds reuse it (HANDOFF §4.1). */
-    sizeRatioBps: integer("size_ratio_bps"),
+    /** Our share of the leader position, ppm, fixed at first funding (LP Agent sizing rule). */
+    sizeRatioPpm: bigint("size_ratio_ppm", { mode: "bigint" }),
+    fundedAt: ts("funded_at"),
     entryActiveBinId: integer("entry_active_bin_id"),
     lastFlipBinId: integer("last_flip_bin_id"),
     depositedSol: lamports("deposited_sol").notNull().default(sql`0`),
