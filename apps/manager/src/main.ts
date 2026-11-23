@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import { SmartLpIndexer } from "./smartLp.js";
 import { Redis } from "ioredis";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { PublicKey } from "@solana/web3.js";
@@ -95,10 +96,16 @@ await runService("manager", async ({ config, log }) => {
   const timer = setInterval(() => void tick(), TICK_MS);
   void tick();
 
+  // Smart LP index (market data for the Smart LP and Discover pages), every 30 min by default.
+  const smart = new SmartLpIndexer(db, config.SOLANA_RPC_URL, log);
+  const smartMs = Number(process.env.SMART_LP_INTERVAL_MS ?? 30 * 60_000);
+  const smartTimer = smartMs > 0 ? setInterval(() => void smart.run(), smartMs) : null;
+  if (smartMs > 0) setTimeout(() => void smart.run(), 20_000);
+
   await ping();
   return {
     checks: { postgres: ping, redis: async () => void (await connection.ping()) },
-    cleanups: [() => clearInterval(timer), () => close(), async () => void (await connection.quit()), () => notifications.close(), () => management.close()],
+    cleanups: [() => clearInterval(timer), () => smartTimer && clearInterval(smartTimer), () => close(), async () => void (await connection.quit()), () => notifications.close(), () => management.close()],
   };
 });
 

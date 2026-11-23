@@ -397,3 +397,36 @@ export const pnlSnapshots = pgTable(
   },
   (t) => [index("pnl_snapshots_position_idx").on(t.positionId, t.takenAt)],
 );
+
+/**
+ * Smart LP index (market data, not per user): wallets currently LPing in the
+ * busiest Meteora DLMM pools, scored from Meteora's public portfolio data.
+ * Refreshed by the manager; read by the Smart LP and Discover pages.
+ */
+export const smartWallets = pgTable(
+  "smart_wallets",
+  {
+    address: text("address").primaryKey(),
+    totalPnlSol: numeric("total_pnl_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    winRate: numeric("win_rate", { precision: 9, scale: 4 }),
+    closedPositions: integer("closed_positions").notNull().default(0),
+    feesSol: numeric("fees_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    pnl7dSol: numeric("pnl_7d_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    pnl30dSol: numeric("pnl_30d_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    monthlySol: numeric("monthly_sol", { precision: 30, scale: 9 }),
+    evSol: numeric("ev_sol", { precision: 30, scale: 9 }),
+    avgInvestedSol: numeric("avg_invested_sol", { precision: 30, scale: 9 }),
+    openValueSol: numeric("open_value_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    /** LP Agent "fee-checked": LP fees are at least 10% of the profit. */
+    feeChecked: boolean("fee_checked").notNull().default(false),
+    lastActiveAt: ts("last_active_at"),
+    /** Pools / token mints where the wallet has open positions now. */
+    openPools: text("open_pools").array().notNull().default([]),
+    openTokens: text("open_tokens").array().notNull().default([]),
+    /** Daily PnL of the sampled closed pools, for the 7D bar chart: [{day, pnl}] */
+    daily: jsonb("daily").$type<Array<{ day: string; pnl: number }>>(),
+    sampledPools: integer("sampled_pools").notNull().default(0),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("smart_wallets_pnl_idx").on(t.totalPnlSol), index("smart_wallets_updated_idx").on(t.updatedAt)],
+);

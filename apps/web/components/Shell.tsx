@@ -10,9 +10,11 @@ import { AccountPanel } from "@/components/AccountPanel";
 import { useCurrency } from "@/lib/currency";
 
 const NAV = [
+  { href: "/", label: "Discover" },
   { href: "/pools", label: "Havuzlar" },
+  { href: "/smart-lp", label: "Smart LP" },
   { href: "/portfolio", label: "Portfolio" },
-  { href: "/", label: "Copy LP" },
+  { href: "/copy", label: "Copy LP" },
   { href: "/settings", label: "Ayarlar" },
 ];
 

@@ -10,6 +10,7 @@ import { Insights } from "./insights.js";
 import { registerPortfolio } from "./portfolio.js";
 import { registerWallets } from "./wallets.js";
 import { registerPools } from "./pools.js";
+import { registerDiscover } from "./discover.js";
 import { MeteoraData } from "./meteora.js";
 
 const COOKIE = "binflip_session";
@@ -169,6 +170,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
   registerPortfolio(app, db, config);
   registerWallets(app, db, config, meteora);
   registerPools(app, db, config, meteora);
+  registerDiscover(app, db, config, meteora);
 
   // ── Copy dialog insights (suggested %, High-frequency warning) ─────────
   const insights = new Insights(db, config);

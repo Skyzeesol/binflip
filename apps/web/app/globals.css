@@ -218,7 +218,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb
 .pf-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .toggle-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; }
 .pf-table th { font-size: 12.5px; }
-.pf-table th.num, .pf-table td.num { text-align: right; }
+.pf-table th.num, .pf-table td.num { text-align: right; white-space: nowrap; }
+.pf-table th { white-space: nowrap; }
 .sortable { cursor: pointer; user-select: none; }
 .sortable.sorted { color: var(--accent); }
 .total-row td { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
@@ -338,6 +339,19 @@ tr.grouped td { border-top: 0; }
 }
 
 .search input { height: 32px; width: 260px; background: var(--surface-2); border-radius: 9px; font-size: 13px; }
+
+/* ── Discover / Smart LP ───────────────────────── */
+.disc-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.disc-search { height: 32px; width: 240px; }
+.disc-pools > td { background: color-mix(in srgb, var(--surface-2) 60%, transparent); padding: 10px 16px; }
+.disc-pools table td, .disc-pools table th { padding: 6px 10px; }
+.safety { display: inline-block; white-space: nowrap; font-weight: 700; font-size: 12px; border-radius: 6px; padding: 1px 7px; }
+.safety-safe { color: var(--pos); background: var(--pos-soft); }
+.safety-caution { color: var(--warn); background: var(--warn-soft); }
+.safety-risky { color: var(--neg); background: var(--neg-soft); }
+.sl-filters { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.sl-filters .field { min-width: 150px; }
+.sl-actions { display: flex; gap: 6px; margin-left: auto; }
 
 @media (max-width: 900px) {
   .pf-top { grid-template-columns: 1fr; }

@@ -65,7 +65,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
           <button className="btn btn-sm btn-ghost" onClick={() => navigator.clipboard.writeText(address)} aria-label="Adresi kopyala">⧉</button>
           <span className="badge">◎ Solana</span>
           {d?.copy ? (
-            <Link className="badge badge-pos" href={`/?edit=${d.copy.id}`} title="Kopya ayarlarını düzenle">Kopyalanıyor: {d.copy.label} ({d.copy.status === "active" ? "aktif" : "duraklatıldı"})</Link>
+            <Link className="badge badge-pos" href={`/copy?edit=${d.copy.id}`} title="Kopya ayarlarını düzenle">Kopyalanıyor: {d.copy.label} ({d.copy.status === "active" ? "aktif" : "duraklatıldı"})</Link>
           ) : (
             <button className="btn btn-sm btn-primary" onClick={() => setCopying(true)}>Copy LP</button>
           )}
