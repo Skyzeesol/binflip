@@ -230,6 +230,12 @@ crontab -e
 
 Yedekler `~/binflip-data/backups` altında 14 gün tutulur. Ara sıra bilgisayarına da kopyala.
 
+## 11b. Panel ve Telegram özeti
+
+- Panel menüsü: Discover, Havuzlar, Smart LP, Portfolio, Copy LP, Ayarlar.
+- Smart LP listesi manager tarafından 30 dakikada bir yenilenir (ilk liste açılıştan ~1 dakika sonra). Sıklığı `.env`'de `SMART_LP_INTERVAL_MS` ile değiştirebilirsin (0 = kapalı).
+- Telegram: `/durum`, `/stop`, `/devam`, `/ac <havuz>` (ya da havuz adresini / Meteora linkini direkt gönder), `/iptal`, `/yardim`. Bildirim türlerini Ayarlar → Bildirimler'den kapatabilirsin.
+
 ## 12. Sunucuda yapılacak doğrulamalar (Claude ile)
 
 - DAMM V2 add / remove / claim / close simülasyonları (canlı bir DAMM V2 SOL pozisyonuyla).
