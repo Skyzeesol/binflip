@@ -1,0 +1,3 @@
+module.exports=[18622,(a,b,c)=>{b.exports=a.x("next/dist/compiled/next-server/app-page-turbo.runtime.prod.js",()=>require("next/dist/compiled/next-server/app-page-turbo.runtime.prod.js"))},28992,a=>{"use strict";var b=a.i(4567);a.s(["default",0,function({children:a}){return(0,b.jsx)("html",{lang:"tr",children:(0,b.jsx)("body",{children:a})})},"metadata",0,{title:"Binflip",description:"Copy LP + bid-ask flip for Meteora",robots:{index:!1,follow:!1}}])},44665,function(a){a.n(a.i(28992))},64077,(a,b,c)=>{"use strict";b.exports=a.r(18622)},4567,(a,b,c)=>{"use strict";b.exports=a.r(64077).vendored["react-rsc"].ReactJsxRuntime}];
+
+//# sourceMappingURL=%5Broot-of-the-server%5D__1a0xv07m-ynlj._.js.map

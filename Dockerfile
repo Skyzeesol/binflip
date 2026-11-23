@@ -19,6 +19,7 @@ COPY apps/executor/package.json apps/executor/
 COPY apps/manager/package.json apps/manager/
 COPY apps/api/package.json apps/api/
 COPY apps/telegram/package.json apps/telegram/
+COPY apps/web/package.json apps/web/
 
 # Full install + compile.
 FROM manifests AS build
@@ -29,6 +30,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 COPY tsconfig.base.json ./
 COPY packages packages
 COPY apps apps
+# The panel proxies /api/* to the api service; rewrites are baked in at build time.
+ARG API_URL=http://api:3001
+ENV API_URL=$API_URL NEXT_TELEMETRY_DISABLED=1
 RUN pnpm -r build
 
 # Production dependencies only.
@@ -50,6 +54,9 @@ COPY --from=build --chown=node:node /app/apps/executor/dist apps/executor/dist
 COPY --from=build --chown=node:node /app/apps/manager/dist apps/manager/dist
 COPY --from=build --chown=node:node /app/apps/api/dist apps/api/dist
 COPY --from=build --chown=node:node /app/apps/telegram/dist apps/telegram/dist
+# Panel: Next.js standalone server (self-contained, has its own node_modules) + static assets.
+COPY --from=build --chown=node:node /app/apps/web/.next/standalone /app/web
+COPY --from=build --chown=node:node /app/apps/web/.next/static /app/web/apps/web/.next/static
 USER node
 # Overridden per service in docker-compose.yml
 CMD ["node", "apps/api/dist/main.js"]

@@ -423,3 +423,28 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 **Maliyet:** pozisyon rent'i eski pozisyondan iade edilir, yenisi için ödenir; ayrıca yeni aralıktaki bin array rent'i ve birkaç işlem ücreti. Sık rebalance yapan liderlerde bu maliyet loglanır (`txs.fee_lamports`).
 
 **Doğrulanmadı:** yeni açılan pozisyona eklemenin uçtan uca simülasyonu (pozisyon zincirde var olmadan simüle edilemiyor). Parçaların her biri ayrı ayrı mainnet simülasyonunu geçti.
+
+---
+
+## 21. Aşama 5: panel (tamam, ilk sürüm)
+
+**API (`apps/api`, Fastify):**
+- **Cüzdanla giriş (SIWS):** `POST /v1/auth/nonce` → cüzdan mesajı imzalar → `POST /v1/auth/verify`. Nonce tek kullanımlık ve 5 dakika geçerli, ed25519 imza doğrulanıyor, sadece `users.login_wallet` olarak kayıtlı cüzdan girebiliyor. Oturum HMAC imzalı, httpOnly + SameSite=strict çerez (7 gün). `SESSION_SECRET` zorunlu (32+ karakter; cüzdan anahtarı değil).
+- Uç noktalar: `/v1/me`, `/v1/leaders` (GET/POST/PATCH/DELETE + `/:id/pause|resume`), `/v1/logs?tab=all|not_opened|failed|open|closed&leaderId=` (7 gün), `/v1/analysis?range=7D|1M|3M|ALL`, `/v1/positions?state=`, `/v1/risk` (GET/PATCH), `/v1/kill`, `/v1/unkill`, `/v1/manual` (GET/PUT).
+- Ayarlar arayüz birimleriyle (%, SOL) gidip gelir; dönüşüm tek bir yerde (`apps/api/src/settings.ts`, testli). LP Agent'ın %1 alt sınırı ve "Max 0 kaydedilemez" kuralı doğrulamada uygulanıyor.
+- PnL: manager her turda `positions.current_value_sol`'ü yazar (claim edilmemiş fee'ler dahil) ve 5 dakikada bir `pnl_snapshots` kaydeder. Analiz grafiği, her pozisyonun günlük **son** ölçümünü cüzdan bazında toplar. "Tahmini" diye işaretli.
+
+**Arayüz (`apps/web`, Next.js 16.4.5 + React 19.3.1, ek UI kütüphanesi yok):**
+- `/login`: Phantom/Solflare ile mesaj imzalayarak giriş. Panel hiçbir zaman özel anahtar istemez.
+- `/` **Copy LP**: Kopyalanan Cüzdanlar (Aktif/Duraklatıldı grupları, kopya anahtarı, "Bırak"), Analiz (7G/1A/3A/Tümü, KPI'lar, SVG grafik, cüzdan tablosu), Kopya Kayıtları (LP Agent sekmeleri, aynı nedenle atlanan ardışık satırlar katlanır, satıra tıklayınca lider ve bizim işlem linkleri, hata).
+- **6 adımlı kopya diyaloğu:** Boyut, Çıkış kuralları, Ne kopyalanacak, Koruma, Etiket, **Pozisyon yönetimi** (bizim adımımız: mod + flip eşiği + compound).
+- `/positions`: açık/kapalı pozisyonlar, aralık, yatırılan/güncel/PnL, flip sayısı (30 sn'de bir yenilenir).
+- `/settings`: bot cüzdanı (sadece public adres), limitler, fon koruması, slippage, token filtreleri, kara liste, kendi açılan pozisyonların yönetimi.
+- Üst menüde DENEME/CANLI rozeti ve **Acil durdur** butonu (yeni girişleri durdurur, çıkışlar devam eder). Canlıya geçiş panelden yapılamaz, sadece sunucuda.
+- Açık/koyu tema, mobil uyumlu. `/api/*` Next üzerinden api servisine proxy'lenir (aynı origin, çerez httpOnly kalır).
+
+**Docker:** `web` servisi (Next standalone, `127.0.0.1:3000`), `api` (`127.0.0.1:3001`). Dışarıya port açılmaz: panele SSH tüneliyle (`ssh -L 3000:127.0.0.1:3000 vps`) ya da TLS'li reverse proxy ile erişilir. Doğrulama: imaj derlendi, `api` ve `web` container'ları healthy, oturum açılıp tüm sayfaların ekran görüntüleri alındı (koyu, açık, mobil).
+
+**İlk giriş için:** sunucuda `node packages/db/dist/cli.js user:init --wallet <PHANTOM_GIRIS_ADRESINIZ>`. Bu, sadece mesaj imzalayan giriş cüzdanıdır; bot cüzdanı değildir ve ana cüzdanınız olabilir (anahtarı sunucuya gelmez).
+
+**Eksikler / sonraki:** "tek tıkla düzelt" butonları (LP Agent'taki Raise slippage, Top up gibi), lider portföy/net varlıktan önerilen %, yüksek frekans uyarısı (ortalama tutma < 18 dk), fon korumasının icrası (şu an sadece ayar), token filtrelerinin icrası (fiyat verisi gerekiyor), Telegram komutları.

@@ -1,0 +1,3 @@
+module.exports=[94787,a=>{"use strict";class b extends Error{status;constructor(a,b){super(a),this.status=b}}async function c(a,d={}){let e=await fetch(`/api${a}`,{...d,credentials:"same-origin",headers:{"content-type":"application/json",...d.headers??{}}}),f=await e.json().catch(()=>({}));if(e.status,!e.ok)throw new b(f.error??`HTTP ${e.status}`,e.status);return f}a.s(["k",0,c,"z",0,a=>c(a,{method:"DELETE"}),"P",0,(a,b)=>c(a,{method:"PATCH",body:JSON.stringify(b)}),"M",0,(a,b={})=>c(a,{method:"POST",body:JSON.stringify(b)}),"N",0,(a,b)=>c(a,{method:"PUT",body:JSON.stringify(b)})])}];
+
+//# sourceMappingURL=apps_web_lib_api_ts_0tcr3a3lt-352._.js.map

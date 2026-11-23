@@ -1,0 +1,8 @@
+{
+  "/(panel)/page": "/",
+  "/(panel)/positions/page": "/positions",
+  "/(panel)/settings/page": "/settings",
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/login/page": "/login"
+}

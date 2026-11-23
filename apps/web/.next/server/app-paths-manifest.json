@@ -1,0 +1,8 @@
+{
+  "/(panel)/page": "app/(panel)/page.js",
+  "/(panel)/positions/page": "app/(panel)/positions/page.js",
+  "/(panel)/settings/page": "app/(panel)/settings/page.js",
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/login/page": "app/login/page.js"
+}

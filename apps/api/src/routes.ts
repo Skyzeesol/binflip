@@ -224,17 +224,21 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
       .select({ total: sql<string>`coalesce(sum(${schema.txs.feeLamports}), 0)` })
       .from(schema.txs)
       .where(and(eq(schema.txs.userId, uid), gte(schema.txs.createdAt, since)));
-    const series = await db
-      .select({
-        day: sql<string>`to_char(date_trunc('day', ${schema.pnlSnapshots.takenAt}), 'YYYY-MM-DD')`,
-        leaderId: schema.positions.leaderId,
-        value: sql<string>`sum(${schema.pnlSnapshots.valueSol} - ${schema.positions.depositedSol})`,
-      })
-      .from(schema.pnlSnapshots)
-      .innerJoin(schema.positions, eq(schema.positions.id, schema.pnlSnapshots.positionId))
-      .where(and(eq(schema.pnlSnapshots.userId, uid), gte(schema.pnlSnapshots.takenAt, since)))
-      .groupBy(sql`1`, schema.positions.leaderId)
-      .orderBy(sql`1`);
+    // Last snapshot per position per day, then summed per wallet (not every 5-minute sample).
+    const seriesRows = await db.execute<{ day: string; leader_id: string | null; pnl: string }>(sql`
+      select day, leader_id, sum(value_sol - deposited_sol) as pnl
+      from (
+        select distinct on (s.position_id, date_trunc('day', s.taken_at))
+          to_char(date_trunc('day', s.taken_at), 'YYYY-MM-DD') as day,
+          p.leader_id, s.value_sol, p.deposited_sol
+        from ${schema.pnlSnapshots} s
+        join ${schema.positions} p on p.id = s.position_id
+        where s.user_id = ${uid} and s.taken_at >= ${since.toISOString()}::timestamptz
+        order by s.position_id, date_trunc('day', s.taken_at), s.taken_at desc
+      ) last_per_day
+      group by day, leader_id
+      order by day`);
+    const series = (seriesRows as unknown as Array<{ day: string; leader_id: string | null; pnl: string }>).map((r) => ({ day: r.day, leaderId: r.leader_id, value: r.pnl }));
     const wallets = per.map((p) => ({ leaderId: p.leaderId, label: p.label, opened: p.opened, open: p.open, depositedSol: Number(p.deposited) / 1e9, pnlSol: Number(p.pnl) }));
     return {
       range,
