@@ -117,6 +117,9 @@ importers:
       '@solana/web3.js':
         specifier: ^1.99.0
         version: 1.99.0(bufferutil@4.2.0)(typescript@7.0.2)(utf-8-validate@6.1.0)
+      bs58:
+        specifier: ^6.0.0
+        version: 6.0.0
       bullmq:
         specifier: ^6.7.8
         version: 6.7.8(ioredis@5.11.1)
