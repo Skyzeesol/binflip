@@ -224,7 +224,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   if (plan.do === "skip") return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) };
 
   if (dryRun) {
-    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, true, t.id, null);
+    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, true, t.id, null, undefined, exitRulesOf(cs));
     return { ...base, outcome: "planned", text: describe(leader.label, action, plan, true) };
   }
 
@@ -248,7 +248,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .update(schema.txs)
       .set({ status: "confirmed", feeLamports: BigInt(fees) })
       .where(eq(schema.txs.id, t.id));
-    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId);
+    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId, exitRulesOf(cs));
     // Like LP Agent: whatever token this exit produced is sold back to SOL (retried until sold).
     const after: string[] = [];
     if (plan.do === "rebalance" && leftoverToken && leftoverToken > 0n && tokenMint && action.pool) {
@@ -411,6 +411,7 @@ async function applyToPositions(
   txId: string,
   ourPosition: string | null,
   agentWalletId?: string,
+  exitRules?: { takeProfitBps: number | null; stopLossBps: number | null; trailingStopBps: number | null },
 ) {
   const now = new Date();
   if (plan.do === "open") {
@@ -435,6 +436,8 @@ async function applyToPositions(
         depositedSol: plan.amountSol,
         fundedAt: plan.empty ? null : now,
         openedAt: now,
+        // LP Agent: exit rules are saved on the copy when it opens.
+        ...(exitRules ? { ...exitRules, exitRulesSaved: true } : {}),
       })
       .onConflictDoNothing()
       .returning({ id: schema.positions.id });
@@ -543,3 +546,8 @@ function describe(label: string, a: LeaderAction, plan: Plan, dryRun: boolean): 
       return `${head} → atlandı: ${plan.reason}`;
   }
 }
+
+function exitRulesOf(cs: { takeProfitBps: number | null; stopLossBps: number | null; trailingStopBps: number | null }) {
+  return { takeProfitBps: cs.takeProfitBps, stopLossBps: cs.stopLossBps, trailingStopBps: cs.trailingStopBps };
+}
+

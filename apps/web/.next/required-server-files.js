@@ -345,7 +345,7 @@ self.__SERVER_FILES_MANIFEST={
       "afterFiles": [
         {
           "source": "/api/:path*",
-          "destination": "http://127.0.0.1:3101/:path*"
+          "destination": "http://127.0.0.1:3001/:path*"
         }
       ],
       "fallback": []

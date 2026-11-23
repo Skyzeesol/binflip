@@ -136,11 +136,10 @@ async function manageAll(
     if (!pos.leaderId && m && !m.enabled) continue;
     const cs = copySet ?? (m ? { ...m } : null);
     const mode = cs?.managementMode ?? pos.managementMode;
-    const exits = {
-      takeProfitBps: cs?.takeProfitBps ?? null,
-      stopLossBps: cs?.stopLossBps ?? null,
-      trailingStopBps: cs?.trailingStopBps ?? null,
-    };
+    // LP Agent: TP/SL saved on the copy at open win over today's settings.
+    const exits = pos.exitRulesSaved
+      ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
+      : { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
     const flip = flipParamsFrom(cs?.managementParams);
     const label = leader?.label ?? "manuel";
 
@@ -333,6 +332,10 @@ async function discoverManual(db: Db, builder: DlmmTxBuilder, log: Logger, notif
           fundedAt: new Date(),
           openedAt: new Date(),
           peakValue: String(value / 1e9),
+          takeProfitBps: m?.takeProfitBps ?? null,
+          stopLossBps: m?.stopLossBps ?? null,
+          trailingStopBps: m?.trailingStopBps ?? null,
+          exitRulesSaved: true,
         })
         .onConflictDoNothing()
         .returning({ id: schema.positions.id });

@@ -128,6 +128,8 @@ const RANGES = [
   { id: "7D", label: "7G" },
   { id: "1M", label: "1A" },
   { id: "3M", label: "3A" },
+  { id: "1Y", label: "1Y" },
+  { id: "YTD", label: "Yılbaşından" },
   { id: "ALL", label: "Tümü" },
 ] as const;
 

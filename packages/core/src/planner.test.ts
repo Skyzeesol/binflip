@@ -36,7 +36,7 @@ const settings = (o: Partial<PlannerSettings> = {}): PlannerSettings => ({
   copyDammV2: true,
   memeProtection: true,
   leaderPaused: false,
-  followExitsWhilePaused: true,
+  followExitsWhilePaused: false,
   killSwitch: false,
   fundProtectionTripped: false,
   maxSolPerTx: 100n * SOL,
@@ -85,13 +85,11 @@ describe("planCopy", () => {
     });
   });
 
-  it("paused leader: opens skipped, closes still followed by default", () => {
+  it("paused leader (LP Agent): nothing is copied, closes included; following exits is opt-in", () => {
     const s = settings({ leaderPaused: true });
     expect(planCopy(action({ kind: "open", created: true }), s, null)).toMatchObject({ reason: "leader_paused" });
-    expect(planCopy(action({ kind: "close", closed: true }), s, ours({ state: "ACTIVE" }))).toEqual({ do: "close" });
-    expect(
-      planCopy(action({ kind: "close", closed: true }), { ...s, followExitsWhilePaused: false }, ours()),
-    ).toMatchObject({ reason: "leader_paused" });
+    expect(planCopy(action({ kind: "close", closed: true }), s, ours({ state: "ACTIVE" }))).toMatchObject({ reason: "leader_paused" });
+    expect(planCopy(action({ kind: "close", closed: true }), { ...s, followExitsWhilePaused: true }, ours({ state: "ACTIVE" }))).toEqual({ do: "close" });
   });
 
   it("kill switch and fund protection block entries, not exits", () => {

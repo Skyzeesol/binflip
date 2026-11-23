@@ -8,7 +8,7 @@ import type { CopySettings, Leader, ManagementMode, Strategy } from "@/lib/types
 /** LP Agent's defaults for a new copy, plus ours for step 6. */
 export const DEFAULT_SETTINGS: CopySettings = {
   sizing: { mode: "percent_of_leader", percent: 100, fixedSol: null, maxPerTxSol: null, maxPerPositionSol: null },
-  exit: { withLeader: true, followExitsWhilePaused: true, takeProfitPct: 10, stopLossPct: 10, trailingStopPct: null, currency: "sol" },
+  exit: { withLeader: true, followExitsWhilePaused: false, takeProfitPct: 10, stopLossPct: 10, trailingStopPct: null, currency: "sol" },
   copy: { dlmmStrategies: ["spot", "curve", "bid_ask", "custom"], dammV2: true },
   protection: { memeProtection: true, smartTokenRetention: false, strHoldSeconds: 60, strSellOnDropPct: 5, strSellOnLeaderSell: true, minTokenAgeHours: null, minMarketCapUsd: null },
   management: { mode: "staged_flip", flipThresholdPct: 10, compoundMinutes: null, convertFeesToSol: false },
@@ -121,10 +121,10 @@ export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null
               <div className="stack">
                 <div><h3>Çıkış kuralları</h3><p className="muted">Kopya, lider kapatmadan önce kendi kendine ne zaman kapanır. Hangisi önce gelirse.</p></div>
                 <label className="check"><input type="checkbox" checked={s.exit.withLeader} onChange={(e) => set("exit", { withLeader: e.target.checked })} /><span>Liderle çık<div className="hint">Lider kapatınca kopya da kapanır.</div></span></label>
-                <label className="check"><input type="checkbox" checked={s.exit.followExitsWhilePaused} onChange={(e) => set("exit", { followExitsWhilePaused: e.target.checked })} /><span>Duraklatılmışken de çıkışları takip et<div className="hint">LP Agent'ta duraklatma kapanışları da durdurur. Burada varsayılan olarak çıkışlar takip edilir.</div></span></label>
+                <label className="check"><input type="checkbox" checked={s.exit.followExitsWhilePaused} onChange={(e) => set("exit", { followExitsWhilePaused: e.target.checked })} /><span>Duraklatılmışken de çıkışları takip et<div className="hint">Kapalıyken (LP Agent gibi) duraklatılan cüzdandan kapanışlar dahil hiçbir şey kopyalanmaz; açık kopyalar kendi TP/SL'leriyle kalır.</div></span></label>
                 <div className="row">
                   <label className="field">Take profit (%)<input type="number" min={0} step="0.5" placeholder="kapalı" value={str(s.exit.takeProfitPct)} onChange={(e) => set("exit", { takeProfitPct: num(e.target.value) })} /></label>
-                  <label className="field">Stop loss (%)<input type="number" min={0} step="0.5" placeholder="kapalı" value={str(s.exit.stopLossPct)} onChange={(e) => set("exit", { stopLossPct: num(e.target.value) })} /><span className="hint">%15 civarı yaygın bir başlangıç. Çok sıkı tutmak her dalgalanmada çıkış ücreti ödetir.</span></label>
+                  <label className="field">Stop loss (%)<input type="number" min={0} step="0.5" placeholder="kapalı" value={str(s.exit.stopLossPct)} onChange={(e) => set("exit", { stopLossPct: num(e.target.value) })} /><span className="hint">%15 civarı yaygın bir başlangıç. Çok sıkı tutmak her dalgalanmada çıkış ücreti ödetir. TP/SL açılışta kopyaya yazılır; sonradan değiştirmek açık kopyaları etkilemez.</span></label>
                 </div>
                 <label className="field">Trailing stop (%)<input type="number" min={0} step="0.5" placeholder="kapalı" value={str(s.exit.trailingStopPct)} onChange={(e) => set("exit", { trailingStopPct: num(e.target.value) })} /><span className="hint">Pozisyon bir kez kâra geçtikten sonra, zirvesinden bu kadar düşerse kapanır.</span></label>
               </div>

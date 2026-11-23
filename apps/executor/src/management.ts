@@ -85,7 +85,9 @@ export function startManagement(p: {
     const progress: FlipProgress = (existing?.plan as unknown as FlipProgress) ?? { stage: "planned", signatures: [] };
 
     // Re-check on chain unless we are resuming a flip whose token is already out.
-    const exits: ExitRules = { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
+    const exits: ExitRules = pos.exitRulesSaved
+      ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
+      : { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
     const flip = flipParamsFrom(cs?.managementParams);
     const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
     const d = progress.stage === "removed" ? null : decide(state, cs?.managementMode ?? pos.managementMode, exits, flip);

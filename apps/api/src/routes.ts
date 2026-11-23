@@ -7,7 +7,12 @@ import { NonceStore, SESSION_TTL_MS, loginMessage, signSession, verifySession, v
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 
 const COOKIE = "binflip_session";
-const RANGES = { "7D": 7, "1M": 30, "3M": 90, ALL: 36500 } as const;
+const RANGES = { "7D": 7, "1M": 30, "3M": 90, "1Y": 365, YTD: -1, ALL: 36500 } as const;
+/** Start of a range; YTD = Jan 1st (UTC) of the current year. */
+function rangeStart(r: keyof typeof RANGES): Date {
+  if (r === "YTD") return new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+  return new Date(Date.now() - RANGES[r] * 86_400_000);
+}
 const base58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
 
 declare module "fastify" {
@@ -204,8 +209,8 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
 
   // ── Analysis ───────────────────────────────────────────────────────────
   app.get("/v1/analysis", async (req) => {
-    const { range } = z.object({ range: z.enum(["7D", "1M", "3M", "ALL"]).default("1M") }).parse(req.query);
-    const since = new Date(Date.now() - RANGES[range] * 86_400_000);
+    const { range } = z.object({ range: z.enum(["7D", "1M", "3M", "1Y", "YTD", "ALL"]).default("1M") }).parse(req.query);
+    const since = rangeStart(range);
     const uid = req.userId!;
     const per = await db
       .select({

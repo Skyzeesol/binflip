@@ -176,8 +176,8 @@ export const copySettings = pgTable("copy_settings", {
 
   // 2. Çıkış kuralları (TP/SL are snapshotted onto each position at open)
   exitWithLeader: boolean("exit_with_leader").notNull().default(true),
-  /** Our difference from LP Agent: a paused leader's exits are still followed. */
-  followExitsWhilePaused: boolean("follow_exits_while_paused").notNull().default(true),
+  /** LP Agent: pausing a wallet stops everything from it, closes included. Opt-in to keep following exits. */
+  followExitsWhilePaused: boolean("follow_exits_while_paused").notNull().default(false),
   takeProfitBps: integer("take_profit_bps"),
   stopLossBps: integer("stop_loss_bps"),
   trailingStopBps: integer("trailing_stop_bps"),
@@ -291,6 +291,14 @@ export const positions = pgTable(
     lastFlipBinId: integer("last_flip_bin_id"),
     depositedSol: lamports("deposited_sol").notNull().default(sql`0`),
     depositedToken: rawAmount("deposited_token").notNull().default("0"),
+    /**
+     * Exit rules snapshotted when the copy opens (LP Agent: "The TP/SL is saved on each copied
+     * position when it opens"). Later settings changes don't touch open copies.
+     */
+    takeProfitBps: integer("take_profit_bps"),
+    stopLossBps: integer("stop_loss_bps"),
+    trailingStopBps: integer("trailing_stop_bps"),
+    exitRulesSaved: boolean("exit_rules_saved").notNull().default(false),
     /** High-water mark for the trailing stop, in exit currency. */
     peakValue: numeric("peak_value", { precision: 30, scale: 9 }),
     /** Dry-run only: the virtual bin-level position the manager simulates (see core/strategy/bins.ts). */

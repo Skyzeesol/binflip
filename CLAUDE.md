@@ -448,3 +448,31 @@ Kaynaklar: docs.lpagent.io (copy-lp, copy-settings, copy-management, settings, f
 **İlk giriş için:** sunucuda `node packages/db/dist/cli.js user:init --wallet <PHANTOM_GIRIS_ADRESINIZ>`. Bu, sadece mesaj imzalayan giriş cüzdanıdır; bot cüzdanı değildir ve ana cüzdanınız olabilir (anahtarı sunucuya gelmez).
 
 **Eksikler / sonraki:** "tek tıkla düzelt" butonları (LP Agent'taki Raise slippage, Top up gibi), lider portföy/net varlıktan önerilen %, yüksek frekans uyarısı (ortalama tutma < 18 dk), fon korumasının icrası (şu an sadece ayar), token filtrelerinin icrası (fiyat verisi gerekiyor), Telegram komutları.
+
+---
+
+## 22. KARAR: LP Agent'la ayrışma yok (kullanıcı, 23 Kasım 2026)
+
+> "lpagent ile görüş ayrılığına düştüğümüz bir konu olmasın, onları taklit edelim."
+
+Kural: Kopyalama davranışında LP Agent dokümanı (bkz. §14) referanstır. Bizim **eklentilerimiz** (flip modları, trailing stop, acil durdurma, kâr süpürme, manuel pozisyon kuralları) kalır, çünkü LP Agent davranışını değiştirmezler ya da varsayılan olarak kapalıdırlar.
+
+**Tespit edilen farklar ve yapılacaklar:**
+
+| # | Konu | LP Agent | Bizde (önce) | Yapılacak |
+|---|---|---|---|---|
+| A | Duraklatma | Duraklatılan cüzdandan **kapanışlar dahil** hiçbir şey kopyalanmaz | `follow_exits_while_paused` varsayılan açık | Varsayılan kapalı, mevcut kayıtlar da kapalıya çekilir |
+| B | TP/SL | Açılışta pozisyona **kopyalanır**, sonraki ayar değişikliği açık pozisyonu etkilemez | Canlı olarak güncel ayardan okunuyordu | Pozisyon açılışında TP/SL/trailing pozisyona yazılır |
+| C | Analiz aralıkları | 7D, 1M (varsayılan), 3M, 1Y, YTD, ALL | 7G, 1A, 3A, Tümü | 1Y ve YTD eklenir |
+| D | Kayıt sonuçları | "Not opened" (ör. düşük bakiye) ile "Skipped" (ayarlar reddetti) ayrı; nedenlerin yanında tek tıkla düzelt butonu | Hepsi "Atlandı", buton yok | Ayrım + düzelt butonları |
+| E | Fon koruması | Varsayılan açık, %20, zirveden kayıp, sadece kapanan kopyalar; tetiklenince girişler/compound/rebalance durur, çıkışlar devam eder; Resume / Turn off | Sadece ayar, icra yok | İcra + Resume / Kapat |
+| F | Fonsuz cüzdan | Kopyalar sürekli fon yüzünden başarısız olursa cüzdanlar otomatik duraklatılır | Yok | Ardışık `low_balance` → otomatik duraklat + bildirim |
+| G | Boş açılış | Fonlama gelmezse ~1 dk sonra kapatılır, rent geri alınır | Boş pozisyon açık kalıyordu | 60 sn sonra kontrol, boşsa kapat |
+| H | Token filtreleri | Organic score, market cap, 24s hacim, holder, kara liste: açılmadan önce kontrol | Sadece ayar | Jupiter token verisiyle icra |
+| I | Meme koruması | Kopyanın yatıracağı değerin **%95'inden fazlası** güvenilmeyen token'daysa atla | Sadece token-only eklemeler | Fiyatla değer oranı |
+| J | İki taraflı ekleme | Aynı havuz ve aralık, kopya boyutunda (zap: SOL'ün bir kısmı token'a çevrilir) | Sadece SOL tarafı, tek taraflı | Zap-in: liderin oranına göre swap + iki taraflı ekleme |
+| K | Önerilen % ve uyarı | Net varlık oranı ile öneri; ortalama tutma < 18 dk ise "High-frequency" uyarısı | Yok | Diyalogda öneri + uyarı |
+| L | Smart Token Retention | Var (DLMM) | "Yakında" | Uygulanır |
+| M | DAMM V2 | Canlı kopyalanır | Canlıda atlanıyor | cp-amm SDK ile canlı kopya |
+
+LP Agent'ın %8 fee'si ve swap yönlendiricisi (OKX) taklit edilmez: fee'den kurtulmak projenin amacı; swap için Jupiter kullanılıyor.
