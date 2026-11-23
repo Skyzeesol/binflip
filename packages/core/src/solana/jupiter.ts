@@ -24,7 +24,16 @@ export class JupiterClient {
   constructor(readonly baseUrl = "https://lite-api.jup.ag/swap/v1") {}
 
   async quoteToSol(mint: string, amount: bigint, slippageBps: number): Promise<JupiterQuote> {
-    const url = `${this.baseUrl}/quote?inputMint=${mint}&outputMint=${WSOL_MINT}&amount=${amount}&slippageBps=${slippageBps}&restrictIntermediateTokens=true`;
+    return this.quote(mint, WSOL_MINT, amount, slippageBps);
+  }
+
+  /** SOL → token, for zapping into a two-sided copy. */
+  async quoteFromSol(mint: string, lamports: bigint, slippageBps: number): Promise<JupiterQuote> {
+    return this.quote(WSOL_MINT, mint, lamports, slippageBps);
+  }
+
+  async quote(inputMint: string, outputMint: string, amount: bigint, slippageBps: number): Promise<JupiterQuote> {
+    const url = `${this.baseUrl}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps}&restrictIntermediateTokens=true`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     const body = (await res.json()) as JupiterQuote & { error?: string; errorCode?: string };
     if (!res.ok || body.error || !body.outAmount) {

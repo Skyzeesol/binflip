@@ -17,7 +17,15 @@ export interface PlannerSettings {
   maxSolPerTx: bigint;
   /** Remaining room under maxSolPerDay for opens/adds today. */
   dailyRoom: bigint;
+  /**
+   * Token price in lamports per raw token unit, from the pool's active bin.
+   * Enables value-based Meme Protection and two-sided (zap) copies. null = unknown.
+   */
+  tokenPriceLamports?: number | null;
 }
+
+/** LP Agent Meme Protection: skip when more than this share of the deposit would be the untrusted token. */
+export const MEME_MAX_UNTRUSTED_BPS = 9_500;
 
 /** Our mirrored position for the leader position, if we hold one. */
 export interface OurPosition {
@@ -50,12 +58,15 @@ export type SkipReason =
   | "rebalance_unknown"
   // live-only, decided by the executor with chain state
   | "low_balance"
+  | "token_filter"
+  | "token_blacklisted"
   | "damm_live_not_supported";
 
 export type Plan =
   | { do: "skip"; kind: ActionKind; reason: SkipReason }
-  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean }
-  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean }
+  /** swapSol: part of amountSol to swap into the token first, so our deposit has the leader's ratio (LP Agent zap). */
+  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint }
+  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint }
   | { do: "remove"; bps: number }
   | { do: "close" }
   | { do: "claim" }
@@ -113,9 +124,17 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
     return { do: "open", amountSol: 0n, ratioPpm: null, capped: null, empty: true };
   }
   if (!side) return skip("non_sol_pair");
-  if (s.memeProtection && side.sol === 0n && side.token > 0n) return skip("meme_protection");
 
-  const sized = sizeDeposit(side.sol, s.sizing, {
+  // Value both sides in SOL when we know the price (LP Agent sizes and protects on value, and zaps).
+  const price = s.tokenPriceLamports ?? null;
+  const tokenValue = price !== null && side.token > 0n ? BigInt(Math.floor(Number(side.token) * price)) : 0n;
+  const leaderValue = side.sol + tokenValue;
+  if (s.memeProtection) {
+    const untrustedBps = leaderValue > 0n ? Number((tokenValue * 10_000n) / leaderValue) : 0;
+    if ((side.sol === 0n && side.token > 0n) || untrustedBps > MEME_MAX_UNTRUSTED_BPS) return skip("meme_protection");
+  }
+
+  const sized = sizeDeposit(leaderValue, s.sizing, {
     ratioPpm: ours?.ratioPpm ?? null,
     depositedSol: ours?.depositedSol ?? 0n,
     fundedAt: ours?.fundedAt ?? null,
@@ -130,10 +149,13 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
     amount = s.maxSolPerTx;
     capped = "max_sol_per_tx";
     // Same rule as a capped open: later adds keep the smaller share we actually got.
-    if (firstFunding) ratioPpm = (amount * PPM) / side.sol;
+    if (firstFunding) ratioPpm = (amount * PPM) / leaderValue;
   }
   if (amount > s.dailyRoom) return skip("daily_limit");
 
-  if (a.kind === "open") return { do: "open", amountSol: amount, ratioPpm, capped, empty: false };
-  return { do: "add", amountSol: amount, ratioPpm, capped, firstFunding };
+  // Zap: swap the token's share of our SOL into the token, so we deposit in the leader's ratio.
+  const swapSol = tokenValue > 0n ? (amount * tokenValue) / leaderValue : 0n;
+  const zap = swapSol > 0n ? { swapSol } : {};
+  if (a.kind === "open") return { do: "open", amountSol: amount, ratioPpm, capped, empty: false, ...zap };
+  return { do: "add", amountSol: amount, ratioPpm, capped, firstFunding, ...zap };
 }

@@ -17,3 +17,4 @@ export * from "./sweep.js";
 export * from "./solana/jupiter.js";
 export * from "./strategy/index.js";
 export * from "./fundProtection.js";
+export * from "./tokenFilters.js";

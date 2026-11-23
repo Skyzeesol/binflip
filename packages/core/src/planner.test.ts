@@ -140,6 +140,25 @@ describe("planCopy", () => {
     expect(planCopy(full, settings(), null)).toMatchObject({ reason: "position_not_copied" });
   });
 
+  it("meme protection is value-based (>95% of the deposit in the token) when the price is known", () => {
+    // price 1 lamport per raw token: 0.5 SOL + 9.5 SOL worth of token = 95% → still allowed; 96% → skipped
+    const at95 = action({ added: { x: 9_500_000_000n, y: 500_000_000n } });
+    expect(planCopy(at95, settings({ tokenPriceLamports: 1 }), ours())).toMatchObject({ do: "add" });
+    const at96 = action({ added: { x: 9_600_000_000n, y: 400_000_000n } });
+    expect(planCopy(at96, settings({ tokenPriceLamports: 1 }), ours())).toMatchObject({ reason: "meme_protection" });
+  });
+
+  it("two-sided leader add: sized on total value and zapped in the leader's ratio", () => {
+    // leader: 1 SOL + token worth 1 SOL; 50% copy → 1 SOL total, half swapped into the token
+    const two = action({ added: { x: 2_000_000_000n, y: SOL } });
+    const p = planCopy(two, settings({ tokenPriceLamports: 0.5 }), ours());
+    expect(p).toMatchObject({ do: "add", amountSol: SOL, swapSol: SOL / 2n, firstFunding: true });
+  });
+
+  it("SOL-only leader adds never swap", () => {
+    expect(planCopy(action({ added: { x: 0n, y: SOL } }), settings({ tokenPriceLamports: 2 }), ours())).not.toHaveProperty("swapSol");
+  });
+
   it("DAMM V2 respects the pool-type toggle", () => {
     const a = action({ protocol: "damm_v2", kind: "open", created: true, added: { x: 0n, y: SOL } });
     expect(planCopy(a, settings({ copyDammV2: false }), null)).toMatchObject({ reason: "pool_type_not_copied" });

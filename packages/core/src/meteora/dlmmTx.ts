@@ -163,6 +163,34 @@ export class DlmmTxBuilder {
     return { txs, extraSigners: new Map(), position: p.position };
   }
 
+  /**
+   * Two-sided add over the leader's range (both sides of the price), in the
+   * leader's shape: what a zapped copy deposits.
+   */
+  async addTwoSided(p: {
+    pool: string;
+    position: string;
+    lowerBinId: number;
+    upperBinId: number;
+    amountSol: bigint;
+    amountToken: bigint;
+    strategy: Strategy | null;
+    slippagePct: number;
+  }): Promise<BuiltTxs> {
+    const d = await this.pool(p.pool);
+    const solIsY = d.lbPair.tokenYMint.toBase58() === WSOL_MINT;
+    const [x, y] = solIsY ? [p.amountToken, p.amountSol] : [p.amountSol, p.amountToken];
+    const txs = await d.addLiquidityByStrategyChunkable({
+      positionPubKey: new PublicKey(p.position),
+      user: this.owner,
+      totalXAmount: new BN(x.toString()),
+      totalYAmount: new BN(y.toString()),
+      strategy: { minBinId: p.lowerBinId, maxBinId: p.upperBinId, strategyType: toStrategyType(p.strategy) },
+      slippage: p.slippagePct,
+    });
+    return { txs, extraSigners: new Map(), position: p.position };
+  }
+
   /** Remove bps from a bin sub-range only (flip: the token bins above price). */
   async removeRange(p: { pool: string; position: string; fromBinId: number; toBinId: number; bps: number }): Promise<BuiltTxs> {
     const d = await this.pool(p.pool);

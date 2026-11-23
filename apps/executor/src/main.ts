@@ -13,10 +13,14 @@ import {
   readPassphraseFile,
   runService,
   WSOL_MINT,
+  JupiterClient,
+  TokenInfoClient,
+  checkTokenFilters,
   compoundRanges,
   type BuiltTxs,
   type Config,
   type ExecutionJob,
+  type PoolInfo,
   type ManagementJob,
   type LeaderAction,
   type Logger,
@@ -159,9 +163,16 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       )[0] ?? null)
     : null;
 
+  // Pool price (both modes, read-only): value-based Meme Protection, zap sizing and token filters.
+  const pool = action.protocol === "dlmm" && action.pool && (action.kind === "open" || action.kind === "add") ? await poolInfoSafe(config, action.pool, log) : null;
+  // DLMM price = raw Y per raw X at the active bin; we want lamports per raw token.
+  const binPx = pool ? Math.pow(1 + pool.binStep / 10_000, pool.activeBinId) : null;
+  const tokenPriceLamports = pool && binPx !== null ? (pool.solIsY ? binPx : 1 / binPx) : null;
+
   let plan = planCopy(
     action,
     {
+      tokenPriceLamports,
       sizing: {
         mode: cs.sizingMode,
         percentBps: cs.sizingPercentBps,
@@ -189,6 +200,29 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       upperBinId: ours.upperBinId,
     },
   );
+
+  // LP Agent Security filters: checked before a position is opened.
+  if (plan.do === "open" && pool) {
+    const mint = pool.solIsY ? pool.mintX : pool.mintY;
+    try {
+      const info = await tokenInfo.get(mint);
+      const f = checkTokenFilters(info, {
+        minOrganicScore: risk.minOrganicScore,
+        minMarketCapUsd: cs.minMarketCapUsd ?? risk.minMarketCapUsd,
+        min24hVolumeUsd: risk.min24hVolumeUsd,
+        minHolders: risk.minHolders,
+        minTokenAgeHours: cs.minTokenAgeHours,
+        blacklist: risk.tokenBlacklist,
+      });
+      if (!f.ok) {
+        plan = { do: "skip", kind: action.kind, reason: f.reason };
+        log.info({ mint, detail: f.detail }, "token filter");
+      }
+    } catch (err) {
+      // Token data unavailable: retry the event rather than copy blind or drop it.
+      throw new Error(`token data unavailable for ${mint}: ${(err as Error).message}`);
+    }
+  }
 
   // Live-only guards that need chain state.
   if (live && plan.do !== "skip") {
@@ -334,6 +368,14 @@ async function executeLiveInner(
   switch (plan.do) {
     case "open": {
       if (a.lowerBinId === null || a.upperBinId === null) throw new Error("leader range unknown");
+      if (plan.swapSol && plan.swapSol > 0n) {
+        // Zap: empty position on the leader's range, then a two-sided add in the leader's ratio.
+        const created = await l.builder.open({ pool, lowerBinId: a.lowerBinId, upperBinId: a.upperBinId, amountSol: 0n, strategy: a.strategy, slippagePct });
+        const position = (await sendAll(created))!;
+        const tokens = await zapBuy(l, pool, plan.swapSol, config, onSignature);
+        await sendAll(await l.builder.addTwoSided({ pool, position, lowerBinId: a.lowerBinId, upperBinId: a.upperBinId, amountSol: plan.amountSol - plan.swapSol, amountToken: tokens, strategy: a.strategy, slippagePct }));
+        return position;
+      }
       const built = await l.builder.open({
         pool,
         lowerBinId: a.lowerBinId,
@@ -353,6 +395,21 @@ async function executeLiveInner(
       return position;
     }
     case "add":
+      if (plan.swapSol && plan.swapSol > 0n) {
+        const tokens = await zapBuy(l, pool, plan.swapSol, config, onSignature);
+        return sendAll(
+          await l.builder.addTwoSided({
+            pool,
+            position: ours!.ourPosition!,
+            lowerBinId: a.lowerBinId ?? ours!.lowerBinId!,
+            upperBinId: a.upperBinId ?? ours!.upperBinId!,
+            amountSol: plan.amountSol - plan.swapSol,
+            amountToken: tokens,
+            strategy: a.strategy ?? ours!.strategy,
+            slippagePct,
+          }),
+        );
+      }
       return sendAll(
         await l.builder.add({
           pool,
@@ -580,4 +637,32 @@ async function autoPauseIfDry(db: Db, userId: string): Promise<number> {
     .where(and(eq(schema.leaders.userId, userId), eq(schema.leaders.status, "active")))
     .returning({ id: schema.leaders.id });
   return paused.length;
+}
+
+const tokenInfo = new TokenInfoClient();
+const jupiter = new JupiterClient();
+let reader: DlmmTxBuilder | null = null;
+
+/** Read-only pool info for pricing; null (and logged) if the pool can't be read. */
+async function poolInfoSafe(config: Config, pool: string, log: Logger): Promise<PoolInfo | null> {
+  reader ??= new DlmmTxBuilder(createConnection(config.SOLANA_RPC_URL), PublicKey.default);
+  try {
+    return await reader.poolInfo(pool);
+  } catch (err) {
+    log.warn({ pool, err: (err as Error).message }, "pool read failed; pricing unavailable");
+    return null;
+  }
+}
+
+/** LP Agent zap: buy the token's share with SOL via Jupiter; returns the token amount received. */
+async function zapBuy(l: Live, pool: string, lamports: bigint, config: Config, onSignature: (sig: string) => Promise<void>): Promise<bigint> {
+  const info = await l.builder.poolInfo(pool);
+  const mint = info.solIsY ? info.mintX : info.mintY;
+  const before = await l.builder.tokenBalance(mint);
+  const q = await jupiter.quoteFromSol(mint, lamports, 300);
+  const { tx, lastValidBlockHeight } = await jupiter.buildSwap(q, l.publicKey, 2_000_000);
+  await l.sender.sendVersioned(tx, lastValidBlockHeight, { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature });
+  const received = (await l.builder.tokenBalance(mint)) - before;
+  if (received <= 0n) throw new Error("zap swap returned no tokens");
+  return received;
 }
