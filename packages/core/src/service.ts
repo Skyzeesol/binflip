@@ -29,14 +29,14 @@ export async function runService(
   const bootLog = createLogger(name, process.env.LOG_LEVEL ?? "info");
   let config: Config;
   try {
-    config = loadConfig();
+    config = loadConfig(process.env, { requiresSigner: name === "executor" });
   } catch (err) {
     bootLog.fatal({ err }, "invalid configuration");
     process.exit(78);
   }
   const log = createLogger(name, config.LOG_LEVEL);
   log.info({ mode: config.mode, node: process.version }, "starting");
-  if (config.mode === "live") log.warn("LIVE MODE: real transactions will be signed");
+  if (name === "executor" && config.mode === "live") log.warn("LIVE MODE: real transactions will be signed");
 
   try {
     const hooks = await start({ config, log });

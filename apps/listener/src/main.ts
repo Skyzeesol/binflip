@@ -1,4 +1,5 @@
 import { Queue, Worker } from "bullmq";
+import { and, eq, isNull } from "drizzle-orm";
 import { Redis } from "ioredis";
 import {
   PROGRAM_IDS,
@@ -43,7 +44,8 @@ await runService("listener", async ({ config, log }) => {
   /** address → followers (one row per user following it). */
   let followers = new Map<string, Array<{ userId: string; leaderId: string }>>();
   /** address → newest signature we have seen; the poller fetches until it. */
-  const cursor = new Map<string, string>();
+  const cursorKey = (address: string) => `binflip:listener:cursor:${address}`;
+  let polling = false;
 
   const enqueue = (job: SignatureJob) =>
     signatures.add("sig", job, {
@@ -62,7 +64,7 @@ await runService("listener", async ({ config, log }) => {
       if (n.err) return;
       if (!n.logs.some((l) => METEORA_PROGRAMS.some((p) => l.includes(p)))) return;
       log.debug({ address: n.address, sig: n.signature }, "ws: meteora tx");
-      void enqueue({ ...n, source: "ws", seenAt: Date.now() });
+      void enqueue({ ...n, source: "ws", seenAt: Date.now() }).catch((err) => log.warn({ err }, "ws enqueue failed; polling will recover"));
     },
     () => void pollAll(), // recover anything missed while disconnected
   );
@@ -79,34 +81,58 @@ await runService("listener", async ({ config, log }) => {
       next.set(r.address, list);
     }
     const added = [...next.keys()].filter((a) => !followers.has(a));
-    followers = next;
     for (const a of added) {
+      if (await connection.exists(cursorKey(a))) continue;
       // Start from "now": only positions opened after we start copying are copied.
       const [latest] = await rpc.getSignaturesForAddress(a, { limit: 1 });
-      if (latest) cursor.set(a, latest.signature);
+      await connection.set(cursorKey(a), latest?.signature ?? "", "NX");
       log.info({ address: a }, "watching leader");
     }
+    followers = next;
     watcher.setAddresses([...next.keys()]);
   }
 
   async function pollOne(address: string) {
-    const until = cursor.get(address);
-    const sigs = await rpc.getSignaturesForAddress(address, { limit: 50, ...(until ? { until } : {}) });
-    if (!sigs.length) return;
-    cursor.set(address, sigs[0]!.signature);
-    for (const s of sigs.reverse()) {
-      if (s.err) continue;
-      await enqueue({ address, signature: s.signature, slot: s.slot, source: "poll", seenAt: Date.now() });
+    const until = await connection.get(cursorKey(address));
+    const pages = [];
+    let before: string | undefined;
+    for (;;) {
+      const page = await rpc.getSignaturesForAddress(address, { limit: 50, ...(until ? { until } : {}), ...(before ? { before } : {}) });
+      if (!page.length) break;
+      pages.push(page);
+      if (page.length < 50) break;
+      before = page.at(-1)!.signature;
     }
+    const newest = pages[0]?.[0];
+    if (!newest) return;
+    for (const page of pages.reverse()) {
+      for (const s of page.reverse()) {
+        if (!s.err) await enqueue({ address, signature: s.signature, slot: s.slot, source: "poll", seenAt: Date.now() });
+      }
+    }
+    await connection.set(cursorKey(address), newest.signature);
   }
 
+  const enqueueExecution = (id: string) =>
+    execution.add("plan", { leaderEventId: id }, { jobId: id, attempts: 5, backoff: { type: "exponential", delay: 1_000 } });
+
   async function pollAll() {
-    for (const a of followers.keys()) {
-      try {
-        await pollOne(a);
-      } catch (err) {
-        log.warn({ address: a, err: (err as Error).message }, "poll failed");
+    if (polling) return;
+    polling = true;
+    try {
+      for (const a of followers.keys()) {
+        try {
+          await pollOne(a);
+        } catch (err) {
+          log.warn({ address: a, err }, "poll failed");
+        }
       }
+      const pending = await db.select({ id: schema.leaderEvents.id }).from(schema.leaderEvents).where(isNull(schema.leaderEvents.processedAt));
+      for (const event of pending) await enqueueExecution(event.id);
+    } catch (err) {
+      log.warn({ err }, "pending execution dispatch failed");
+    } finally {
+      polling = false;
     }
   }
 
@@ -144,9 +170,16 @@ await runService("listener", async ({ config, log }) => {
             })
             .onConflictDoNothing()
             .returning({ id: schema.leaderEvents.id });
-          if (!row) continue; // already stored (ws + poll both saw it)
+          if (!row) {
+            const [pending] = await db.select({ id: schema.leaderEvents.id }).from(schema.leaderEvents).where(and(
+              eq(schema.leaderEvents.userId, f.userId), eq(schema.leaderEvents.signature, signature),
+              eq(schema.leaderEvents.ixIndex, a.ixIndex), isNull(schema.leaderEvents.processedAt),
+            ));
+            if (pending) await enqueueExecution(pending.id);
+            continue;
+          }
           stored++;
-          await execution.add("plan", { leaderEventId: row.id }, { jobId: row.id, attempts: 5, backoff: { type: "exponential", delay: 1_000 } });
+          await enqueueExecution(row.id);
           log.info(
             { leader: address.slice(0, 6), kind: a.kind, position: a.position, pool: a.pool, latencyMs, source: job.data.source, sig: signature },
             `leader ${a.kind}`,
@@ -165,6 +198,7 @@ await runService("listener", async ({ config, log }) => {
   await ping();
   await refreshLeaders();
   watcher.start();
+  void pollAll();
   const t1 = setInterval(() => void refreshLeaders().catch((e) => log.error({ err: e }, "leader refresh failed")), REFRESH_LEADERS_MS);
   const t2 = setInterval(() => void pollAll(), config.LISTENER_POLL_MS);
 

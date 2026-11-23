@@ -65,7 +65,8 @@ export type SkipReason =
   | "low_balance"
   | "token_filter"
   | "token_blacklisted"
-  | "damm_live_not_supported";
+  | "damm_live_not_supported"
+  | "dlmm_management_unsupported";
 
 export type Plan =
   | { do: "skip"; kind: ActionKind; reason: SkipReason }

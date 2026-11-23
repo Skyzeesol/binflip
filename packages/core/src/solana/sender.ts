@@ -32,7 +32,7 @@ export interface SendOptions {
   /** Stop waiting after this; the caller must check the signature before any retry. */
   confirmTimeoutMs?: number;
   /** Called with the signature right before the first broadcast, so it can be persisted. */
-  onSignature?: (sig: string) => Promise<void>;
+  onSignature?: (sig: string, lastValidBlockHeight: number) => Promise<void>;
 }
 
 export interface SendResult {
@@ -96,7 +96,7 @@ export class TxSender {
     const lastValid = await this.prepare(tx, opts);
     await this.simulate(tx);
     const signature = await this.sign(tx, extra);
-    await opts.onSignature?.(signature);
+    await opts.onSignature?.(signature, lastValid);
     return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
   }
 
@@ -105,6 +105,9 @@ export class TxSender {
    * blockhash, fee payer and priority fee). Same guarantees as send().
    */
   async sendVersioned(tx: VersionedTransaction, lastValidBlockHeight: number, opts: SendOptions = {}): Promise<SendResult> {
+    if (!Number.isSafeInteger(lastValidBlockHeight) || lastValidBlockHeight <= 0) {
+      throw new Error("versioned transaction requires a valid blockhash expiry height");
+    }
     const payer = tx.message.staticAccountKeys[0]?.toBase58();
     if (payer !== this.signer.publicKey) throw new Error(`fee payer ${payer} is not our agent wallet`);
     const sim = await this.connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: false, commitment: "confirmed" });
@@ -112,9 +115,8 @@ export class TxSender {
     const sig = await this.signer.signMessage(tx.message.serialize());
     tx.addSignature(new PublicKey(this.signer.publicKey), sig);
     const signature = bs58.encode(sig);
-    await opts.onSignature?.(signature);
-    const lastValid = lastValidBlockHeight || (await this.connection.getBlockHeight("confirmed")) + 150;
-    return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
+    await opts.onSignature?.(signature, lastValidBlockHeight);
+    return this.broadcastAndConfirm(tx.serialize(), signature, lastValidBlockHeight, opts);
   }
 
   private async broadcastAndConfirm(raw: Uint8Array, signature: string, lastValid: number, opts: SendOptions): Promise<SendResult> {
@@ -141,6 +143,14 @@ export class TxSender {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new ConfirmTimeoutError(`not confirmed in time: ${signature}`);
+  }
+
+  async canReplace(signature: string, lastValidBlockHeight?: number): Promise<boolean> {
+    // Use finalized height, and look up history after checking the height.
+    const expired = lastValidBlockHeight !== undefined &&
+      await this.connection.getBlockHeight("finalized") > lastValidBlockHeight;
+    const st = (await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+    return st ? Boolean(st.err && st.confirmationStatus === "finalized") : expired;
   }
 
   /** After a crash/timeout: did this signature land? */

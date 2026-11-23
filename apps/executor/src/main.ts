@@ -71,7 +71,7 @@ await runService("executor", async ({ config, log }) => {
   let management: ReturnType<typeof startManagement> | null = null;
   if (live) {
     live.managementQueue = new Queue<ManagementJob>(QUEUES.MANAGEMENT, { connection });
-    live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
+    live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications, serial });
     management = startManagement({ db, connection, builder: live.builder, damm: live.damm, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
   }
 
@@ -134,39 +134,47 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   const { leader_events: ev, leaders: leader, copy_settings: cs } = row;
   const idempotencyKey = `event_${ev.id}`;
 
-  // A previous attempt already got this far: never act twice.
-  const [existing] = await db
-    .select()
-    .from(schema.txs)
-    .where(and(eq(schema.txs.userId, ev.userId), eq(schema.txs.idempotencyKey, idempotencyKey)));
+  const action = toAction(ev.payload);
+  const ours = ev.leaderPosition
+    ? (await db.select().from(schema.positions).where(and(
+        eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, ev.leaderPosition),
+      )))[0] ?? null
+    : null;
+  const markProcessed = () => db.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
+
+  const [existing] = await db.select().from(schema.txs).where(and(
+    eq(schema.txs.userId, ev.userId), eq(schema.txs.idempotencyKey, idempotencyKey),
+  ));
   if (existing) {
-    if (existing.status === "submitted" || (existing.status === "planned" && !existing.dryRun)) {
-      await db
-        .update(schema.txs)
-        .set({ status: "failed", reason: "interrupted_needs_review" })
-        .where(eq(schema.txs.id, existing.id));
+    if (ev.processedAt) return null;
+    const saved = existing.plan as { plan?: Plan; completion?: ExecutionCompletion; signatures?: string[] };
+    if (live && saved.plan && saved.completion) {
+      const plan = restorePlan(saved.plan);
+      const after = await finalizeLive(existing.id, existing.status, plan, saved.completion);
+      return { userId: ev.userId, leaderLabel: leader.label, kind: existing.kind, outcome: "confirmed", text: after.join("\n") || `✅ ${leader.label}: zincirde tamamlanan ${existing.kind} kaydı uzlaştırıldı.` };
+    }
+    if (existing.status === "planned" && existing.dryRun && saved.plan) {
+      await db.transaction(async (tx) => {
+        await applyToPositions(tx, restorePlan(saved.plan!), action, ev, cs.managementMode, ours, true, existing.id, null, undefined, exitRulesOf(cs));
+        await tx.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
+      });
+      return null;
+    }
+    if (!existing.dryRun && (existing.status === "submitted" || existing.status === "planned")) {
+      const signatures = saved.signatures ?? [];
+      const statuses = live ? await Promise.all(signatures.map((sig) => live.sender.status(sig))) : [];
+      await db.update(schema.txs).set({ reason: "interrupted_needs_review" }).where(eq(schema.txs.id, existing.id));
+      await markProcessed();
       return {
-        userId: ev.userId,
-        leaderLabel: leader.label,
-        kind: existing.kind,
-        outcome: "needs_review",
-        text: `⚠️ ${leader.label}: önceki deneme yarıda kaldı (${existing.kind}). Tekrar gönderilmedi, elle kontrol edin. İmzalar: ${JSON.stringify((existing.plan as any).signatures ?? [])}`,
+        userId: ev.userId, leaderLabel: leader.label, kind: existing.kind, outcome: "needs_review",
+        text: `⚠️ ${leader.label}: ${existing.kind} yarıda kaldı. İmzalar: ${JSON.stringify(signatures.map((sig, i) => [sig, statuses[i]]))}`,
       };
     }
+    await markProcessed();
     return null;
   }
 
   const risk = await getRisk(db, ev.userId);
-  const action = toAction(ev.payload);
-  const ours = ev.leaderPosition
-    ? ((
-        await db
-          .select()
-          .from(schema.positions)
-          .where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, ev.leaderPosition)))
-      )[0] ?? null)
-    : null;
-
   // Pool price (both modes, read-only): value-based Meme Protection, zap sizing and token filters.
   const entering = action.pool && (action.kind === "open" || action.kind === "add");
   const pool = action.protocol === "dlmm" && entering ? await poolInfoSafe(config, action.pool!, log) : null;
@@ -215,6 +223,13 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       upperBinId: ours.upperBinId,
     },
   );
+
+  const needsManagement = cs.managementMode !== "mirror" || cs.takeProfitBps !== null ||
+    cs.stopLossBps !== null || cs.trailingStopBps !== null || cs.compoundIntervalMinutes !== null;
+  if (plan.do === "open" && action.protocol === "dlmm" && needsManagement) {
+    if (!pool) throw new Error("pool data unavailable for management compatibility check");
+    if (!pool.solIsY) plan = { do: "skip", kind: action.kind, reason: "dlmm_management_unsupported" };
+  }
 
   // LP Agent Security filters: checked before a position is opened.
   if (plan.do === "open" && tokenMintOfPool) {
@@ -271,17 +286,20 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     .onConflictDoNothing()
     .returning({ id: schema.txs.id });
   if (!t) return null;
-  await db.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
 
   const base = { userId: ev.userId, leaderLabel: leader.label, kind: action.kind };
   if (plan.do === "skip") {
     const paused = plan.reason === "low_balance" ? await autoPauseIfDry(db, ev.userId) : 0;
     const extra = paused ? `\n⏸ Bot cüzdanı fonsuz: kopyalar art arda açılamadı, ${paused} cüzdan otomatik duraklatıldı. Bakiye yükleyip panelden tekrar açın.` : "";
+    await markProcessed();
     return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) + extra };
   }
 
   if (dryRun) {
-    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, true, t.id, null, undefined, exitRulesOf(cs));
+    await db.transaction(async (tx) => {
+      await applyToPositions(tx, plan, action, ev, cs.managementMode, ours, true, t.id, null, undefined, exitRulesOf(cs));
+      await tx.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
+    });
     const str = (plan.do === "remove" || plan.do === "close") && cs.smartTokenRetention && action.protocol === "dlmm" ? ` (Smart Token Retention: token önce ${cs.strHoldSeconds} sn tutulurdu)` : "";
     return { ...base, outcome: "planned", text: describe(leader.label, action, plan, true) + str };
   }
@@ -296,17 +314,51 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "submitted", signature: sig, attempts: sql`${schema.txs.attempts} + 1`, plan: sql`jsonb_set(${schema.txs.plan}, '{signatures}', ${JSON.stringify(signatures)}::jsonb)` })
       .where(eq(schema.txs.id, t.id));
   };
+  const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
+  const exits = plan.do === "remove" || plan.do === "close";
+  const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
+  let result: Awaited<ReturnType<typeof executeLive>>;
   try {
+    result = await executeLive(l, plan, action, ours, saveSig, config, log, ev.userId);
+  } catch (err) {
+    const msg = (err as Error).message;
+    await db.update(schema.txs).set({
+      status: signatures.length ? "submitted" : "failed",
+      error: msg.slice(0, 2000),
+      reason: signatures.length ? "partial_needs_review" : "send_failed",
+    }).where(eq(schema.txs.id, t.id));
+    if (signatures.length) throw err;
+    await markProcessed();
+    log.error({ err }, "live execution failed");
+    return { ...base, outcome: "failed", text: `❌ ${leader.label}: ${plan.do} başarısız: ${msg.slice(0, 200)}` };
+  }
+
+  const completion: ExecutionCompletion = {
+    ourPosition: result.position,
+    leftoverToken: result.leftoverToken?.toString(),
+    received: (exits && tokenMint ? (await l.builder.tokenBalance(tokenMint)) - before : 0n).toString(),
+    fees: await totalFees(l, signatures),
+  };
+  await db.update(schema.txs).set({
+    plan: sql`jsonb_set(${schema.txs.plan}, '{completion}', ${JSON.stringify(completion)}::jsonb)`,
+  }).where(eq(schema.txs.id, t.id));
+  const after = await finalizeLive(t.id, "submitted", plan, completion);
+  return {
+    ...base, outcome: "confirmed",
+    text: [`${describe(leader.label, action, plan, false)} ✅ ${signatures.length} işlem, ücret ${sol(BigInt(completion.fees))} SOL`, ...after].join("\n"),
+  };
+
+  async function finalizeLive(txId: string, status: string, plan: Plan, completion: ExecutionCompletion) {
+    const l = live!;
     const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
     const exits = plan.do === "remove" || plan.do === "close";
-    const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
-    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log, ev.userId);
-    const fees = await totalFees(l, signatures);
-    await db
-      .update(schema.txs)
-      .set({ status: "confirmed", feeLamports: BigInt(fees) })
-      .where(eq(schema.txs.id, t.id));
-    await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId, exitRulesOf(cs));
+    const leftoverToken = BigInt(completion.leftoverToken ?? 0);
+    if (status !== "confirmed") {
+      await db.transaction(async (tx) => {
+        await applyToPositions(tx, plan, action, ev, cs.managementMode, ours, false, txId, completion.ourPosition, l.agentWalletId, exitRulesOf(cs));
+        await tx.update(schema.txs).set({ status: "confirmed", feeLamports: BigInt(completion.fees), reason: null, error: null }).where(eq(schema.txs.id, txId));
+      });
+    }
     if (plan.do === "open" && plan.empty) {
       // LP Agent: if the leader's funding add never comes, close the empty copy after ~1 min and get the rent back.
       const [p] = await db.select({ id: schema.positions.id }).from(schema.positions).where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, action.position)));
@@ -320,7 +372,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       after.push("🔁 Yeni aralıkta fiyatın üstü yok: token SOL'e çevrilmek üzere kuyrukta.");
     }
     if (exits && tokenMint && action.pool) {
-      const received = (await l.builder.tokenBalance(tokenMint)) - before;
+      const received = BigInt(completion.received);
       if (received > 0n) {
         // Smart Token Retention (DLMM): keep the token for the hold time; a re-add reuses it.
         const retain = cs.smartTokenRetention && action.protocol === "dlmm";
@@ -343,27 +395,30 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
         await l.swapback!.sweepAfterClose({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, txId: "", mint: tokenMint, pool: action.pool, amount: "0", label: leader.label });
       }
     }
-    return {
-      ...base,
-      outcome: "confirmed",
-      text: [`${describe(leader.label, action, plan, false)} ✅ ${signatures.length} işlem, ücret ${sol(BigInt(fees))} SOL`, ...after].join("\n"),
-    };
-  } catch (err) {
-    const msg = (err as Error).message;
-    await db
-      .update(schema.txs)
-      .set({ status: "failed", error: msg.slice(0, 2000), reason: signatures.length ? "partial_needs_review" : "send_failed" })
-      .where(eq(schema.txs.id, t.id));
-    log.error({ err: msg, signatures }, "live execution failed");
-    return {
-      ...base,
-      outcome: "failed",
-      text: `❌ ${leader.label}: ${plan.do} başarısız: ${msg.slice(0, 200)}${signatures.length ? ` (gönderilen: ${signatures.length} işlem, kontrol edin)` : ""}`,
-    };
+    await markProcessed();
+    return after;
   }
 }
 
-/** Build and send the plan. Returns our position address (for opens). */
+interface ExecutionCompletion {
+  ourPosition: string | null;
+  leftoverToken?: string;
+  received: string;
+  fees: number;
+}
+
+function restorePlan(plan: Plan): Plan {
+  if (plan.do !== "open" && plan.do !== "add") return plan;
+  const amounts = {
+    amountSol: BigInt(plan.amountSol),
+    swapSol: plan.swapSol === undefined ? undefined : BigInt(plan.swapSol),
+    tokenFromHold: plan.tokenFromHold === undefined ? undefined : BigInt(plan.tokenFromHold),
+  };
+  return plan.do === "open"
+    ? { ...plan, ...amounts, ratioPpm: plan.ratioPpm === null ? null : BigInt(plan.ratioPpm) }
+    : { ...plan, ...amounts, ratioPpm: BigInt(plan.ratioPpm) };
+}
+
 async function executeLive(
   l: Live,
   plan: Plan,
@@ -509,7 +564,7 @@ async function totalFees(l: Live, sigs: string[]): Promise<number> {
 
 /** Mirror the plan onto our positions table. Live: only after confirmation. */
 async function applyToPositions(
-  db: Db,
+  db: Pick<Db, "insert" | "update">,
   plan: Plan,
   a: LeaderAction,
   ev: EventRow,
