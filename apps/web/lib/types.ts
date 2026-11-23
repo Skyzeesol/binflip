@@ -95,3 +95,90 @@ export interface Me {
   mode: "dry_run" | "live";
   agentWallets: Array<{ id: string; label: string; publicKey: string }>;
 }
+
+// ── Portfolio (LP Agent "Portfolio") ───────────────────────────────────
+export interface PfToken {
+  mint: string;
+  symbol: string | null;
+  icon: string | null;
+  holders: number | null;
+}
+
+export interface PfPosition {
+  id: string;
+  protocol: "dlmm" | "damm_v2";
+  pool: string;
+  position: string | null;
+  leaderPosition: string | null;
+  source: "auto" | "manual";
+  leaderLabel: string | null;
+  dryRun: boolean;
+  state: string;
+  strategy: Strategy | null;
+  managementMode: ManagementMode;
+  token: PfToken | null;
+  invested: number;
+  value: number | null;
+  claimedFee: number;
+  unclaimedFee: number | null;
+  totalFee: number;
+  feePct: number | null;
+  pnl: number | null;
+  pnlPct: number | null;
+  ageMs: number | null;
+  dpr: number | null;
+  range: { lowerPct: number; upperPct: number; inRange: boolean; bins: number } | null;
+  bins: { lower: number | null; upper: number | null; active: number | null; binStep: number | null };
+  exits: { takeProfitPct: number | null; stopLossPct: number | null; trailingPct: number | null };
+  flips: number | null;
+  openedAt: string;
+  closedAt: string | null;
+  closeReason: string | null;
+}
+
+export interface PfSummary {
+  totalClosed: number;
+  winRate: number | null;
+  avgInvested: number | null;
+  feeEarned: number;
+  totalProfit: number;
+  avgMonthlyProfit: number | null;
+  expectedValue: number | null;
+}
+
+export interface PfBucket {
+  bucket: string;
+  value: number;
+  count: number;
+}
+
+export interface Portfolio {
+  summary: PfSummary;
+  openValue: number;
+  openUnclaimed: number;
+  history: { pnl: PfBucket[]; fee: PfBucket[] };
+  days: PfBucket[];
+  feeDays?: PfBucket[];
+}
+
+export interface PfDetail {
+  position: PfPosition;
+  chart: { active: number | null; bins: Array<{ id: number; x: number; y: number }> };
+  value: Array<{ at: string; value: number }>;
+  history: Array<{ at: string; kind: string; status: string; reason: string | null; signature: string | null; signatures: string[]; solDelta: number | null; feeLamports: number | null; dryRun: boolean }>;
+  logs: Array<{ at: string; kind: string; status: string; reason: string | null; error: string | null }>;
+}
+
+export interface Account {
+  wallet: string | null;
+  mainWallet: string | null;
+  solUsd: number | null;
+  positionsValue: number;
+  mode: "dry_run" | "live";
+  sol: number | null;
+  tokens: Array<{ mint: string; symbol: string | null; icon: string | null; amount: number; valueSol: number | null }>;
+  tokensValue: number;
+  netWorth: number;
+  emptyAccounts?: number;
+  error?: string;
+}

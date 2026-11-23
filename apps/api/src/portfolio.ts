@@ -128,6 +128,7 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
       },
       // Calendar: one value per day over the range, PnL of positions closed that day.
       days: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.pnl ?? 0 })), "day"),
+      feeDays: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.totalFee })), "day"),
       from,
     };
   });

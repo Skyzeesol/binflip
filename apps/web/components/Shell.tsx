@@ -6,10 +6,12 @@ import { useCallback, useEffect, useState } from "react";
 import { api, post } from "@/lib/api";
 import { short } from "@/lib/format";
 import type { Me, Risk } from "@/lib/types";
+import { AccountPanel } from "@/components/AccountPanel";
+import { useCurrency } from "@/lib/currency";
 
 const NAV = [
+  { href: "/portfolio", label: "Portfolio" },
   { href: "/", label: "Copy LP" },
-  { href: "/positions", label: "Pozisyonlar" },
   { href: "/settings", label: "Ayarlar" },
 ];
 
@@ -17,6 +19,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const [me, setMe] = useState<Me | null>(null);
   const [risk, setRisk] = useState<Risk | null>(null);
+  const { cur, setCur } = useCurrency();
 
   const load = useCallback(async () => {
     const [m, r] = await Promise.all([api<Me>("/v1/me"), api<Risk>("/v1/risk")]);
@@ -63,11 +66,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {risk.killSwitch ? "Durduruldu — devam et" : "Acil durdur"}
           </button>
         )}
-        {me && (
-          <button className="btn btn-sm btn-ghost hide-sm" onClick={logout} title={me.user.loginWallet}>
-            {short(me.user.loginWallet)} · Çıkış
-          </button>
-        )}
+        <div className="seg cur-toggle" title="Tutarları SOL ya da USD göster">
+          <button className={cur === "sol" ? "on" : ""} onClick={() => setCur("sol")} aria-label="SOL">◎</button>
+          <button className={cur === "usd" ? "on" : ""} onClick={() => setCur("usd")} aria-label="USD">$</button>
+        </div>
+        {me && <AccountPanel me={me} onLogout={logout} />}
       </header>
       {risk?.fundProtectionTrippedAt && (
         <div className="page" style={{ paddingBottom: 0 }}>
