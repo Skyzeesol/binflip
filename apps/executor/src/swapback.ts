@@ -1,12 +1,13 @@
 import { Queue, Worker, type Job } from "bullmq";
 import type { Redis } from "ioredis";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   JupiterClient,
   NoRouteError,
   QUEUES,
   SWAPBACK_MAX_ATTEMPTS,
+  leaderSoldKey,
   swapBackDelayMs,
   sweepAmount,
   type Config,
@@ -58,7 +59,9 @@ export function startSwapBack(p: {
       }
 
       const balance = await builder.tokenBalance(j.mint);
-      const amount = minBig(BigInt(j.amount), balance);
+      // A Smart Token Retention re-add may have used part of the kept tokens.
+      const remaining = (row.plan as { remaining?: string } | null)?.remaining;
+      const amount = minBig(remaining !== undefined ? BigInt(remaining) : BigInt(j.amount), balance);
       if (amount <= 0n) {
         await update(row.id, { status: "skipped", reason: "no_tokens_left" });
         return { done: true };
@@ -84,7 +87,7 @@ export function startSwapBack(p: {
         route = "DLMM havuzu";
       }
 
-      await update(row.id, { status: "confirmed", reason: null, solDelta: outLamports, tokenDelta: (-amount).toString(), attempts: job.attemptsMade + 1 });
+      await update(row.id, { status: "confirmed", reason: j.hold ? "retention_sold" : null, solDelta: outLamports, tokenDelta: (-amount).toString(), attempts: job.attemptsMade + 1 });
       await notify(j.userId, `🔁 ${j.label}: token → ~${(Number(outLamports) / 1e9).toFixed(4)} SOL (${route})${job.attemptsMade ? `, ${job.attemptsMade + 1}. denemede` : ""}`);
       await sweep(j);
       return { sold: amount.toString(), route };
@@ -126,24 +129,105 @@ export function startSwapBack(p: {
     }
   }
 
+  async function heldRows(userId: string, mint: string) {
+    const rows = await db.select().from(schema.txs).where(and(eq(schema.txs.userId, userId), eq(schema.txs.kind, "swap"), eq(schema.txs.status, "planned"), eq(schema.txs.reason, "holding")));
+    return rows.filter((r) => (r.plan as { mint?: string } | null)?.mint === mint);
+  }
+
+  /**
+   * Smart Token Retention early-sell conditions (LP Agent): price drops more than X%,
+   * the leader sells the token, or retention is turned off / the copy paused or stopped.
+   */
+  const watch = setInterval(() => {
+    void (async () => {
+      const held = await queue.getDelayed(0, 200);
+      for (const job of held) {
+        const h = job.data.hold;
+        if (!h) continue;
+        let why: string | null = null;
+        const [l] = await db.select().from(schema.leaders).where(eq(schema.leaders.id, h.leaderId));
+        const [cs] = l ? await db.select().from(schema.copySettings).where(eq(schema.copySettings.leaderId, l.id)) : [];
+        if (!l) why = "kopya durduruldu";
+        else if (l.status === "paused") why = "kopya duraklatıldı";
+        else if (!cs?.smartTokenRetention) why = "token tutma kapatıldı";
+        if (!why && h.sellOnLeaderSell && (await p.connection.exists(leaderSoldKey(h.leaderAddress, job.data.mint)))) why = "lider token'ı sattı";
+        if (!why) {
+          const info = await builder.poolInfo(job.data.pool).catch(() => null);
+          if (info) {
+            const px = Math.pow(1 + info.binStep / 10_000, info.activeBinId);
+            const price = info.solIsY ? px : 1 / px;
+            if (price < h.startPriceLamports * (1 - h.sellOnDropBps / 10_000)) why = `fiyat %${((1 - price / h.startPriceLamports) * 100).toFixed(1)} düştü`;
+          }
+        }
+        if (why) {
+          await update(job.data.txId, { reason: "holding_early_sell" });
+          await job.promote();
+          await notify(job.data.userId, `⏩ ${job.data.label}: tutulan token erken satılıyor (${why}).`);
+        }
+      }
+    })().catch((err) => log.warn({ err: (err as Error).message }, "retention watch failed"));
+  }, 10_000);
+
   return {
     /** Enqueue a swap-back; idempotent per leader event. */
     async enqueue(j: Omit<SwapBackJob, "txId">) {
       const [row] = await db
         .insert(schema.txs)
-        .values({ userId: j.userId, leaderEventId: j.leaderEventId, positionId: j.positionId, idempotencyKey: `swap_${j.key}`, kind: "swap", status: "planned", dryRun: false, tokenDelta: (-BigInt(j.amount)).toString() })
+        .values({
+          userId: j.userId,
+          leaderEventId: j.leaderEventId,
+          positionId: j.positionId,
+          idempotencyKey: `swap_${j.key}`,
+          kind: "swap",
+          status: "planned",
+          dryRun: false,
+          tokenDelta: (-BigInt(j.amount)).toString(),
+          ...(j.hold ? { reason: "holding", plan: { mint: j.mint, pool: j.pool, remaining: j.amount, holdUntil: new Date(j.hold.untilMs).toISOString() } as never } : {}),
+        })
         .onConflictDoNothing()
         .returning({ id: schema.txs.id });
       if (!row) return;
       await queue.add("swapback", { ...j, txId: row.id }, {
         jobId: `swap_${j.key}`,
+        ...(j.hold ? { delay: Math.max(0, j.hold.untilMs - Date.now()) } : {}),
         attempts: SWAPBACK_MAX_ATTEMPTS,
         backoff: { type: "custom" },
         removeOnComplete: { age: 7 * 86_400 },
       });
     },
     sweepAfterClose: sweep,
+    /** Kept tokens of `mint` still on hold for this user (Smart Token Retention). */
+    heldAmount: async (userId: string, mint: string) => (await heldRows(userId, mint)).reduce((s, r) => s + BigInt((r.plan as { remaining: string }).remaining), 0n),
+    /** A re-add uses `amount` of the kept tokens: reduce or cancel the pending sales. Returns what was taken. */
+    takeHeld: async (userId: string, mint: string, amount: bigint) => {
+      let left = amount;
+      for (const r of await heldRows(userId, mint)) {
+        if (left <= 0n) break;
+        const rem = BigInt((r.plan as { remaining: string }).remaining);
+        const use = rem < left ? rem : left;
+        left -= use;
+        if (rem - use <= 0n) {
+          await update(r.id, { status: "skipped", reason: "reused_by_readd", plan: { ...(r.plan as object), remaining: "0" } as never });
+          const job = await queue.getJob(r.idempotencyKey);
+          await job?.remove().catch(() => undefined);
+        } else {
+          await update(r.id, { plan: { ...(r.plan as object), remaining: (rem - use).toString() } as never });
+        }
+      }
+      return amount - left;
+    },
+    /** "Sell now" (panel) or an early-sell condition: run the held sale immediately. */
+    sellNow: async (txId: string) => {
+      const [r] = await db.select().from(schema.txs).where(eq(schema.txs.id, txId));
+      if (!r || r.reason !== "holding") return false;
+      const job = await queue.getJob(r.idempotencyKey);
+      if (!job || !(await job.isDelayed())) return false;
+      await update(r.id, { reason: "holding_sell_now" });
+      await job.promote();
+      return true;
+    },
     close: async () => {
+      clearInterval(watch);
       await worker.close();
       await queue.close();
     },

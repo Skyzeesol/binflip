@@ -22,6 +22,11 @@ export interface PlannerSettings {
    * Enables value-based Meme Protection and two-sided (zap) copies. null = unknown.
    */
   tokenPriceLamports?: number | null;
+  /**
+   * Smart Token Retention: tokens of this pool we are holding from a recent exit.
+   * A re-add uses them instead of buying, and Meme Protection lets it through.
+   */
+  heldTokens?: bigint;
 }
 
 /** LP Agent Meme Protection: skip when more than this share of the deposit would be the untrusted token. */
@@ -65,8 +70,8 @@ export type SkipReason =
 export type Plan =
   | { do: "skip"; kind: ActionKind; reason: SkipReason }
   /** swapSol: part of amountSol to swap into the token first, so our deposit has the leader's ratio (LP Agent zap). */
-  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint }
-  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint }
+  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint; tokenFromHold?: bigint }
+  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint; tokenFromHold?: bigint }
   | { do: "remove"; bps: number }
   | { do: "close" }
   | { do: "claim" }
@@ -129,7 +134,11 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
   const price = s.tokenPriceLamports ?? null;
   const tokenValue = price !== null && side.token > 0n ? BigInt(Math.floor(Number(side.token) * price)) : 0n;
   const leaderValue = side.sol + tokenValue;
-  if (s.memeProtection) {
+  const held = s.heldTokens ?? 0n;
+  const reusingHeld = held > 0n && side.token > 0n;
+  // LP Agent: "If the leader adds it back within your hold time, your copy puts the kept token back,
+  // and Meme Protection lets that re-add through."
+  if (s.memeProtection && !reusingHeld) {
     const untrustedBps = leaderValue > 0n ? Number((tokenValue * 10_000n) / leaderValue) : 0;
     if ((side.sol === 0n && side.token > 0n) || untrustedBps > MEME_MAX_UNTRUSTED_BPS) return skip("meme_protection");
   }
@@ -154,8 +163,19 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
   if (amount > s.dailyRoom) return skip("daily_limit");
 
   // Zap: swap the token's share of our SOL into the token, so we deposit in the leader's ratio.
-  const swapSol = tokenValue > 0n ? (amount * tokenValue) / leaderValue : 0n;
-  const zap = swapSol > 0n ? { swapSol } : {};
-  if (a.kind === "open") return { do: "open", amountSol: amount, ratioPpm, capped, empty: false, ...zap };
-  return { do: "add", amountSol: amount, ratioPpm, capped, firstFunding, ...zap };
+  let swapSol = tokenValue > 0n ? (amount * tokenValue) / leaderValue : 0n;
+  let amountSol = amount;
+  let tokenFromHold = 0n;
+  if (reusingHeld) {
+    // Our share of the leader's token comes from what we kept, not from a new buy.
+    const wanted = (side.token * ratioPpm) / PPM;
+    tokenFromHold = held < wanted ? held : wanted;
+    const covered = price !== null ? BigInt(Math.floor(Number(tokenFromHold) * price)) : swapSol;
+    const fromHoldValue = covered < swapSol ? covered : swapSol;
+    swapSol -= fromHoldValue;
+    amountSol -= fromHoldValue;
+  }
+  const extra = { ...(swapSol > 0n ? { swapSol } : {}), ...(tokenFromHold > 0n ? { tokenFromHold } : {}) };
+  if (a.kind === "open") return { do: "open", amountSol, ratioPpm, capped, empty: false, ...extra };
+  return { do: "add", amountSol, ratioPpm, capped, firstFunding, ...extra };
 }

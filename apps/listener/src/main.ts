@@ -11,6 +11,10 @@ import {
   wsUrlFromHttp,
   type ExecutionJob,
   type SignatureJob,
+  type LeaderAction,
+  type RawTransaction,
+  WSOL_MINT,
+  leaderSoldKey,
 } from "@binflip/core";
 import { createDb, schema } from "@binflip/db";
 import { LogsWatcher } from "./logsWatcher.js";
@@ -29,6 +33,7 @@ const REFRESH_LEADERS_MS = 30_000;
 await runService("listener", async ({ config, log }) => {
   const { db, ping, close } = createDb(config.DATABASE_URL, { max: 5 });
   const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+  sellFlags = connection;
   const rpc = new SolanaRpc(config.SOLANA_RPC_URL);
   const signatures = new Queue<SignatureJob>(QUEUES.LEADER_EVENTS, { connection });
   const execution = new Queue<ExecutionJob>(QUEUES.EXECUTION, { connection });
@@ -113,6 +118,7 @@ await runService("listener", async ({ config, log }) => {
       if (tx.meta?.err) return { skipped: "failed_tx" };
 
       const actions = extractActions(decodeMeteoraTx(tx)).filter((a) => a.owner === address);
+      await flagTokenSells(tx, address, actions);
       if (!actions.length) return { actions: 0 };
 
       const latencyMs = tx.blockTime ? Date.now() - tx.blockTime * 1000 : null;
@@ -182,6 +188,25 @@ await runService("listener", async ({ config, log }) => {
     ],
   };
 });
+
+/**
+ * Smart Token Retention "sells right away if this wallet sells the token": any
+ * drop in the leader's balance of a mint that is not an LP add of that mint is
+ * treated as a sell and flagged in Redis for 10 minutes.
+ */
+async function flagTokenSells(tx: RawTransaction, address: string, actions: LeaderAction[]) {
+  const pre = new Map<string, bigint>();
+  const post = new Map<string, bigint>();
+  for (const b of tx.meta?.preTokenBalances ?? []) if (b.owner === address) pre.set(b.mint, (pre.get(b.mint) ?? 0n) + BigInt(b.uiTokenAmount.amount));
+  for (const b of tx.meta?.postTokenBalances ?? []) if (b.owner === address) post.set(b.mint, (post.get(b.mint) ?? 0n) + BigInt(b.uiTokenAmount.amount));
+  const deposited = new Set(actions.filter((a) => a.kind === "open" || a.kind === "add" || a.kind === "rebalance").flatMap((a) => [a.mintX, a.mintY]));
+  for (const [mint, before] of pre) {
+    if (mint === WSOL_MINT || deposited.has(mint)) continue;
+    if ((post.get(mint) ?? 0n) < before) await sellFlags.set(leaderSoldKey(address, mint), String(Date.now()), "EX", 600);
+  }
+}
+
+let sellFlags: Redis;
 
 function bigintToString(_k: string, v: unknown) {
   return typeof v === "bigint" ? v.toString() : v;

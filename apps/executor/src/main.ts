@@ -173,6 +173,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     action,
     {
       tokenPriceLamports,
+      heldTokens: live?.swapback && cs.smartTokenRetention && pool ? await live.swapback.heldAmount(ev.userId, pool.solIsY ? pool.mintX : pool.mintY) : 0n,
       sizing: {
         mode: cs.sizingMode,
         percentBps: cs.sizingPercentBps,
@@ -266,7 +267,8 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
 
   if (dryRun) {
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, true, t.id, null, undefined, exitRulesOf(cs));
-    return { ...base, outcome: "planned", text: describe(leader.label, action, plan, true) };
+    const str = (plan.do === "remove" || plan.do === "close") && cs.smartTokenRetention && action.protocol === "dlmm" ? ` (Smart Token Retention: token önce ${cs.strHoldSeconds} sn tutulurdu)` : "";
+    return { ...base, outcome: "planned", text: describe(leader.label, action, plan, true) + str };
   }
 
   // ── LIVE ──────────────────────────────────────────────────────────────
@@ -283,7 +285,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
     const exits = plan.do === "remove" || plan.do === "close";
     const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
-    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log);
+    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log, ev.userId);
     const fees = await totalFees(l, signatures);
     await db
       .update(schema.txs)
@@ -305,8 +307,23 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     if (exits && tokenMint && action.pool) {
       const received = (await l.builder.tokenBalance(tokenMint)) - before;
       if (received > 0n) {
-        await l.swapback!.enqueue({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, mint: tokenMint, pool: action.pool, amount: received.toString(), label: leader.label });
-        after.push("🔁 Çıkan token SOL'e çevrilmek üzere kuyruğa alındı.");
+        // Smart Token Retention (DLMM): keep the token for the hold time; a re-add reuses it.
+        const retain = cs.smartTokenRetention && action.protocol === "dlmm";
+        const info = retain ? await l.builder.poolInfo(action.pool).catch(() => null) : null;
+        const px = info ? Math.pow(1 + info.binStep / 10_000, info.activeBinId) : null;
+        const hold =
+          retain && info && px !== null
+            ? {
+                untilMs: Date.now() + cs.strHoldSeconds * 1000,
+                startPriceLamports: info.solIsY ? px : 1 / px,
+                sellOnDropBps: cs.strSellOnDropBps,
+                sellOnLeaderSell: cs.strSellOnLeaderSell,
+                leaderId: leader.id,
+                leaderAddress: leader.address,
+              }
+            : undefined;
+        await l.swapback!.enqueue({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, mint: tokenMint, pool: action.pool, amount: received.toString(), label: leader.label, ...(hold ? { hold } : {}) });
+        after.push(hold ? `⏳ Token ${cs.strHoldSeconds} sn tutuluyor (Smart Token Retention); lider geri eklerse yeniden kullanılacak, eklemezse satılacak.` : "🔁 Çıkan token SOL'e çevrilmek üzere kuyruğa alındı.");
       } else if (plan.do === "close") {
         await l.swapback!.sweepAfterClose({ userId: ev.userId, key: ev.id, leaderEventId: ev.id, positionId: ours?.id ?? null, txId: "", mint: tokenMint, pool: action.pool, amount: "0", label: leader.label });
       }
@@ -340,8 +357,9 @@ async function executeLive(
   onSignature: (sig: string) => Promise<void>,
   config: Config,
   log: Logger,
+  userId: string,
 ): Promise<{ position: string | null; leftoverToken?: bigint }> {
-  const res = await executeLiveInner(l, plan, a, ours, onSignature, config, log);
+  const res = await executeLiveInner(l, plan, a, ours, onSignature, config, log, userId);
   return typeof res === "object" && res !== null ? res : { position: res };
 }
 
@@ -353,6 +371,7 @@ async function executeLiveInner(
   onSignature: (sig: string) => Promise<void>,
   config: Config,
   log: Logger,
+  userId: string,
 ): Promise<string | null | { position: string | null; leftoverToken?: bigint }> {
   const opts = { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature };
   const sendAll = async (built: BuiltTxs) => {
@@ -395,15 +414,19 @@ async function executeLiveInner(
       return position;
     }
     case "add":
-      if (plan.swapSol && plan.swapSol > 0n) {
-        const tokens = await zapBuy(l, pool, plan.swapSol, config, onSignature);
+      if ((plan.tokenFromHold ?? 0n) > 0n || (plan.swapSol ?? 0n) > 0n) {
+        // Smart Token Retention: put the kept token back first; zap only for what is still missing.
+        const info = await l.builder.poolInfo(pool);
+        const kept = plan.tokenFromHold ? await l.swapback!.takeHeld(userId, info.solIsY ? info.mintX : info.mintY, plan.tokenFromHold) : 0n;
+        const bought = plan.swapSol && plan.swapSol > 0n ? await zapBuy(l, pool, plan.swapSol, config, onSignature) : 0n;
+        const tokens = kept + bought;
         return sendAll(
           await l.builder.addTwoSided({
             pool,
             position: ours!.ourPosition!,
             lowerBinId: a.lowerBinId ?? ours!.lowerBinId!,
             upperBinId: a.upperBinId ?? ours!.upperBinId!,
-            amountSol: plan.amountSol - plan.swapSol,
+            amountSol: plan.amountSol - (plan.swapSol ?? 0n),
             amountToken: tokens,
             strategy: a.strategy ?? ours!.strategy,
             slippagePct,

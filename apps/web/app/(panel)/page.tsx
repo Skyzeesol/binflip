@@ -283,6 +283,29 @@ const FIX: Record<string, { label: string; href: (leaderId: string | null) => st
   kill_switch: { label: "Acil durdurmayı kaldır", href: () => "/settings#limits" },
 };
 
+/** LP Agent: kept tokens show as Holding, with a countdown and a Sell now button. */
+function HoldCountdown({ row }: { row: LogRow }) {
+  const until = (row.plan as { holdUntil?: string }).holdUntil;
+  const [now, setNow] = useState(Date.now());
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const left = until ? Math.max(0, Math.round((new Date(until).getTime() - now) / 1000)) : 0;
+  const sell = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await post(`/v1/holdings/${row.id}/sell`).catch(() => undefined);
+    setDone(true);
+  };
+  return (
+    <span className="small" style={{ marginLeft: 8 }}>
+      <span className="badge badge-dry">{left > 0 ? `${left} sn` : "satılıyor"}</span>
+      {!done && left > 0 && <button className="btn btn-sm" style={{ marginLeft: 6 }} onClick={sell}>Şimdi sat</button>}
+    </span>
+  );
+}
+
 function FixButton({ reason, leaderId }: { reason: string | null; leaderId: string | null }) {
   const fix = reason ? FIX[reason] : undefined;
   if (!fix) return null;
@@ -310,6 +333,7 @@ function FragmentRow({ r, open, onToggle }: { r: LogRow & { more: number }; open
           {reasonTr(r.reason)}
           {r.more ? <span className="muted small"> · +{r.more} aynı nedenle</span> : null}
           <FixButton reason={r.reason} leaderId={r.source.id} />
+          {r.result === "Holding" && <HoldCountdown row={r} />}
         </td>
         <td className={`num ${r.solDelta !== null && r.solDelta > 0 ? "pos" : ""}`}>{r.solDelta === null ? "—" : signed(r.solDelta)}</td>
         <td className="mono muted">{short(r.position?.pool, 4)}</td>

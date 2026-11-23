@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
-import type { Config } from "@binflip/core";
+import { Queue } from "bullmq";
+import { QUEUES, type Config } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
 import { NonceStore, SESSION_TTL_MS, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
@@ -162,6 +163,20 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
   app.get("/v1/insights", async (req) => {
     const { address } = z.object({ address: base58 }).parse(req.query);
     return insights.get(req.userId!, address, config.mode);
+  });
+
+  // ── Smart Token Retention: "Sell now" on a held token ─────────────────
+  const swapQueue = new Queue(QUEUES.SWAPBACK, { connection: { url: config.REDIS_URL } as never });
+  app.post("/v1/holdings/:txId/sell", async (req, reply) => {
+    const { txId } = req.params as { txId: string };
+    if (!z.string().uuid().safeParse(txId).success) return reply.code(404).send({ error: "bulunamadı" });
+    const [r] = await db.select().from(schema.txs).where(and(eq(schema.txs.id, txId), eq(schema.txs.userId, req.userId!)));
+    if (!r || r.reason !== "holding") return reply.code(409).send({ error: "bu token artık tutulmuyor" });
+    const job = await swapQueue.getJob(r.idempotencyKey);
+    if (!job || !(await job.isDelayed())) return reply.code(409).send({ error: "satış zaten başladı" });
+    await db.update(schema.txs).set({ reason: "holding_sell_now" }).where(eq(schema.txs.id, r.id));
+    await job.promote();
+    return { ok: true };
   });
 
   // ── Copy Logs (last 7 days) ────────────────────────────────────────────
@@ -444,6 +459,7 @@ const NOT_OPENED = new Set([
 ]);
 
 function resultLabel(status: string, positionState: string | null, reason: string | null = null): string {
+  if (reason === "holding" && status === "planned") return "Holding";
   if (status === "skipped") return reason && NOT_OPENED.has(reason) ? "NotOpened" : "Skipped";
   if (status === "failed") return "Failed";
   if (status === "planned" || status === "submitted" || status === "simulated") return positionState === "ACTIVE" ? "Open" : "Pending";

@@ -26,7 +26,23 @@ export interface SwapBackJob {
   pool: string;
   amount: string;
   label: string;
+  /** Smart Token Retention: hold instead of selling right away. */
+  hold?: SwapBackHold;
 }
+
+export interface SwapBackHold {
+  untilMs: number;
+  /** Token price (lamports per raw unit) when the hold started. */
+  startPriceLamports: number;
+  /** Sell right away if the price drops more than this (bps). */
+  sellOnDropBps: number;
+  sellOnLeaderSell: boolean;
+  leaderId: string;
+  leaderAddress: string;
+}
+
+/** Redis key the listener sets when a leader sells (or sends away) a token outside an LP add. */
+export const leaderSoldKey = (leaderAddress: string, mint: string) => `leader_sold:${leaderAddress}:${mint}`;
 
 /** Retry delay for swap-backs: 30s, 1m, 2m, … capped at 15 minutes. Keeps trying until sold. */
 export function swapBackDelayMs(attemptsMade: number): number {

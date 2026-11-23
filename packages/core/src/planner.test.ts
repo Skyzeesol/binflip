@@ -159,6 +159,16 @@ describe("planCopy", () => {
     expect(planCopy(action({ added: { x: 0n, y: SOL } }), settings({ tokenPriceLamports: 2 }), ours())).not.toHaveProperty("swapSol");
   });
 
+  it("Smart Token Retention: a token-only re-add uses kept tokens and passes Meme Protection", () => {
+    const readd = action({ added: { x: 4n * SOL, y: 0n } }); // leader puts 4e9 raw token back
+    // without held tokens: meme protection skips it
+    expect(planCopy(readd, settings({ tokenPriceLamports: 0.5 }), ours({ depositedSol: SOL, ratioPpm: 500_000n, fundedAt: new Date() }))).toMatchObject({ reason: "meme_protection" });
+    // holding 3e9 raw token: 50% share wants 2e9, all from the hold, no SOL spent, no swap
+    const p = planCopy(readd, settings({ tokenPriceLamports: 0.5, heldTokens: 3n * SOL }), ours({ depositedSol: SOL, ratioPpm: 500_000n, fundedAt: new Date() }));
+    expect(p).toMatchObject({ do: "add", tokenFromHold: 2n * SOL, amountSol: 0n });
+    expect(p).not.toHaveProperty("swapSol");
+  });
+
   it("DAMM V2 respects the pool-type toggle", () => {
     const a = action({ protocol: "damm_v2", kind: "open", created: true, added: { x: 0n, y: SOL } });
     expect(planCopy(a, settings({ copyDammV2: false }), null)).toMatchObject({ reason: "pool_type_not_copied" });
