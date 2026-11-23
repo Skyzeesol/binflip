@@ -1,0 +1,28 @@
+services:
+  rpc:
+    image: binflip:local
+    command: ["node", "apps/listener/smoke.mjs", "rpc"]
+    volumes:
+      - ./deploy/compose-smoke/smoke.mjs:/app/apps/listener/smoke.mjs:ro
+      - ./packages/core/test/fixtures/tx:/fixtures:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8899/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  listener:
+    environment: &dry-run
+      DRY_RUN: "1"
+      LIVE_CONFIRMED: "0"
+      SOLANA_RPC_URL: http://rpc:8899
+      LISTENER_POLL_MS: "1000"
+  executor:
+    environment: *dry-run
+  manager:
+    environment: *dry-run
+  telegram:
+    environment: *dry-run
+  api:
+    environment:
+      <<: *dry-run
+      SESSION_SECRET: compose-smoke-local-throwaway-secret
