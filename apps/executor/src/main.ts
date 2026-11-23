@@ -13,6 +13,8 @@ import {
   readPassphraseFile,
   runService,
   WSOL_MINT,
+  DammTxBuilder,
+  type DammPoolInfo,
   JupiterClient,
   TokenInfoClient,
   checkTokenFilters,
@@ -37,6 +39,7 @@ type EventRow = typeof schema.leaderEvents.$inferSelect;
 
 interface Live {
   builder: DlmmTxBuilder;
+  damm: DammTxBuilder;
   sender: TxSender;
   agentWalletId: string;
   publicKey: string;
@@ -69,7 +72,7 @@ await runService("executor", async ({ config, log }) => {
   if (live) {
     live.managementQueue = new Queue<ManagementJob>(QUEUES.MANAGEMENT, { connection });
     live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
-    management = startManagement({ db, connection, builder: live.builder, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
+    management = startManagement({ db, connection, builder: live.builder, damm: live.damm, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
   }
 
   const worker = new Worker<ExecutionJob>(
@@ -113,6 +116,7 @@ async function setupLive(db: Db, config: Config, log: Logger): Promise<Live> {
   log.warn({ agent: signer.publicKey, balanceSol: balance / 1e9 }, "LIVE: agent wallet loaded");
   return {
     builder: new DlmmTxBuilder(conn, new PublicKey(signer.publicKey)),
+    damm: new DammTxBuilder(conn, new PublicKey(signer.publicKey)),
     sender: new TxSender(conn, signer),
     agentWalletId: wallet.id,
     publicKey: signer.publicKey,
@@ -164,10 +168,20 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     : null;
 
   // Pool price (both modes, read-only): value-based Meme Protection, zap sizing and token filters.
-  const pool = action.protocol === "dlmm" && action.pool && (action.kind === "open" || action.kind === "add") ? await poolInfoSafe(config, action.pool, log) : null;
+  const entering = action.pool && (action.kind === "open" || action.kind === "add");
+  const pool = action.protocol === "dlmm" && entering ? await poolInfoSafe(config, action.pool!, log) : null;
+  const dammPool = action.protocol === "damm_v2" && entering ? await dammInfoSafe(config, action.pool!, log) : null;
   // DLMM price = raw Y per raw X at the active bin; we want lamports per raw token.
   const binPx = pool ? Math.pow(1 + pool.binStep / 10_000, pool.activeBinId) : null;
-  const tokenPriceLamports = pool && binPx !== null ? (pool.solIsY ? binPx : 1 / binPx) : null;
+  const tokenPriceLamports = pool && binPx !== null ? (pool.solIsY ? binPx : 1 / binPx) : (dammPool?.tokenPriceLamports ?? null);
+  const tokenMintOfPool = pool ? (pool.solIsY ? pool.mintX : pool.mintY) : dammPool ? (dammPool.solIsA ? dammPool.mintB : dammPool.mintA) : null;
+
+  // DAMM V2 partial remove → the same share of ours: removed / (left + removed) of the leader's liquidity.
+  if (action.protocol === "damm_v2" && action.kind === "remove" && action.liquidityDelta && action.position) {
+    const left = await dammReader(config).unlockedLiquidity(action.position).catch(() => 0n);
+    const bps = Number((action.liquidityDelta * 10_000n) / (left + action.liquidityDelta));
+    action.removeRanges = [{ minBinId: null, maxBinId: null, bps: Math.max(1, Math.min(10_000, bps)) }];
+  }
 
   let plan = planCopy(
     action,
@@ -203,8 +217,8 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   );
 
   // LP Agent Security filters: checked before a position is opened.
-  if (plan.do === "open" && pool) {
-    const mint = pool.solIsY ? pool.mintX : pool.mintY;
+  if (plan.do === "open" && tokenMintOfPool) {
+    const mint = tokenMintOfPool;
     try {
       const info = await tokenInfo.get(mint);
       const f = checkTokenFilters(info, {
@@ -227,8 +241,9 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
 
   // Live-only guards that need chain state.
   if (live && plan.do !== "skip") {
-    if (action.protocol !== "dlmm") plan = { do: "skip", kind: action.kind, reason: "damm_live_not_supported" };
-    else if (plan.do !== "open" && !ours?.ourPosition) plan = { do: "skip", kind: action.kind, reason: "position_not_copied" };
+    // DAMM V2 empty opens have no account yet: the first funding add creates it.
+    const dammFirstFunding = action.protocol === "damm_v2" && plan.do === "add" && ours && !ours.ourPosition;
+    if (plan.do !== "open" && !ours?.ourPosition && !dammFirstFunding) plan = { do: "skip", kind: action.kind, reason: "position_not_copied" };
     // Every open pays position rent, even an empty one, so it needs the reserve too.
     else if (plan.do === "open" || (plan.do === "add" && plan.amountSol > 0n)) {
       const bal = BigInt(await live.builder.connection.getBalance(new PublicKey(live.publicKey)));
@@ -382,6 +397,7 @@ async function executeLiveInner(
     return built.position;
   };
   const pool = a.pool!;
+  if (a.protocol === "damm_v2") return executeDamm(l, plan, a, ours, onSignature, config, sendAll);
   const slippagePct = 1;
 
   switch (plan.do) {
@@ -484,7 +500,7 @@ async function totalFees(l: Live, sigs: string[]): Promise<number> {
   let fee = 0;
   for (const s of sigs) {
     const t = await l.builder.connection
-      .getTransaction(s, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
+      .getTransaction(s, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as 0 })
       .catch(() => null);
     fee += t?.meta?.fee ?? 0;
   }
@@ -543,6 +559,8 @@ async function applyToPositions(
       .set({
         state: "ACTIVE",
         depositedSol: sql`${schema.positions.depositedSol} + ${plan.amountSol}`,
+        // DAMM V2: the first funding add is what creates our on-chain position.
+        ...(ourPosition && !ours.ourPosition ? { ourPosition } : {}),
         ...(plan.firstFunding
           ? { sizeRatioPpm: plan.ratioPpm, fundedAt: now, strategy: a.strategy, entryActiveBinId: a.activeBinId }
           : {}),
@@ -600,7 +618,14 @@ async function solSpentToday(db: Db, userId: string): Promise<bigint> {
 function toAction(p: Record<string, unknown>): LeaderAction {
   const pair = (v: any) => ({ x: BigInt(v?.x ?? 0), y: BigInt(v?.y ?? 0) });
   const a = p as any;
-  return { ...a, added: pair(a.added), removed: pair(a.removed), fees: pair(a.fees), removeRanges: a.removeRanges ?? [] };
+  return {
+    ...a,
+    added: pair(a.added),
+    removed: pair(a.removed),
+    fees: pair(a.fees),
+    removeRanges: a.removeRanges ?? [],
+    ...(a.liquidityDelta !== undefined ? { liquidityDelta: BigInt(a.liquidityDelta) } : {}),
+  };
 }
 
 function jsonSafe(v: unknown): Record<string, unknown> {
@@ -680,7 +705,10 @@ async function poolInfoSafe(config: Config, pool: string, log: Logger): Promise<
 /** LP Agent zap: buy the token's share with SOL via Jupiter; returns the token amount received. */
 async function zapBuy(l: Live, pool: string, lamports: bigint, config: Config, onSignature: (sig: string) => Promise<void>): Promise<bigint> {
   const info = await l.builder.poolInfo(pool);
-  const mint = info.solIsY ? info.mintX : info.mintY;
+  return zapBuyMint(l, info.solIsY ? info.mintX : info.mintY, lamports, config, onSignature);
+}
+
+async function zapBuyMint(l: Live, mint: string, lamports: bigint, config: Config, onSignature: (sig: string) => Promise<void>): Promise<bigint> {
   const before = await l.builder.tokenBalance(mint);
   const q = await jupiter.quoteFromSol(mint, lamports, 300);
   const { tx, lastValidBlockHeight } = await jupiter.buildSwap(q, l.publicKey, 2_000_000);
@@ -688,4 +716,58 @@ async function zapBuy(l: Live, pool: string, lamports: bigint, config: Config, o
   const received = (await l.builder.tokenBalance(mint)) - before;
   if (received <= 0n) throw new Error("zap swap returned no tokens");
   return received;
+}
+
+let dammR: DammTxBuilder | null = null;
+const dammReader = (config: Config) => (dammR ??= new DammTxBuilder(createConnection(config.SOLANA_RPC_URL), PublicKey.default));
+
+async function dammInfoSafe(config: Config, pool: string, log: Logger): Promise<DammPoolInfo | null> {
+  try {
+    return await dammReader(config).poolInfo(pool);
+  } catch (err) {
+    log.warn({ pool, err: (err as Error).message }, "damm pool read failed; pricing unavailable");
+    return null;
+  }
+}
+
+/**
+ * DAMM V2 live copy (LP Agent copies every DAMM V2 position). DAMM V2 takes both
+ * tokens at the pool price, so every deposit is a zap: buy the token's share with
+ * SOL via Jupiter, then deposit both. An empty leader open has no account yet;
+ * our position is created at the first funding add.
+ */
+async function executeDamm(
+  l: Live,
+  plan: Plan,
+  a: LeaderAction,
+  ours: PositionRow | null,
+  onSignature: (sig: string) => Promise<void>,
+  config: Config,
+  sendAll: (b: BuiltTxs) => Promise<string | null>,
+): Promise<string | null> {
+  const pool = a.pool!;
+  const info = await l.damm.poolInfo(pool);
+  if (!info.solIsA && !info.solIsB) throw new Error("DAMM V2 pool has no SOL side");
+  const mint = info.solIsA ? info.mintB : info.mintA;
+  const split = async (sol: bigint, swap: bigint) => {
+    const tokens = swap > 0n ? await zapBuyMint(l, mint, swap, config, onSignature) : 0n;
+    const rest = sol - swap;
+    return info.solIsA ? { amountA: rest, amountB: tokens } : { amountA: tokens, amountB: rest };
+  };
+  switch (plan.do) {
+    case "open":
+      if (plan.empty) return null; // created at the first funding add
+      return sendAll(await l.damm.open({ pool, ...(await split(plan.amountSol, plan.swapSol ?? plan.amountSol / 2n)), slippageBps: 300 }));
+    case "add":
+      if (!ours?.ourPosition) return sendAll(await l.damm.open({ pool, ...(await split(plan.amountSol, plan.swapSol ?? plan.amountSol / 2n)), slippageBps: 300 }));
+      return sendAll(await l.damm.add({ pool, position: ours.ourPosition, ...(await split(plan.amountSol, plan.swapSol ?? plan.amountSol / 2n)) }));
+    case "remove":
+      return sendAll(await l.damm.remove({ pool, position: ours!.ourPosition!, bps: plan.bps, close: false }));
+    case "close":
+      return sendAll(await l.damm.remove({ pool, position: ours!.ourPosition!, bps: 10_000, close: true }));
+    case "claim":
+      return sendAll(await l.damm.claim({ pool, position: ours!.ourPosition! }));
+    default:
+      return null;
+  }
 }

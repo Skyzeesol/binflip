@@ -131,7 +131,7 @@ export class TxSender {
       if (st?.err) throw new Error(`transaction failed: ${JSON.stringify(st.err)}`);
       if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) {
         const fee = await this.connection
-          .getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
+          .getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as 0 })
           .then((t) => t?.meta?.fee ?? null)
           .catch(() => null);
         return { signature, slot: st.slot, feeLamports: fee };

@@ -19,3 +19,4 @@ export * from "./strategy/index.js";
 export * from "./fundProtection.js";
 export * from "./tokenFilters.js";
 export * from "./leaderStats.js";
+export * from "./meteora/dammTx.js";

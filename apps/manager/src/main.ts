@@ -23,6 +23,7 @@ import {
   type ManagementMode,
   readLivePosition,
   shouldCompound,
+  DammTxBuilder,
   evaluateFundProtection,
   valueInY,
   type NotificationJob,
@@ -120,6 +121,10 @@ async function manageAll(
     for (const p of stale) await notify(p.userId, "[DENEME] Fonlama gelmedi: boş kopya 1 dk sonra kapatılırdı (rent geri alınır).");
   }
 
+  // Fund protection and DAMM V2 exits run every tick, whether or not there are DLMM positions.
+  const tripped = await fundProtectionTick(db, builder, dryRun, log, notify);
+  if (!dryRun) await manageDammLive(db, management, log, tripped);
+
   const rows = await db
     .select()
     .from(schema.positions)
@@ -138,7 +143,7 @@ async function manageAll(
   }
 
   const manual = new Map((await db.select().from(schema.manualSettings)).map((m) => [m.userId, m]));
-  const tripped = await fundProtectionTick(db, builder, dryRun, log, notify);
+
 
   for (const { positions: pos, copy_settings: copySet, leaders: leader } of rows) {
     const info = pools.get(pos.pool);
@@ -416,4 +421,33 @@ async function fundProtectionTick(
     }
   }
   return tripped;
+}
+
+let dammBuilder: DammTxBuilder | null = null;
+/**
+ * DAMM V2 copies (live): track value, and apply the TP/SL/trailing saved on the
+ * copy at open (LP Agent applies exit rules to every copy). Execution is queued
+ * for the executor, which re-checks on chain.
+ */
+async function manageDammLive(db: Db, management: Queue<ManagementJob>, log: Logger, _tripped: Set<string>) {
+  const rows = await db.select().from(schema.positions).where(and(eq(schema.positions.state, "ACTIVE"), eq(schema.positions.dryRun, false), eq(schema.positions.protocol, "damm_v2")));
+  if (!rows.length) return;
+  dammBuilder ??= new DammTxBuilder(createConnection(process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com"), PublicKey.default);
+  for (const pos of rows) {
+    if (!pos.ourPosition) continue;
+    try {
+      const value = await dammBuilder.positionValue(pos.pool, pos.ourPosition);
+      const peak = Math.max(pos.peakValue ? Number(pos.peakValue) * 1e9 : value, value);
+      await db.update(schema.positions).set({ currentValueSol: String(value / 1e9), peakValue: String(peak / 1e9), lastManagedAt: new Date() }).where(eq(schema.positions.id, pos.id));
+      await snapshot(db, pos, value);
+      const exits = pos.exitRulesSaved ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps } : { takeProfitBps: null, stopLossBps: null, trailingStopBps: null };
+      const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: 0, peakY: peak, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
+      if (d.do === "close") {
+        await management.add("manage", { positionId: pos.id, kind: "close", reason: d.reason, activeId: 0 }, { jobId: `mgmt_${pos.id}_close_damm`, attempts: 5, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
+        log.info({ position: pos.id, reason: d.reason }, "damm exit queued");
+      }
+    } catch (err) {
+      log.warn({ position: pos.id, err: (err as Error).message }, "damm position read failed");
+    }
+  }
 }

@@ -65,7 +65,7 @@ export class SolanaRpc {
   async getTransaction(signature: string): Promise<RawTransaction | null> {
     const tx = await this.call<Omit<RawTransaction, "signature"> | null>("getTransaction", [
       signature,
-      { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" },
+      { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" },
     ]);
     return tx ? { signature, ...tx } : null;
   }

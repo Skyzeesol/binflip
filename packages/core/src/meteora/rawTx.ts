@@ -1,6 +1,6 @@
 /**
  * Subset of the JSON-RPC `getTransaction` response (encoding: "json",
- * maxSupportedTransactionVersion: 0). We decode from this raw shape instead
+ * maxSupportedTransactionVersion: 1 — v1 transactions exist on mainnet). We decode from this raw shape instead
  * of web3.js objects so fixtures are plain JSON and decoding is deterministic.
  */
 export interface RawCompiledIx {

@@ -40,6 +40,8 @@ export interface LeaderAction {
   removeRanges: RemoveRange[];
   /** Full detail of a rebalance_liquidity move, so we can repeat it scaled to our size. */
   rebalance: RebalanceDetail | null;
+  /** DAMM V2: liquidity the leader added/removed (from EvtLiquidityChange), to mirror a partial remove as a share. */
+  liquidityDelta?: bigint;
 }
 
 export interface RebalanceDetail {
@@ -231,6 +233,7 @@ class Builder {
         // Direction comes from the instruction (add vs remove) seen in the same tx.
         const pair = { x: d.token_a_amount as bigint, y: d.token_b_amount as bigint };
         this.pendingDamm.push(pair);
+        if (typeof d.liquidity_delta === "bigint") this.liquidityDelta += d.liquidity_delta;
         break;
       }
       case "IncreasePositionLength":
@@ -244,6 +247,7 @@ class Builder {
   }
 
   pendingDamm: Pair[] = [];
+  liquidityDelta = 0n;
 
   build(): LeaderAction | null {
     for (const p of this.pendingDamm) {
@@ -288,6 +292,7 @@ class Builder {
         this.rebalanced && this.oldRange && this.lower !== null && this.upper !== null
           ? { oldMin: this.oldRange[0], oldMax: this.oldRange[1], newMin: this.lower, newMax: this.upper, adds: this.rebalanceAdds, favorX: this.favorX }
           : null,
+      ...(this.protocol === "damm_v2" && this.liquidityDelta > 0n ? { liquidityDelta: this.liquidityDelta } : {}),
     };
   }
 }

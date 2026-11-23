@@ -476,3 +476,8 @@ Kural: Kopyalama davranışında LP Agent dokümanı (bkz. §14) referanstır. B
 | M | DAMM V2 | Canlı kopyalanır | Canlıda atlanıyor | cp-amm SDK ile canlı kopya |
 
 LP Agent'ın %8 fee'si ve swap yönlendiricisi (OKX) taklit edilmez: fee'den kurtulmak projenin amacı; swap için Jupiter kullanılıyor.
+
+**Durum (23 Kasım 2026):**
+- **A–L tamam** (testli, push edildi). Doğrulamalar: zap (DLMM swap + iki taraflı ekleme) mainnet simülasyonu OK (~450k CU); Jupiter token API'si (organic score, mcap, holder, hacim, yaş) erişilebilir; `/v1/insights` Karınca için: net varlık 150 SOL, önerilen %4,54, çıkışlarının **%40'ında** 1 dk içinde aynı havuza geri dönüyor (STR'nin anlamlı olduğu lider tipi).
+- **M (DAMM V2 canlı) kodlandı:** `core/meteora/dammTx.ts` (cp-amm SDK: açma = pozisyon NFT + iki taraflı likidite, ekleme, % çekme, çek + kapat, claim, değer). Her yatırma zap (DAMM V2 iki token ister). Liderin kısmi çekmesi `liquidity_delta / (kalan + delta)` oranıyla aynalanıyor. Boş açılış zincire dokunmuyor, ilk fonlamada pozisyon oluşuyor. DAMM V2 kopyalarında TP/SL/trailing (değer = SDK withdraw quote + bekleyen fee). Flip yok (DLMM bin stratejisi). **Açılış mainnet simülasyonu OK (~110k CU)**; ekleme/çekme/claim/kapama simülasyonu açık bir pozisyon bulunca yapılacak.
+- **Ek bulgu: mainnet'te v1 işlemler var.** `getTransaction` artık `maxSupportedTransactionVersion: 1` ile çağrılıyor; aksi halde v1 kullanan liderlerin hareketleri okunamıyordu. Decoder v1 işlemleri sorunsuz çözüyor (gerçek işlemlerle kontrol edildi).

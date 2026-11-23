@@ -12,6 +12,7 @@ import {
   type BuiltTxs,
   type Config,
   type DlmmTxBuilder,
+  type DammTxBuilder,
   type ExitRules,
   type Logger,
   type ManagementJob,
@@ -40,6 +41,7 @@ export function startManagement(p: {
   db: Db;
   connection: Redis;
   builder: DlmmTxBuilder;
+  damm: DammTxBuilder;
   sender: TxSender;
   swapback: ReturnType<typeof startSwapBack>;
   config: Config;
@@ -79,6 +81,7 @@ export function startManagement(p: {
     const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
     if (j.kind === "close_empty") return closeIfStillEmpty(pos, label);
+    if (pos.protocol === "damm_v2") return dammExit(pos, label, key, j);
     if (pos.state !== "ACTIVE" || !pos.ourPosition || pos.dryRun) return { skipped: `state_${pos.state}` };
 
     const [existing] = await db.select().from(schema.txs).where(and(eq(schema.txs.userId, pos.userId), eq(schema.txs.idempotencyKey, key)));
@@ -167,7 +170,12 @@ export function startManagement(p: {
 
   /** LP Agent: an empty copy whose funding never came is closed after ~1 minute; the rent comes back. */
   async function closeIfStillEmpty(pos: typeof schema.positions.$inferSelect, label: string) {
-    if (pos.state !== "OPENING" || !pos.ourPosition || pos.dryRun) return { skipped: "funded_or_gone" };
+    if (pos.state !== "OPENING" || pos.dryRun) return { skipped: "funded_or_gone" };
+    if (!pos.ourPosition) {
+      // DAMM V2 empty opens never touched the chain: just close the record.
+      await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "unfunded_empty" }).where(eq(schema.positions.id, pos.id));
+      return { closedEmpty: true };
+    }
     const chain = await builder.positionBins(pos.pool, pos.ourPosition);
     if (chain.bins.some((b) => b.x > 0 || b.y > 0)) return { skipped: "funded" };
     const built = await builder.remove({ pool: pos.pool, position: pos.ourPosition, bps: 10_000, close: true });
@@ -175,6 +183,30 @@ export function startManagement(p: {
     await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "unfunded_empty" }).where(eq(schema.positions.id, pos.id));
     await notify(pos.userId, `[CANLI] ${label}: fonlama gelmedi, boş kopya kapatıldı ve rent geri alındı.`);
     return { closedEmpty: true };
+  }
+
+  /** DAMM V2 copies: TP/SL/trailing exits (no flips — those are a DLMM bin strategy). Re-checked on chain. */
+  async function dammExit(pos: typeof schema.positions.$inferSelect, label: string, key: string, j: ManagementJob) {
+    if (j.kind !== "close" || pos.state !== "ACTIVE" || !pos.ourPosition) return { skipped: "not_applicable" };
+    const value = await p.damm.positionValue(pos.pool, pos.ourPosition);
+    const exits: ExitRules = pos.exitRulesSaved
+      ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
+      : { takeProfitBps: null, stopLossBps: null, trailingStopBps: null };
+    const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: 0, peakY: pos.peakValue ? Number(pos.peakValue) * 1e9 : value, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
+    if (d.do !== "close") return { skipped: "stale" };
+    const [t] = await db.insert(schema.txs).values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: "close", status: "planned", reason: d.reason, dryRun: false }).onConflictDoNothing().returning();
+    if (!t) return { skipped: "duplicate" };
+    const info = await p.damm.poolInfo(pos.pool);
+    const mint = info.solIsA ? info.mintB : info.mintA;
+    const before = await builder.tokenBalance(mint);
+    const built = await p.damm.remove({ pool: pos.pool, position: pos.ourPosition, bps: 10_000, close: true });
+    for (const [i, tx] of built.txs.entries()) await sender.send(tx, built.extraSigners.get(i) ?? [], opts(async (sig) => void (await db.update(schema.txs).set({ status: "submitted", signature: sig }).where(eq(schema.txs.id, t.id)))));
+    const received = (await builder.tokenBalance(mint)) - before;
+    await db.update(schema.txs).set({ status: "confirmed" }).where(eq(schema.txs.id, t.id));
+    await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: d.reason, currentValueSol: String(value / 1e9) }).where(eq(schema.positions.id, pos.id));
+    if (received > 0n) await p.swapback.enqueue({ userId: pos.userId, key: t.id, leaderEventId: null, positionId: pos.id, mint, pool: pos.pool, amount: received.toString(), label });
+    await notify(pos.userId, `[CANLI] ${label}: DAMM V2 kopya ${d.reason} ile kapatıldı (PnL %${(d.pnlBps / 100).toFixed(2)})`);
+    return { closed: true };
   }
 
   /** Claim fees, add SOL fees back below price and token fees above it (or sell them). */
