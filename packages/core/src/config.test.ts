@@ -27,6 +27,12 @@ describe("loadConfig safety gates", () => {
     ).toBe("live");
   });
 
+  it("lets read-only services observe live mode without mounting signer secrets", () => {
+    const readOnly = { requiresSigner: false };
+    expect(loadConfig({ ...base, DRY_RUN: "0", LIVE_CONFIRMED: "1" }, readOnly).mode).toBe("live");
+    expect(() => loadConfig({ ...base, DRY_RUN: "0" }, readOnly)).toThrow(ConfigError);
+  });
+
   it("rejects unknown flag values instead of guessing", () => {
     expect(() => loadConfig({ ...base, DRY_RUN: "no" })).toThrow(ConfigError);
   });

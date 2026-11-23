@@ -42,6 +42,7 @@ export const REASONS: Record<string, string> = {
   rebalance_topup: "Rebalance + ekleme",
   rebalance_take_profit: "Rebalance + kâr alma",
   rebalance_unknown: "Rebalance okunamadı",
+  dlmm_management_unsupported: "Bu havuz yönünde otomatik DLMM yönetimi desteklenmiyor",
   damm_live_not_supported: "DAMM V2 canlı desteklenmiyor",
   live_not_implemented: "Canlı icra yok",
   interrupted_needs_review: "Yarıda kaldı — kontrol edin",

@@ -1,4 +1,4 @@
-import { Worker, type Job, type Queue } from "bullmq";
+import { DelayedError, Worker, type Job, type Queue } from "bullmq";
 import type { Redis } from "ioredis";
 import { and, eq } from "drizzle-orm";
 import {
@@ -78,6 +78,14 @@ export function startManagement(p: {
     // Positions the user opened themselves follow manual_settings instead of a leader's copy settings.
     const manual = pos.leaderId ? null : (await db.select().from(schema.manualSettings).where(eq(schema.manualSettings.userId, pos.userId)))[0];
     if (!pos.leaderId && manual && !manual.enabled) return { skipped: "manual_off" };
+    if (j.kind === "flip" || j.kind === "compound") {
+      const [risk] = await db.select().from(schema.userRiskSettings).where(eq(schema.userRiskSettings.userId, pos.userId));
+      if (risk?.killSwitch || risk?.fundProtectionTrippedAt) {
+        // Keep the job retryable so an interrupted flip can resume after release.
+        await job.moveToDelayed(Date.now() + 30_000, job.token);
+        throw new DelayedError();
+      }
+    }
     const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
     if (j.kind === "close_empty") return closeIfStillEmpty(pos, label);

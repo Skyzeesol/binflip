@@ -458,6 +458,7 @@ const NOT_OPENED = new Set([
   "kill_switch",
   "non_sol_pair",
   "damm_live_not_supported",
+  "dlmm_management_unsupported",
   "send_failed",
 ]);
 

@@ -68,7 +68,7 @@ export class ConfigError extends Error {
  * - DRY_RUN=0 without LIVE_CONFIRMED=1 is an error, not a silent fallback.
  * - LIVE_CONFIRMED=1 while DRY_RUN=1 stays dry-run.
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, { requiresSigner = true } = {}): Config {
   // Treat empty strings as unset so `FOO=` in .env behaves like a missing var.
   const cleaned = Object.fromEntries(
     Object.entries(env).filter(([, v]) => v !== undefined && v !== ""),
@@ -88,7 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const mode: ExecutionMode = !DRY_RUN && LIVE_CONFIRMED ? "live" : "dry_run";
-  if (mode === "live" && (!rest.KEYSTORE_PATH || !rest.KEYSTORE_PASSPHRASE_FILE)) {
+  if (requiresSigner && mode === "live" && (!rest.KEYSTORE_PATH || !rest.KEYSTORE_PASSPHRASE_FILE)) {
     throw new ConfigError("Live mode requires KEYSTORE_PATH and KEYSTORE_PASSPHRASE_FILE.");
   }
   return { ...rest, mode };

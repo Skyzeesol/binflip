@@ -1,0 +1,24 @@
+name: Compose recovery
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: binflip-smoke-${{ github.run_id }}
+      POSTGRES_PASSWORD: binflip
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify restart recovery with Postgres and Redis
+        run: bash deploy/compose-smoke/check.sh
+      - name: Container logs
+        if: failure()
+        run: docker compose -f docker-compose.yml -f deploy/compose-smoke/compose.yml logs --tail=100
+      - name: Remove test services
+        if: always()
+        run: docker compose -f docker-compose.yml -f deploy/compose-smoke/compose.yml down --volumes

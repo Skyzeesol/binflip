@@ -4,7 +4,6 @@ import { and, eq } from "drizzle-orm";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   JupiterClient,
-  NoRouteError,
   QUEUES,
   SWAPBACK_MAX_ATTEMPTS,
   leaderSoldKey,
@@ -35,6 +34,7 @@ export function startSwapBack(p: {
   config: Config;
   log: Logger;
   notifications: Queue<NotificationJob>;
+  serial: <T>(fn: () => Promise<T>) => Promise<T>;
 }) {
   const { db, builder, sender, config, log, notifications } = p;
   const jupiter = new JupiterClient();
@@ -44,54 +44,63 @@ export function startSwapBack(p: {
 
   const worker = new Worker<SwapBackJob>(
     QUEUES.SWAPBACK,
-    async (job: Job<SwapBackJob>) => {
+    (job: Job<SwapBackJob>) => p.serial(async () => {
       const j = job.data;
       const [row] = await db.select().from(schema.txs).where(eq(schema.txs.id, j.txId));
       if (!row || row.status === "confirmed" || row.status === "skipped") return { done: true };
 
-      // A previous attempt broadcast something: find out what happened first.
+      const progress = (row.plan ?? {}) as { remaining?: string; lastValidBlockHeight?: number; route?: string };
+      async function finish(signature: string, route: string) {
+        const tx = await sender.connection.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        if (!tx?.meta) throw new Error("confirmed swap details are not available yet");
+        // The wallet is the fee payer. Its balance delta is actual net SOL received.
+        const received = BigInt(tx.meta.postBalances[0]!) - BigInt(tx.meta.preBalances[0]!);
+        await update(j.txId, { status: "confirmed", reason: j.hold ? "retention_sold" : null, solDelta: received, error: null });
+        await notify(j.userId, `🔁 ${j.label}: token → ${(Number(received) / 1e9).toFixed(4)} SOL (${route})`);
+        await sweep(j);
+        return { route };
+      }
+
       if (row.signature) {
-        const st = await sender.status(row.signature);
-        if (st === "confirmed") {
-          await update(row.id, { status: "confirmed", reason: null });
-          return { done: true, recovered: row.signature };
+        if (await sender.status(row.signature) === "confirmed") return finish(row.signature, progress.route ?? "swap");
+        if (!(await sender.canReplace(row.signature, progress.lastValidBlockHeight))) {
+          throw new Error("waiting for the previous swap to settle");
         }
       }
 
       const balance = await builder.tokenBalance(j.mint);
-      // A Smart Token Retention re-add may have used part of the kept tokens.
-      const remaining = (row.plan as { remaining?: string } | null)?.remaining;
-      const amount = minBig(remaining !== undefined ? BigInt(remaining) : BigInt(j.amount), balance);
+      const amount = minBig(BigInt(progress.remaining ?? j.amount), balance);
       if (amount <= 0n) {
         await update(row.id, { status: "skipped", reason: "no_tokens_left" });
         return { done: true };
       }
 
       const slippageBps = await userSlippage(db, j.userId);
-      const onSignature = async (sig: string) => void (await update(row.id, { status: "submitted", signature: sig }));
-      let route = "jupiter";
-      let outLamports: bigint;
+      let submitted = false;
+      const save = (route: string) => async (signature: string, lastValidBlockHeight: number) => {
+        submitted = true;
+        await update(row.id, {
+          status: "submitted", signature, tokenDelta: (-amount).toString(),
+          plan: { ...progress, route, lastValidBlockHeight },
+        });
+      };
       try {
         const q = await jupiter.quoteToSol(j.mint, amount, slippageBps);
         const { tx, lastValidBlockHeight } = await jupiter.buildSwap(q, p.publicKey, 2_000_000);
-        await sender.sendVersioned(tx, lastValidBlockHeight, { onSignature });
-        outLamports = BigInt(q.outAmount);
-        route = `jupiter (${q.routePlan.map((r) => r.swapInfo.label).join(" > ")})`;
-      } catch (jupErr) {
-        // No route on Jupiter (or Jupiter down): fall back to the pool we LP'd in.
-        log.warn({ err: (jupErr as Error).message, noRoute: jupErr instanceof NoRouteError }, "jupiter swap failed, trying pool");
-        const q = await builder.swapTokenToSol({ pool: j.pool, amount, slippageBps });
-        if (!q) throw new Error("nothing to swap");
-        await sender.send(q.built.txs[0]!, [], { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature });
-        outLamports = q.outLamports;
-        route = "DLMM havuzu";
+        const result = await sender.sendVersioned(tx, lastValidBlockHeight, { onSignature: save("Jupiter") });
+        return await finish(result.signature, "Jupiter");
+      } catch (err) {
+        if (submitted) throw err;
+        log.warn({ err }, "jupiter failed before submission, trying pool");
       }
 
-      await update(row.id, { status: "confirmed", reason: j.hold ? "retention_sold" : null, solDelta: outLamports, tokenDelta: (-amount).toString(), attempts: job.attemptsMade + 1 });
-      await notify(j.userId, `🔁 ${j.label}: token → ~${(Number(outLamports) / 1e9).toFixed(4)} SOL (${route})${job.attemptsMade ? `, ${job.attemptsMade + 1}. denemede` : ""}`);
-      await sweep(j);
-      return { sold: amount.toString(), route };
-    },
+      const q = await builder.swapTokenToSol({ pool: j.pool, amount, slippageBps });
+      if (!q) throw new Error("nothing to swap");
+      const result = await sender.send(q.built.txs[0]!, [], {
+        priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature: save("DLMM havuzu"),
+      });
+      return finish(result.signature, "DLMM havuzu");
+    }),
     {
       connection: p.connection,
       concurrency: 1,
@@ -101,7 +110,7 @@ export function startSwapBack(p: {
 
   worker.on("failed", async (job, err) => {
     if (!job) return;
-    await update(job.data.txId, { status: "planned", reason: "tokens_left_retrying", error: err.message.slice(0, 2000), attempts: job.attemptsMade });
+    await update(job.data.txId, { reason: "tokens_left_retrying", error: err.message.slice(0, 2000), attempts: job.attemptsMade });
     log.warn({ attempt: job.attemptsMade, err: err.message }, "swap back failed, will retry");
     if (job.attemptsMade === 1) {
       await notify(job.data.userId, `⚠️ ${job.data.label}: token SOL'e çevrilemedi (${err.message.slice(0, 100)}). Satılana kadar tekrar denenecek.`);
@@ -186,8 +195,11 @@ export function startSwapBack(p: {
         })
         .onConflictDoNothing()
         .returning({ id: schema.txs.id });
-      if (!row) return;
-      await queue.add("swapback", { ...j, txId: row.id }, {
+      const existing = row ?? (await db.select({ id: schema.txs.id, status: schema.txs.status }).from(schema.txs).where(and(
+        eq(schema.txs.userId, j.userId), eq(schema.txs.idempotencyKey, `swap_${j.key}`),
+      )))[0];
+      if (!existing || ("status" in existing && (existing.status === "confirmed" || existing.status === "skipped"))) return;
+      await queue.add("swapback", { ...j, txId: existing.id }, {
         jobId: `swap_${j.key}`,
         ...(j.hold ? { delay: Math.max(0, j.hold.untilMs - Date.now()) } : {}),
         attempts: SWAPBACK_MAX_ATTEMPTS,
