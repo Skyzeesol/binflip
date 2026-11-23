@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { patch, post } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, patch, post } from "@/lib/api";
 import { MODE_TR } from "@/lib/format";
 import type { CopySettings, Leader, ManagementMode, Strategy } from "@/lib/types";
 
@@ -41,6 +41,16 @@ export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null
   const [error, setError] = useState<string | null>(null);
 
   const set = <K extends keyof CopySettings>(k: K, v: Partial<CopySettings[K]>) => setS((p) => ({ ...p, [k]: { ...p[k], ...v } }));
+
+  // LP Agent dialog: suggested % (our net worth ÷ leader's) and the High-frequency warning.
+  const [ins, setIns] = useState<Insights | null>(null);
+  const target = (leader?.address ?? address).trim();
+  useEffect(() => {
+    setIns(null);
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target)) return;
+    const t = setTimeout(() => void api<Insights>(`/v1/insights?address=${target}`).then(setIns).catch(() => undefined), 400);
+    return () => clearTimeout(t);
+  }, [target]);
 
   const sizeSum =
     s.sizing.mode === "fixed_sol"
@@ -105,8 +115,16 @@ export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null
                   <label className="check"><input type="radio" checked={s.sizing.mode === "percent_of_leader"} onChange={() => set("sizing", { mode: "percent_of_leader" })} /><span>Liderin yüzdesi<div className="hint">Her pozisyon bu oranda ölçeklenir.</div></span></label>
                   <label className="check"><input type="radio" checked={s.sizing.mode === "fixed_sol"} onChange={() => set("sizing", { mode: "fixed_sol" })} /><span>Sabit SOL<div className="hint">Her yeni pozisyon aynı tutarla açılır.</div></span></label>
                 </div>
+                {ins?.highFrequency && (
+                  <div className="banner banner-warn" style={{ margin: 0, display: "block" }}>
+                    <b>Yüksek frekans:</b> bu cüzdan pozisyonlarını ortalama {ins.avgHoldMinutes?.toFixed(0)} dakika tutuyor. Her flip'te giriş swap'ı, çıkış swap'ı ve ağ ücreti ödersiniz.
+                    {ins.reAdd1mPct !== null && ins.reAdd1mPct >= 20 && (
+                      <> Çıkışlarının %{ins.reAdd1mPct.toFixed(0)}'inde aynı token'ı 1 dakika içinde geri ekliyor. <button className="btn btn-sm" onClick={() => set("protection", { smartTokenRetention: true })}>Smart Token Retention'ı aç</button></>
+                    )}
+                  </div>
+                )}
                 {s.sizing.mode === "percent_of_leader" ? (
-                  <label className="field">Kopya yüzdesi (%)<input type="number" min={1} max={10000} value={str(s.sizing.percent)} onChange={(e) => set("sizing", { percent: num(e.target.value) })} /><span className="hint">1–10000. Önerilen: sizin net varlığınız ÷ liderin net varlığı (ör. 16,48 / 134,62 → %12).</span></label>
+                  <label className="field">Kopya yüzdesi (%)<input type="number" min={1} max={10000} value={str(s.sizing.percent)} onChange={(e) => set("sizing", { percent: num(e.target.value) })} /><span className="hint">1–10000. {ins?.suggestedPct != null ? <>Önerilen: <b>%{ins.suggestedPct.toFixed(2)}</b> (sizin {ins.ourNetWorthSol?.toFixed(2)} SOL ÷ liderin {ins.leaderNetWorthSol?.toFixed(2)} SOL) <button className="btn btn-sm" onClick={() => set("sizing", { percent: Math.max(1, Math.round(ins.suggestedPct! * 100) / 100) })}>Uygula</button></> : "Önerilen: sizin net varlığınız ÷ liderin net varlığı."}{ins?.suggestedPct != null && ins.suggestedPct <= 1 ? " Lider sizden çok büyük: işlem başı üst sınır koymanız önerilir." : ""}</span></label>
                 ) : (
                   <label className="field">Pozisyon başına SOL<input type="number" min={0} step="0.01" value={str(s.sizing.fixedSol)} onChange={(e) => set("sizing", { fixedSol: num(e.target.value) })} /></label>
                 )}
@@ -149,7 +167,7 @@ export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null
               <div className="stack">
                 <div><h3>Koruma</h3><p className="muted">Bu liderin işlemlerinde botun ne yapacağını değiştiren korumalar.</p></div>
                 <label className="check"><input type="checkbox" checked={s.protection.memeProtection} onChange={(e) => set("protection", { memeProtection: e.target.checked })} /><span>Meme koruması<div className="hint">Yatırımın %95'ten fazlası SOL/USDC/USDT dışı token'daysa açma/ekleme atlanır.</div></span></label>
-                <label className="check"><input type="checkbox" checked={s.protection.smartTokenRetention} onChange={(e) => set("protection", { smartTokenRetention: e.target.checked })} /><span>Smart Token Retention <span className="badge">yakında</span><div className="hint">Lider çekip hemen geri eklerse token'ı satmayıp tutar. Ayar kaydedilir, davranış sonraki sürümde.</div></span></label>
+                <label className="check"><input type="checkbox" checked={s.protection.smartTokenRetention} onChange={(e) => set("protection", { smartTokenRetention: e.target.checked })} /><span>Smart Token Retention<div className="hint">Lider çekip kısa sürede aynı token'ı geri eklerse, kopya token'ı satmak yerine bir süre tutar ve geri eklemede kullanır (bir satış + bir alım tasarrufu). Tutulan token'ın fiyatı düşebilir; sadece sık geri ekleme yapan liderlerde açın.{ins?.exitSample ? ` Bu cüzdan, çıkışlarının %${ins.reAdd1mPct?.toFixed(0)}'inde 1 dk, %${ins.reAdd5mPct?.toFixed(0)}'inde 5 dk içinde geri ekliyor (${ins.exitSample} çıkış).` : ""}</div></span></label>
                 {s.protection.smartTokenRetention && (
                   <div className="row">
                     <label className="field">Tutma süresi<select value={s.protection.strHoldSeconds} onChange={(e) => set("protection", { strHoldSeconds: Number(e.target.value) })}>{[30, 60, 120, 300].map((v) => <option key={v} value={v}>{v < 60 ? `${v} sn` : `${v / 60} dk`}</option>)}</select></label>
@@ -197,4 +215,16 @@ export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null
       </div>
     </div>
   );
+}
+
+interface Insights {
+  leaderNetWorthSol: number | null;
+  ourNetWorthSol: number | null;
+  suggestedPct: number | null;
+  avgHoldMinutes: number | null;
+  closedSample: number;
+  reAdd1mPct: number | null;
+  reAdd5mPct: number | null;
+  exitSample: number;
+  highFrequency: boolean;
 }

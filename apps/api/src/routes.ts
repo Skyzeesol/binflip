@@ -5,6 +5,7 @@ import type { Config } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
 import { NonceStore, SESSION_TTL_MS, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
+import { Insights } from "./insights.js";
 
 const COOKIE = "binflip_session";
 const RANGES = { "7D": 7, "1M": 30, "3M": 90, "1Y": 365, YTD: -1, ALL: 36500 } as const;
@@ -154,6 +155,13 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     // LP Agent "Stop copying": the wallet leaves the list; copies already open stay open.
     await db.delete(schema.leaders).where(eq(schema.leaders.id, id));
     return { ok: true };
+  });
+
+  // ── Copy dialog insights (suggested %, High-frequency warning) ─────────
+  const insights = new Insights(db, config);
+  app.get("/v1/insights", async (req) => {
+    const { address } = z.object({ address: base58 }).parse(req.query);
+    return insights.get(req.userId!, address, config.mode);
   });
 
   // ── Copy Logs (last 7 days) ────────────────────────────────────────────
