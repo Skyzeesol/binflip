@@ -1,12 +1,14 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import type { Logger } from "@binflip/core";
 import { schema, type DbHandle } from "@binflip/db";
+import type { OpenWizard, Keyboard } from "./wizard.js";
 
 type Db = DbHandle["db"];
 
 interface Update {
   update_id: number;
   message?: { chat: { id: number }; text?: string };
+  callback_query?: { id: string; data?: string; message?: { chat: { id: number } } };
 }
 
 const HELP = [
@@ -14,6 +16,8 @@ const HELP = [
   "/durum: botun durumu, açık pozisyonlar, son 24 saat",
   "/stop: ACİL DURDUR (yeni açma/ekleme durur, çıkışlar liderle devam eder)",
   "/devam: acil durdurmayı kaldır",
+  "/ac <havuz>: havuza pozisyon aç (havuz adresini ya da Meteora linkini direkt göndermen de yeter)",
+  "/iptal: açma sihirbazını iptal et",
   "/yardim: bu liste",
 ].join("\n");
 
@@ -30,6 +34,7 @@ export class CommandPoller {
     private readonly chatId: string,
     private readonly db: Db,
     private readonly log: Logger,
+    private readonly wizard: OpenWizard | null = null,
   ) {}
 
   start() {
@@ -46,7 +51,7 @@ export class CommandPoller {
         const res = await fetch(`https://api.telegram.org/bot${this.token}/getUpdates`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ offset: this.offset, timeout: 25, allowed_updates: ["message"] }),
+          body: JSON.stringify({ offset: this.offset, timeout: 25, allowed_updates: ["message", "callback_query"] }),
           signal: AbortSignal.timeout(35_000),
         });
         const body = (await res.json()) as { ok: boolean; result?: Update[] };
@@ -63,9 +68,28 @@ export class CommandPoller {
   }
 
   private async handle(u: Update) {
+    const cb = u.callback_query;
+    if (cb) {
+      if (String(cb.message?.chat.id) !== this.chatId || !this.wizard) return;
+      await this.call("answerCallbackQuery", { callback_query_id: cb.id });
+      const r = await this.wizard.answer(this.chatId, cb.data ?? "");
+      await this.send(r.text, r.keyboard);
+      return;
+    }
     const msg = u.message;
     if (!msg?.text || String(msg.chat.id) !== this.chatId) return;
     const cmd = msg.text.trim().split(/\s+/)[0]!.toLowerCase().replace(/@.*$/, "");
+    if (this.wizard && cmd === "/iptal") {
+      await this.send(this.wizard.cancel(this.chatId).text);
+      return;
+    }
+    if (this.wizard && !["/durum", "/status", "/stop", "/devam", "/resume", "/yardim", "/help", "/start"].includes(cmd)) {
+      const r = await this.wizard.onText(this.chatId, msg.text);
+      if (r) {
+        await this.send(r.text, r.keyboard);
+        return;
+      }
+    }
     let reply: string;
     switch (cmd) {
       case "/durum":
@@ -148,14 +172,19 @@ export class CommandPoller {
     return lines.join("\n");
   }
 
-  private async send(text: string) {
-    await fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
+  private async send(text: string, keyboard?: Keyboard) {
+    await this.call("sendMessage", { chat_id: this.chatId, text, disable_web_page_preview: true, ...(keyboard ? { reply_markup: keyboard } : {}) });
+  }
+
+  private async call(method: string, body: Record<string, unknown>) {
+    await fetch(`https://api.telegram.org/bot${this.token}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: this.chatId, text, disable_web_page_preview: true }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
   }
+
 }
 
 function sleep(ms: number) {

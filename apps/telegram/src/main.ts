@@ -1,8 +1,11 @@
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
-import { QUEUES, runService, type NotificationJob } from "@binflip/core";
+import { QUEUES, runService, type NotificationJob, type OpenJob } from "@binflip/core";
 import { createDb } from "@binflip/db";
 import { CommandPoller } from "./commands.js";
+import { OpenWizard } from "./wizard.js";
+import { eq } from "drizzle-orm";
+import { schema } from "@binflip/db";
 
 /**
  * telegram — delivers notifications. Without TELEGRAM_BOT_TOKEN it only logs
@@ -34,10 +37,17 @@ await runService("telegram", async ({ config, log }) => {
   worker.on("failed", (job, err) => log.warn({ err: err.message, attempts: job?.attemptsMade }, "notification failed"));
 
   await ping();
-  const commands = token && chatId ? new CommandPoller(token, chatId, db, log) : null;
+  const openQueue = new Queue<OpenJob>(QUEUES.OPEN, { connection });
+  const ownerId = async () => {
+    const [u] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.role, "owner"));
+    if (!u) throw new Error("no owner user");
+    return u.id;
+  };
+  const wizard = new OpenWizard(openQueue, ownerId);
+  const commands = token && chatId ? new CommandPoller(token, chatId, db, log, wizard) : null;
   commands?.start();
   return {
     checks: { postgres: ping, redis: async () => void (await connection.ping()) },
-    cleanups: [async () => commands?.stop(), () => close(), async () => void (await connection.quit()), () => worker.close()],
+    cleanups: [async () => commands?.stop(), () => openQueue.close(), () => close(), async () => void (await connection.quit()), () => worker.close()],
   };
 });
