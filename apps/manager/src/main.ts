@@ -150,18 +150,21 @@ async function manageAll(
     if (!info || !info.solIsY) continue; // stage 4 models SOL-as-Y pools (all of Karınca's so far)
     // Copies use their leader's settings; positions the user opened use manual_settings.
     const m = pos.leaderId ? null : manual.get(pos.userId);
-    if (!pos.leaderId && m && !m.enabled) continue;
+    if (!pos.leaderId && pos.origin !== "panel" && pos.origin !== "telegram" && m && !m.enabled) continue;
     const cs = copySet ?? (m ? { ...m } : null);
-    const mode = cs?.managementMode ?? pos.managementMode;
+    // Positions we opened on request carry their own rules; copies follow the leader's settings.
+    const own = pos.origin === "panel" || pos.origin === "telegram";
+    const mode = own ? pos.managementMode : (cs?.managementMode ?? pos.managementMode);
     // LP Agent: TP/SL saved on the copy at open win over today's settings.
     const exits = pos.exitRulesSaved
       ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
       : { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
-    const flip = flipParamsFrom(cs?.managementParams);
-    const label = leader?.label ?? "manuel";
+    const flip = flipParamsFrom(own ? (pos.managementParams ?? cs?.managementParams) : cs?.managementParams);
+    const label = leader?.label ?? (pos.origin === "telegram" ? "Telegram" : pos.origin === "panel" ? "Panel" : "manuel");
+    const compoundMinutes = own ? (pos.feeMode === "hold" ? null : pos.compoundMinutes) : (cs?.compoundIntervalMinutes ?? null);
 
     if (!dryRun) {
-      await manageLive(db, builder, pos, mode, exits, flip, management, log, cs?.compoundIntervalMinutes ?? null, compoundMin, tripped.has(pos.userId));
+      await manageLive(db, builder, pos, mode, exits, flip, management, log, compoundMinutes, compoundMin, tripped.has(pos.userId));
       continue;
     }
 
@@ -304,7 +307,12 @@ async function manageLive(
     const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: compoundMinutes, minLamports: compoundMin });
     if (c.do === "compound") {
       const slot = Math.floor(Date.now() / (compoundMinutes! * 60_000));
-      await management.add("manage", { positionId: pos.id, kind: "compound", reason: "auto_compound", activeId }, { jobId: `mgmt_${pos.id}_compound_${slot}`, attempts: 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
+      if (pos.feeMode === "sell") {
+        // "Fee'leri sürekli sat": claim and sell the token fees to SOL instead of compounding.
+        await management.add("manage", { positionId: pos.id, kind: "claim", reason: "auto_claim_sell", activeId, manual: true, swapToSol: true }, { jobId: `mgmt_${pos.id}_claim_${slot}`, attempts: 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
+      } else {
+        await management.add("manage", { positionId: pos.id, kind: "compound", reason: "auto_compound", activeId }, { jobId: `mgmt_${pos.id}_compound_${slot}`, attempts: 2, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
+      }
       log.info({ position: pos.id, feesSol: Number(c.feesValueY) / 1e9 }, "compound queued");
     }
     return;

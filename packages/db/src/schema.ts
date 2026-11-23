@@ -318,6 +318,13 @@ export const positions = pgTable(
     claimedFeeSol: numeric("claimed_fee_sol", { precision: 30, scale: 9 }).notNull().default("0"),
     /** Part of claimed fees that went back into the position (already inside current value). */
     compoundedFeeSol: numeric("compounded_fee_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    /** Where it came from: copy (leader), panel / telegram (opened by us on request), wallet (found in the agent wallet). */
+    origin: text("origin"),
+    /** Per-position fee handling for positions we open on request: compound back in, or sell to SOL. */
+    feeMode: text("fee_mode"),
+    compoundMinutes: integer("compound_minutes"),
+    /** Per-position management parameters (e.g. flipThresholdBps); falls back to the user's manual settings. */
+    managementParams: jsonb("management_params").$type<Record<string, unknown>>(),
     /** Live positions: last on-chain bins [{id,x,y}] for the bin chart (dry-run uses sim_state). */
     chainBins: jsonb("chain_bins").$type<Array<{ id: number; x: number; y: number }>>(),
     /** Latest value the manager computed (SOL), incl. unclaimed fees. Final value once CLOSED. */

@@ -9,6 +9,7 @@ import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 import { Insights } from "./insights.js";
 import { registerPortfolio } from "./portfolio.js";
 import { registerWallets } from "./wallets.js";
+import { registerPools } from "./pools.js";
 import { MeteoraData } from "./meteora.js";
 
 const COOKIE = "binflip_session";
@@ -167,6 +168,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
   const meteora = new MeteoraData();
   registerPortfolio(app, db, config);
   registerWallets(app, db, config, meteora);
+  registerPools(app, db, config, meteora);
 
   // ── Copy dialog insights (suggested %, High-frequency warning) ─────────
   const insights = new Insights(db, config);

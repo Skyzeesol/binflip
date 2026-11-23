@@ -73,6 +73,31 @@ export interface WithdrawJob {
   requestId: string;
 }
 
+/** Open a position in a pool on request (panel "Create Position" or the Telegram wizard). */
+export interface OpenJob {
+  userId: string;
+  requestId: string;
+  origin: "panel" | "telegram";
+  protocol: "dlmm" | "damm_v2";
+  pool: string;
+  /** Lamports of SOL to put in. */
+  lamports: string;
+  /** Range vs the current price, in % (DLMM only): e.g. -50..0, -5..5. */
+  lowerPct: number;
+  upperPct: number;
+  strategy: "spot" | "curve" | "bid_ask";
+  managementMode: "mirror" | "staged_flip" | "bottom_flip";
+  flipThresholdBps?: number;
+  /** compound = claim and add back; sell = claim and sell to SOL; hold = leave fees in the position. */
+  feeMode: "compound" | "sell" | "hold";
+  compoundMinutes?: number;
+  takeProfitBps?: number | null;
+  stopLossBps?: number | null;
+  trailingStopBps?: number | null;
+  /** Telegram chat to answer when it lands. */
+  chatId?: string;
+}
+
 /** anyone → telegram: a human-readable notification. */
 export interface NotificationJob {
   userId: string;

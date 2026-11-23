@@ -10,6 +10,7 @@ import { AccountPanel } from "@/components/AccountPanel";
 import { useCurrency } from "@/lib/currency";
 
 const NAV = [
+  { href: "/pools", label: "Havuzlar" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/", label: "Copy LP" },
   { href: "/settings", label: "Ayarlar" },
@@ -50,12 +51,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </Link>
         <nav className="nav">
           {NAV.map((n) => (
-            <Link key={n.href} href={n.href} className={path === n.href ? "active" : ""}>
+            <Link key={n.href} href={n.href} className={path === n.href || (n.href !== "/" && path.startsWith(n.href)) ? "active" : ""}>
               {n.label}
             </Link>
           ))}
         </nav>
         <div className="spacer" />
+        <SearchBox />
         {me && (
           <span className={`badge ${me.mode === "live" ? "badge-live" : "badge-dry"}`} title={me.mode === "live" ? "Gerçek işlemler imzalanıyor" : "Hiçbir işlem imzalanmıyor"}>
             <span className="dot" /> {me.mode === "live" ? "CANLI" : "DENEME"}
@@ -88,5 +90,42 @@ export function Shell({ children }: { children: React.ReactNode }) {
       )}
       {children}
     </>
+  );
+}
+
+/** LP Agent "Search anything" (shortcut /): paste a pool, token or wallet address. */
+function SearchBox() {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "/" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        document.getElementById("global-search")?.focus();
+      }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
+  const go = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = q.trim();
+    if (!v) return;
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) {
+      window.location.href = `/pools?q=${encodeURIComponent(v)}`;
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api<{ href: string }>(`/v1/resolve/${v}`);
+      window.location.href = r.href;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={go} className="search hide-sm" role="search">
+      <input id="global-search" type="text" placeholder={busy ? "Aranıyor…" : "Havuz, token ya da cüzdan ara  /"} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Ara" />
+    </form>
   );
 }

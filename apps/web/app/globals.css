@@ -304,6 +304,41 @@ tr.grouped td { border-top: 0; }
 .cw-addr { display: flex; align-items: center; gap: 2px; }
 .cw-agent { word-break: break-all; max-width: 290px; line-height: 1.35; }
 
+/* ── Pools ─────────────────────────────────────── */
+.pop-wide { width: 520px; }
+.filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0; }
+.pool-head { display: grid; gap: 14px; padding: 16px 18px; margin-bottom: 16px; }
+.pool-stats { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 12px; }
+.stat-v { font-weight: 650; font-size: 15px; margin-top: 2px; white-space: nowrap; }
+.pool-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.pool-token { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.candles-bar { display: flex; gap: 4px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.candles-bar button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
+.candles-bar button.on { color: var(--select); background: color-mix(in srgb, var(--select) 15%, transparent); font-weight: 600; }
+.create-panel { padding: 16px; display: grid; gap: 12px; position: sticky; top: 72px; }
+.create-panel h3 { margin: 0; font-size: 17px; }
+.amount-row { display: flex; gap: 6px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.chip.on { border-color: var(--select); background: color-mix(in srgb, var(--select) 18%, transparent); }
+.chip:disabled { opacity: 0.4; cursor: not-allowed; }
+.divider { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; border-top: 1px solid var(--border); padding-top: 10px; }
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cost { display: grid; gap: 4px; font-size: 13px; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.cost > div { display: flex; justify-content: space-between; gap: 8px; }
+.cost > div span { color: var(--muted); }
+.cost-total { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 2px; }
+.create-btn { height: 42px; justify-content: center; font-size: 15px; }
+@media (max-width: 1100px) {
+  .pool-grid { grid-template-columns: 1fr; }
+  .create-panel { position: static; }
+  .pool-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .pool-token { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.search input { height: 32px; width: 260px; background: var(--surface-2); border-radius: 9px; font-size: 13px; }
+
 @media (max-width: 900px) {
   .pf-top { grid-template-columns: 1fr; }
   .detail-kpis { grid-template-columns: 1fr 1fr; }
@@ -313,7 +348,9 @@ tr.grouped td { border-top: 0; }
   .cal-day { min-height: 40px; }
   .cal-day .amt { font-size: 10px; }
   .acct-pop { position: fixed; left: 12px; right: 12px; width: auto; top: 110px; }
-  .pop { position: fixed; left: 12px; right: 12px; width: auto; top: 120px; }
+  .pop { position: fixed; left: 12px; right: 12px; width: auto; top: 120px; max-height: calc(100vh - 140px); overflow: auto; }
+  .filter-grid { grid-template-columns: 1fr; }
+  .pool-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {

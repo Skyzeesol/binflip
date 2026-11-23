@@ -123,8 +123,9 @@ export function poolRow(p: Json, window: string) {
     tvl: num(p.tvl),
     volume: w(p.volume),
     fees: w(p.fees),
-    feeTvl: w(p.fee_tvl_ratio) * 100,
-    feeTvlAll: { "5m": null, "30m": num(p.fee_tvl_ratio?.["30m"]) * 100, "1h": num(p.fee_tvl_ratio?.["1h"]) * 100, "4h": num(p.fee_tvl_ratio?.["4h"]) * 100, "24h": num(p.fee_tvl_ratio?.["24h"]) * 100 },
+    // Meteora's fee_tvl_ratio is already a percentage (fees / TVL × 100 over the window).
+    feeTvl: w(p.fee_tvl_ratio),
+    feeTvlAll: { "30m": num(p.fee_tvl_ratio?.["30m"]), "1h": num(p.fee_tvl_ratio?.["1h"]), "4h": num(p.fee_tvl_ratio?.["4h"]), "24h": num(p.fee_tvl_ratio?.["24h"]) },
     apr: num(p.apr),
     price: num(p.current_price),
     createdAt: p.created_at ? new Date(num(p.created_at)).toISOString() : null,

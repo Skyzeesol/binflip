@@ -33,6 +33,7 @@ import {
 import { createDb, schema, type Db } from "@binflip/db";
 import { startSwapBack } from "./swapback.js";
 import { startAccount } from "./account.js";
+import { startManualOpen } from "./manualOpen.js";
 import { startManagement } from "./management.js";
 
 type PositionRow = typeof schema.positions.$inferSelect;
@@ -78,6 +79,18 @@ await runService("executor", async ({ config, log }) => {
     account = startAccount({ db, connection, sender: live.sender, publicKey: live.publicKey, config, log, notifications, serial });
   }
 
+  // Positions we open on request (panel / Telegram): dry-run and live.
+  const manualOpen = startManualOpen({
+    db,
+    connection,
+    config,
+    log,
+    notifications,
+    live,
+    serial,
+    zapBuyMint: (mint, lamports, onSignature) => zapBuyMint(live!, mint, lamports, config, onSignature),
+  });
+
   const worker = new Worker<ExecutionJob>(
     QUEUES.EXECUTION,
     async (job) => {
@@ -107,6 +120,7 @@ await runService("executor", async ({ config, log }) => {
       ...(live?.swapback ? [() => live.swapback!.close()] : []),
       ...(management ? [() => management!.close()] : []),
       ...(account ? [() => account!.close()] : []),
+      () => manualOpen.close(),
     ],
   };
 });

@@ -21,6 +21,8 @@ export const QUEUES = {
   MANAGEMENT: "management",
   /** api → executor: account actions asked in the panel (withdraw to the main wallet). */
   ACCOUNT: "account",
+  /** api / telegram → executor: open a position in a pool we chose (not a copy). */
+  OPEN: "manual-open",
 } as const;
 
 /** Position lifecycle (HANDOFF §5). */

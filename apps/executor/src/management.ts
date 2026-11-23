@@ -77,7 +77,7 @@ export function startManagement(p: {
     const { positions: pos, copy_settings: copySet, leaders: leader } = row;
     // Positions the user opened themselves follow manual_settings instead of a leader's copy settings.
     const manual = pos.leaderId ? null : (await db.select().from(schema.manualSettings).where(eq(schema.manualSettings.userId, pos.userId)))[0];
-    if (!pos.leaderId && manual && !manual.enabled) return { skipped: "manual_off" };
+    if (!pos.leaderId && pos.origin !== "panel" && pos.origin !== "telegram" && manual && !manual.enabled) return { skipped: "manual_off" };
     const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
     if (j.kind === "close_empty") return closeIfStillEmpty(pos, label);
@@ -93,12 +93,13 @@ export function startManagement(p: {
     const exits: ExitRules = pos.exitRulesSaved
       ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
       : { takeProfitBps: cs?.takeProfitBps ?? null, stopLossBps: cs?.stopLossBps ?? null, trailingStopBps: cs?.trailingStopBps ?? null };
-    const flip = flipParamsFrom(cs?.managementParams);
+    const own = pos.origin === "panel" || pos.origin === "telegram";
+    const flip = flipParamsFrom(own ? (pos.managementParams ?? cs?.managementParams) : cs?.managementParams);
     const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
-    const d = progress.stage === "removed" ? null : decide(state, cs?.managementMode ?? pos.managementMode, exits, flip);
+    const d = progress.stage === "removed" ? null : decide(state, own ? pos.managementMode : (cs?.managementMode ?? pos.managementMode), exits, flip);
     if (j.kind === "compound") {
       // Exits and flips win over compounding; and fees must still be worth it.
-      const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: cs?.compoundIntervalMinutes ?? null, minLamports: BigInt(config.COMPOUND_MIN_LAMPORTS) });
+      const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: own ? pos.compoundMinutes : (cs?.compoundIntervalMinutes ?? null), minLamports: BigInt(config.COMPOUND_MIN_LAMPORTS) });
       if (d?.do !== "hold" || c.do !== "compound") return { skipped: "stale" };
       return compound(pos, label, key, feeX, feeY, activeId);
     }
@@ -348,6 +349,7 @@ export function startManagement(p: {
       const unclaimed = pos.unclaimedFeeSol === null ? 0 : Number(pos.unclaimedFeeSol) * 1e9;
       await sendAll(damm ? await p.damm.claim({ pool: pos.pool, position: pos.ourPosition }) : await builder.claim({ pool: pos.pool, position: pos.ourPosition }));
       await addClaimed(pos.id, unclaimed);
+      if (j.reason === "auto_claim_sell") await db.update(schema.positions).set({ lastCompoundAt: new Date() }).where(eq(schema.positions.id, pos.id));
     } else {
       const close = bps === 10_000;
       const built = damm
