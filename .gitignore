@@ -8,3 +8,4 @@ secrets/
 keystore/
 coverage/
 .next/
+*.tsbuildinfo
