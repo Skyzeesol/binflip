@@ -69,7 +69,7 @@ await runService("manager", async ({ config, log }) => {
 
   let running = false;
   let ticks = 0;
-  const notifyFn = (userId: string, text: string) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 }).then(() => undefined);
+  const notifyFn = (userId: string, text: string) => notifications.add("notify", { userId, text, kind: "manage" }, { removeOnComplete: 1000 }).then(() => undefined);
   const tick = async () => {
     if (running) return;
     running = true;

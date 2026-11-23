@@ -45,7 +45,7 @@ export function startManualOpen(p: {
   const { db, config, log } = p;
   const reader = p.live?.builder ?? new DlmmTxBuilder(createConnection(config.SOLANA_RPC_URL), PublicKey.default);
   const dammReader = p.live?.damm ?? new DammTxBuilder(createConnection(config.SOLANA_RPC_URL), PublicKey.default);
-  const notify = (userId: string, text: string) => p.notifications.add("notify", { userId, text }, { removeOnComplete: 1000 });
+  const notify = (userId: string, text: string) => p.notifications.add("notify", { userId, text, kind: "manage" }, { removeOnComplete: 1000 });
 
   const worker = new Worker<OpenJob>(QUEUES.OPEN, (job) => p.serial(() => open(job.data)), { connection: p.connection, concurrency: 1 });
   worker.on("failed", async (job, err) => {
@@ -64,6 +64,15 @@ export function startManualOpen(p: {
     const lamports = BigInt(j.lamports);
     if (risk && lamports > risk.maxSolPerTx) throw new Error(`işlem başına sınır ${Number(risk.maxSolPerTx) / 1e9} SOL`);
     const dryRun = config.mode !== "live" || !p.live;
+    // Settings → Auto TP/SL: applies when the request didn't set exits itself (the Telegram wizard doesn't ask).
+    if (j.takeProfitBps === undefined && j.stopLossBps === undefined) {
+      const [u] = await db.select({ prefs: schema.users.prefs }).from(schema.users).where(eq(schema.users.id, j.userId));
+      const auto = (u?.prefs as { autoTpSl?: { enabled: boolean; takeProfitPct: number; stopLossPct: number } } | undefined)?.autoTpSl;
+      if (auto?.enabled) {
+        j.takeProfitBps = Math.round(auto.takeProfitPct * 100);
+        j.stopLossBps = Math.round(auto.stopLossPct * 100);
+      }
+    }
     const label = j.origin === "telegram" ? "Telegram" : "Panel";
 
     // Pool geometry and the range in bins.

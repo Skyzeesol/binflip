@@ -180,5 +180,11 @@ export interface Account {
   tokensValue: number;
   netWorth: number;
   emptyAccounts?: number;
+  claimableSol?: number;
   error?: string;
+}
+
+export interface Prefs {
+  notify: Record<string, boolean>;
+  autoTpSl: { enabled: boolean; takeProfitPct: number; stopLossPct: number };
 }

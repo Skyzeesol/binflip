@@ -4,7 +4,7 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api, post } from "@/lib/api";
-import type { Account } from "@/lib/types";
+import type { Account, Prefs } from "@/lib/types";
 import { Amount, compact } from "@/components/Num";
 import { CandleChart } from "@/components/pools/Candles";
 import { closedAt } from "@/components/portfolio/Positions";
@@ -167,6 +167,15 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
 
   useEffect(() => {
     void api<Account>("/v1/account").then(setAcc).catch(() => undefined);
+    // Settings → Auto TP/SL prefills the exits of a new position.
+    void api<Prefs>("/v1/prefs")
+      .then((pr) => {
+        if (pr.autoTpSl.enabled) {
+          setTp(String(pr.autoTpSl.takeProfitPct));
+          setSl(String(pr.autoTpSl.stopLossPct));
+        }
+      })
+      .catch(() => undefined);
   }, []);
   useEffect(() => {
     if (!dlmm || !Number.isFinite(activeBin)) return;

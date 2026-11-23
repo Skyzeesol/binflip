@@ -67,6 +67,8 @@ export interface ManagementJob {
 
 /** api → executor: send SOL from the agent wallet to the main wallet (SWEEP_TO_ADDRESS only). */
 export interface WithdrawJob {
+  /** withdraw (default): send SOL to the main wallet; claim_sol: close empty token accounts for their rent. */
+  kind?: "withdraw" | "claim_sol";
   userId: string;
   /** Lamports; "max" = everything except the fee buffer. */
   lamports: string;
@@ -102,7 +104,12 @@ export interface OpenJob {
 export interface NotificationJob {
   userId: string;
   text: string;
+  /** What it is about, so the user can mute kinds (Settings → Bildirimler). */
+  kind?: NotificationKind;
 }
+
+export const NOTIFICATION_KINDS = ["copy_open", "copy_close", "copy_skip", "copy_fail", "manage", "swap", "sweep", "system"] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** BullMQ job ids may not contain ':'. */
 export const jobId = (...parts: string[]) => parts.join("_");

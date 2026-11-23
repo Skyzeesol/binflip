@@ -68,7 +68,7 @@ code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:
 .brand { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
 .brand-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); transform: rotate(45deg); }
 .nav { display: flex; gap: 4px; }
-.nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
+.nav a { padding: 6px 11px; border-radius: 8px; color: var(--muted); font-weight: 500; white-space: nowrap; }
 .nav a:hover { background: var(--surface-2); color: var(--text); }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
 .spacer { flex: 1; }
@@ -338,7 +338,7 @@ tr.grouped td { border-top: 0; }
   .pool-token { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-.search input { height: 32px; width: 260px; background: var(--surface-2); border-radius: 9px; font-size: 13px; }
+.search input { height: 32px; width: 220px; background: var(--surface-2); border-radius: 9px; font-size: 13px; }
 
 /* ── Discover / Smart LP ───────────────────────── */
 .disc-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -353,6 +353,11 @@ tr.grouped td { border-top: 0; }
 .sl-filters .field { min-width: 150px; }
 .sl-actions { display: flex; gap: 6px; margin-left: auto; }
 
+.bl-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.bl-list .chip { display: inline-flex; align-items: center; gap: 2px; font-family: ui-monospace, monospace; }
+
+@media (max-width: 1320px) { .search { display: none; } .topbar { gap: 12px; } }
+
 @media (max-width: 900px) {
   .pf-top { grid-template-columns: 1fr; }
   .detail-kpis { grid-template-columns: 1fr 1fr; }
@@ -364,6 +369,9 @@ tr.grouped td { border-top: 0; }
   .acct-pop { position: fixed; left: 12px; right: 12px; width: auto; top: 110px; }
   .pop { position: fixed; left: 12px; right: 12px; width: auto; top: 120px; max-height: calc(100vh - 140px); overflow: auto; }
   .filter-grid { grid-template-columns: 1fr; }
+  .pool-head .pair-top, .pool-head .pair-sub { flex-wrap: wrap; white-space: normal; }
+  .disc-bar .seg, .page-head .seg { max-width: 100%; overflow-x: auto; }
+  .disc-search { width: 100%; }
   .pool-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 

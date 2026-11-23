@@ -97,7 +97,9 @@ await runService("executor", async ({ config, log }) => {
       const r = await serial(() => handleEvent(db, job.data.leaderEventId, config, live, log));
       if (!r) return { duplicate: true };
       log.info({ leader: r.leaderLabel, kind: r.kind, outcome: r.outcome }, r.text);
-      await notifications.add("notify", { userId: r.userId, text: r.text }, { removeOnComplete: 1000 });
+      const kind =
+        r.outcome === "skipped" ? "copy_skip" : r.outcome === "failed" || r.outcome === "needs_review" ? "copy_fail" : r.kind === "open" || r.kind === "add" ? "copy_open" : r.kind === "remove" || r.kind === "close" ? "copy_close" : "manage";
+      await notifications.add("notify", { userId: r.userId, text: r.text, kind }, { removeOnComplete: 1000 });
       return { outcome: r.outcome };
     },
     // Serial: positions, balances and daily limits must not race.

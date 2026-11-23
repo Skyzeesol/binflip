@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { Queue } from "bullmq";
-import { QUEUES, TokenInfoClient, WSOL_MINT, type Config, type ManagementJob, type TokenInfo, type WithdrawJob } from "@binflip/core";
+import { NOTIFICATION_KINDS, QUEUES, TokenInfoClient, WSOL_MINT, type Config, type ManagementJob, type TokenInfo, type WithdrawJob } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
 import { history, positionMetrics, rangeVsPrice, summarize, type Group } from "./portfolioMath.js";
 
@@ -267,6 +267,23 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
     return { ok: true };
   });
 
+  // ── Preferences (Settings → Genel / Bildirimler) ───────────────────────
+  const Prefs = z.object({
+    notify: z.record(z.string(), z.boolean()).optional(),
+    autoTpSl: z.object({ enabled: z.boolean(), takeProfitPct: z.number().min(0.1).max(10_000), stopLossPct: z.number().min(0.1).max(100) }).optional(),
+  });
+  app.get("/v1/prefs", async (req) => {
+    const [u] = await db.select({ prefs: schema.users.prefs }).from(schema.users).where(eq(schema.users.id, req.userId!));
+    const p = (u?.prefs ?? {}) as z.infer<typeof Prefs>;
+    return { notify: { ...Object.fromEntries(NOTIFICATION_KINDS.map((k) => [k, true])), ...(p.notify ?? {}) }, autoTpSl: p.autoTpSl ?? { enabled: false, takeProfitPct: 10, stopLossPct: 10 } };
+  });
+  app.put("/v1/prefs", async (req) => {
+    const body = Prefs.parse(req.body);
+    const [u] = await db.select({ prefs: schema.users.prefs }).from(schema.users).where(eq(schema.users.id, req.userId!));
+    await db.update(schema.users).set({ prefs: { ...((u?.prefs ?? {}) as object), ...body } as never }).where(eq(schema.users.id, req.userId!));
+    return { ok: true };
+  });
+
   // ── Account panel: agent wallet balances, withdraw to the main wallet ──
   async function rpc<T>(method: string, params: unknown[]): Promise<T> {
     const res = await fetch(config.SOLANA_RPC_URL, {
@@ -323,7 +340,8 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
       const sol = bal.value / 1e9;
       const tokensValue = list.reduce((s, t) => s + (t.valueSol ?? 0), 0);
       // LP Agent: Total Net Worth = tokens held + open positions + unclaimed fees (+ rent, inside position value).
-      return { ...base, sol, tokens: list, tokensValue, netWorth: sol + tokensValue + positionsValue, emptyAccounts: accounts.length - held.length };
+      const emptyAccounts = accounts.length - held.length;
+      return { ...base, sol, tokens: list, tokensValue, netWorth: sol + tokensValue + positionsValue, emptyAccounts, claimableSol: emptyAccounts * 0.00203928 };
     } catch (err) {
       return { ...base, sol: null, tokens: [], tokensValue: 0, netWorth: positionsValue, error: (err as Error).message };
     }
@@ -337,6 +355,14 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
     const lamports = body.amountSol === "max" ? "max" : String(Math.round(body.amountSol * 1e9));
     await account.add("withdraw", { userId: req.userId!, lamports, requestId }, { jobId: `withdraw_${requestId}`, attempts: 1, removeOnComplete: { age: 86_400 } });
     return { ok: true, to: config.SWEEP_TO_ADDRESS };
+  });
+
+  /** LP Agent "Claim SOL": close empty token accounts of the agent wallet and get their rent back. */
+  app.post("/v1/account/claim-sol", async (req, reply) => {
+    if (config.mode !== "live" && !(await liveWallet(req.userId!))) return reply.code(400).send({ error: "deneme modunda bot cüzdanı yok" });
+    const requestId = randomUUID();
+    await account.add("claim_sol", { kind: "claim_sol", userId: req.userId!, lamports: "0", requestId }, { jobId: `claimsol_${requestId}`, attempts: 1, removeOnComplete: { age: 86_400 } });
+    return { ok: true };
   });
 
   async function liveWallet(userId: string) {

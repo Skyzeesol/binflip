@@ -83,6 +83,8 @@ export const users = pgTable("users", {
   displayName: text("display_name"),
   role: userRole("role").notNull().default("member"),
   telegramChatId: text("telegram_chat_id"),
+  /** Panel preferences: muted notification kinds, Auto TP/SL for positions opened from the panel. */
+  prefs: jsonb("prefs").$type<{ notify?: Record<string, boolean>; autoTpSl?: { enabled: boolean; takeProfitPct: number; stopLossPct: number } }>().notNull().default({}),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

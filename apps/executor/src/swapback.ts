@@ -39,7 +39,7 @@ export function startSwapBack(p: {
   const { db, builder, sender, config, log, notifications } = p;
   const jupiter = new JupiterClient();
   const queue = new Queue<SwapBackJob>(QUEUES.SWAPBACK, { connection: p.connection });
-  const notify = (userId: string, text: string) => notifications.add("notify", { userId, text }, { removeOnComplete: 1000 });
+  const notify = (userId: string, text: string) => notifications.add("notify", { userId, text, kind: /süpür/i.test(text) ? "sweep" : "swap" }, { removeOnComplete: 1000 });
   const update = (id: string, v: Partial<typeof schema.txs.$inferInsert>) => db.update(schema.txs).set(v).where(eq(schema.txs.id, id));
 
   const worker = new Worker<SwapBackJob>(

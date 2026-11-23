@@ -8,6 +8,9 @@ import { FeeHistory, type Group, type Metric, type Proto, type Range } from "@/c
 import { EMPTY_FILTER, HistoricalPositions, OpenPositions, type HistFilter, type RowActions } from "@/components/portfolio/Positions";
 import { ActionDialog, ExitsDialog, PositionDrawer, type ActionKind } from "@/components/portfolio/Dialogs";
 import { ago } from "@/lib/format";
+import { ShareCard } from "@/components/portfolio/ShareCard";
+import { chime, soundsOn } from "@/lib/sound";
+import { useRef } from "react";
 
 export default function PortfolioPage() {
   const [acc, setAcc] = useState<Account | null>(null);
@@ -24,6 +27,8 @@ export default function PortfolioPage() {
   const [action, setAction] = useState<{ p: PfPosition; kind: ActionKind } | null>(null);
   const [exits, setExits] = useState<PfPosition | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [share, setShare] = useState<PfPosition | null>(null);
+  const openIds = useRef<Set<string> | null>(null);
 
   const load = useCallback(async () => {
     const qs = new URLSearchParams({ status: "closed" });
@@ -40,6 +45,13 @@ export default function PortfolioPage() {
     ]);
     setAcc(a);
     setPf(p);
+    // Position Sounds: a chime when a position opens or closes while this page is open.
+    const ids = new Set(o.positions.map((x) => x.id));
+    if (openIds.current && soundsOn()) {
+      if ([...ids].some((id) => !openIds.current!.has(id))) chime("open");
+      else if ([...openIds.current].some((id) => !ids.has(id))) chime("close");
+    }
+    openIds.current = ids;
     setOpen(o.positions);
     setClosed(c);
     setUpdated(new Date().toISOString());
@@ -65,10 +77,12 @@ export default function PortfolioPage() {
             { label: "Compound", onClick: () => setAction({ p, kind: "compound" }), disabled: p.protocol !== "dlmm" },
             { label: "Azalt", onClick: () => setAction({ p, kind: "decrease" }) },
             { label: "TP / SL", onClick: () => setExits(p) },
+            { label: "PnL kartı", onClick: () => setShare(p) },
             { label: "Kapat (SOL'e)", onClick: () => setAction({ p, kind: "close" }), danger: true },
           ]
         : [
             { label: "Detaylar", onClick: () => setDetail(p.id) },
+            { label: "PnL kartı", onClick: () => setShare(p) },
             ...(p.position ? [{ label: "Solscan'de aç", onClick: () => window.open(`https://solscan.io/account/${p.position}`, "_blank") }] : []),
           ],
   };
@@ -133,6 +147,7 @@ export default function PortfolioPage() {
       {detail && <PositionDrawer id={detail} onClose={() => setDetail(null)} />}
       {action && <ActionDialog p={action.p} kind={action.kind} onClose={() => setAction(null)} onDone={done} />}
       {exits && <ExitsDialog p={exits} onClose={() => setExits(null)} onDone={done} />}
+      {share && <ShareCard p={share} onClose={() => setShare(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </main>
   );

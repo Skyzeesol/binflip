@@ -99,6 +99,13 @@
       "when": 1795468284671,
       "tag": "0013_flowery_lionheart",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795468660835,
+      "tag": "0014_skinny_polaris",
+      "breakpoints": true
     }
   ]
 }

@@ -50,7 +50,7 @@ export function startManagement(p: {
   serial: <T>(fn: () => Promise<T>) => Promise<T>;
 }) {
   const { db, builder, sender, config, log } = p;
-  const notify = (userId: string, text: string) => p.notifications.add("notify", { userId, text }, { removeOnComplete: 1000 });
+  const notify = (userId: string, text: string) => p.notifications.add("notify", { userId, text, kind: "manage" }, { removeOnComplete: 1000 });
   const opts = (onSignature: (s: string) => Promise<void>) => ({ priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature });
 
   const worker = new Worker<ManagementJob>(

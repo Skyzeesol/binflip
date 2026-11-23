@@ -93,6 +93,12 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
               {msg && <div className="small" style={{ marginTop: 6 }}>{msg}</div>}
             </>
           )}
+          {!!acc?.emptyAccounts && acc.mode === "live" && (
+            <div className="note">
+              {acc.emptyAccounts} boş token hesabında ~{(acc.claimableSol ?? 0).toFixed(4)} SOL rent var.{" "}
+              <button className="btn btn-sm" onClick={() => void post("/v1/account/claim-sol").then(() => setMsg("Claim SOL kuyruğa alındı.")).catch((e) => setMsg((e as Error).message))}>SOL'ü geri al</button>
+            </div>
+          )}
           <div className="acct-foot">
             <Link className="btn btn-sm btn-ghost" href="/settings" onClick={() => setOpen(false)}>Ayarlar</Link>
             <div className="spacer" />
