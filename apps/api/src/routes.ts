@@ -4,7 +4,7 @@ import { z } from "zod";
 import { Queue } from "bullmq";
 import { QUEUES, type Config } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
-import { NonceStore, SESSION_TTL_MS, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
+import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 import { Insights } from "./insights.js";
 
@@ -28,20 +28,23 @@ declare module "fastify" {
 export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db, config: Config) {
   const secret = config.SESSION_SECRET!;
   const nonces = new NonceStore();
+  const origins = config.PANEL_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean);
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const sol = (lamports: bigint | null) => (lamports === null ? null : Number(lamports) / 1e9);
 
   // ── Auth ───────────────────────────────────────────────────────────────
-  app.post("/v1/auth/nonce", async (req) => {
-    const { wallet } = z.object({ wallet: base58 }).parse(req.body);
-    const { nonce, issuedAt } = nonces.issue(wallet);
-    return { nonce, message: loginMessage(wallet, nonce, issuedAt, config.PANEL_DOMAIN) };
+  app.post("/v1/auth/nonce", async (req, reply) => {
+    const body = z.object({ wallet: base58, origin: z.string().optional() }).parse(req.body);
+    const origin = allowedOrigin(body.origin ?? origins[0]!, origins);
+    if (!origin) return reply.code(400).send({ error: `bu adres panele izinli değil (${body.origin}); sunucuda PANEL_ORIGINS'e ekleyin` });
+    const { nonce, issuedAt } = nonces.issue(body.wallet, origin);
+    return { nonce, message: loginMessage(body.wallet, nonce, issuedAt, origin) };
   });
 
   app.post("/v1/auth/verify", async (req, reply) => {
     const { wallet, nonce, signature } = z.object({ wallet: base58, nonce: z.string(), signature: z.string() }).parse(req.body);
     const n = nonces.take(nonce, wallet);
-    if (!n || !verifySignature(loginMessage(wallet, nonce, n.issuedAt, config.PANEL_DOMAIN), signature, wallet)) {
+    if (!n || !verifySignature(loginMessage(wallet, nonce, n.issuedAt, n.origin), signature, wallet)) {
       return reply.code(401).send({ error: "imza doğrulanamadı" });
     }
     const [user] = await db.select().from(schema.users).where(eq(schema.users.loginWallet, wallet));

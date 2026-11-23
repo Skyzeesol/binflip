@@ -26,8 +26,8 @@ const EnvSchema = z.object({
   API_PORT: z.coerce.number().int().positive().default(3001),
   /** Signs panel session cookies (api only). 32+ random characters; not a wallet key. */
   SESSION_SECRET: z.string().min(32).optional(),
-  /** Shown in the sign-in message the wallet signs. */
-  PANEL_DOMAIN: z.string().default("binflip"),
+  /** Comma-separated origins the panel is opened from; the sign-in message is bound to one of them. */
+  PANEL_ORIGINS: z.string().default("http://localhost:3000,http://127.0.0.1:3000"),
   /** Backup polling interval for leader signatures (gap recovery when WS is late or drops). */
   LISTENER_POLL_MS: z.coerce.number().int().min(1000).default(5000),
 

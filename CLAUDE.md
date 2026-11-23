@@ -482,3 +482,12 @@ LP Agent'ın %8 fee'si ve swap yönlendiricisi (OKX) taklit edilmez: fee'den kur
 - **M (DAMM V2 canlı) kodlandı:** `core/meteora/dammTx.ts` (cp-amm SDK: açma = pozisyon NFT + iki taraflı likidite, ekleme, % çekme, çek + kapat, claim, değer). Her yatırma zap (DAMM V2 iki token ister). Liderin kısmi çekmesi `liquidity_delta / (kalan + delta)` oranıyla aynalanıyor. Boş açılış zincire dokunmuyor, ilk fonlamada pozisyon oluşuyor. DAMM V2 kopyalarında TP/SL/trailing (değer = SDK withdraw quote + bekleyen fee). Flip yok (DLMM bin stratejisi). **Açılış mainnet simülasyonu OK (~110k CU)**; ekleme/çekme/claim/kapama simülasyonu açık bir pozisyon bulunca yapılacak.
 - **Ek bulgu: mainnet'te v1 işlemler var.** `getTransaction` artık `maxSupportedTransactionVersion: 1` ile çağrılıyor; aksi halde v1 kullanan liderlerin hareketleri okunamıyordu. Decoder v1 işlemleri sorunsuz çözüyor (gerçek işlemlerle kontrol edildi).
 - **Açık iş (VPS'te, Helius ile):** DAMM V2 ekleme / % çekme / claim / çek + kapat simülasyonları. Sandbox'taki public RPC'de açık bir DAMM V2 SOL pozisyonu ve sahibi bulunamadı (`getAllPositionsByPool` boş döndü, `getTokenLargestAccounts` 429). Betik mantığı: son swap'lardan SOL havuzlarını topla → `getAllPositionsByPool` → likiditesi olan pozisyonun NFT sahibini bul → o sahibi "owner" kabul edip `DammTxBuilder` işlemlerini sigVerify kapalı simüle et.
+
+---
+
+## 23. VPS (23 Kasım 2026)
+
+- Sunucu: Hetzner CPX22, Helsinki, Ubuntu 24.04, `5.222.2.209`. `deploy/bootstrap.sh` uygulandı (kullanıcı `binflip`, SSH sadece anahtar, ufw, fail2ban, Docker). Root kabuğu gerekirse: `docker run --rm -it --privileged --pid=host ubuntu:24.04 nsenter -t 1 -m -u -n -i -p bash` (binflip sudo'suz).
+- Stack dry-run'da çalışıyor, hepsi healthy. Helius RPC `.env`'de. Telegram bildirimleri + komutlar (`/durum`, `/stop`, `/devam`; sadece kayıtlı chat).
+- Panel: Tailscale `tailscale serve` ile `https://binflip.tail871aee.ts.net` (sadece tailnet). Giriş mesajı artık standart SIWS (domain = sayfanın host'u, ASCII statement, URI/Version/Chain ID); Phantom mobil eski formatı reddediyordu. İzinli adresler `PANEL_ORIGINS` (virgüllü). Cüzdan keşfi Wallet Standard ile (Jupiter öncelikli, Phantom/Solflare/Backpack), eski enjekte sağlayıcılar yedek.
+- Sırada: lider ekleme, gecikme ölçümü (`deploy/latency.sh`), DAMM V2 simülasyonları, bot cüzdanı + küçük canlı test (kullanıcının adımı).

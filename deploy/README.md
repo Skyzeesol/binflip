@@ -176,7 +176,16 @@ Panel internete açık değil. Bilgisayarında:
 ssh -N -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 binflip@SUNUCU_IP
 ```
 
-Sonra tarayıcıda `http://localhost:3000` → Phantom ile imzala → giriş.
+Sonra tarayıcıda `http://localhost:3000` → cüzdanınla (Jupiter, Phantom, Solflare…) imzala → giriş.
+
+**Tünelsiz, telefondan (Tailscale):** sunucuda `tailscale up` + `tailscale serve --bg 3000` ile panel `https://binflip.xxxx.ts.net` adresinde sadece senin Tailscale cihazlarına açılır.
+Bu adresi `.env`'e ekle, yoksa giriş reddedilir (imza bu adrese bağlanır):
+
+```bash
+echo "PANEL_ORIGINS=http://localhost:3000,https://binflip.xxxx.ts.net" >> .env && ./deploy/update.sh
+```
+
+Telefonda adresi Jupiter (ya da Phantom) uygulamasının içindeki tarayıcıdan aç.
 
 ## 9. Küçük canlı test (senin adımın)
 

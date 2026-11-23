@@ -2,7 +2,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import { describe, expect, it } from "vitest";
-import { NonceStore, SESSION_TTL_MS, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
+import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 
 const SECRET = "test-secret-at-least-32-characters-long";
 
@@ -12,7 +12,7 @@ describe("sign-in with Solana", () => {
   const sign = (msg: string, k = kp) => bs58.encode(nacl.sign.detached(new TextEncoder().encode(msg), k.secretKey));
 
   it("accepts the wallet's own signature, rejects others and tampering", () => {
-    const msg = loginMessage(wallet, "n1", "2026-11-22T00:00:00Z", "binflip.local");
+    const msg = loginMessage(wallet, "n1", "2026-11-22T00:00:00Z", "https://binflip.tail1.ts.net");
     expect(verifySignature(msg, sign(msg), wallet)).toBe(true);
     expect(verifySignature(msg, sign(msg, Keypair.generate()), wallet)).toBe(false);
     expect(verifySignature(msg + "x", sign(msg), wallet)).toBe(false);
@@ -26,6 +26,37 @@ describe("sign-in with Solana", () => {
     const { nonce: n2 } = store.issue(wallet);
     expect(store.take(n2, wallet)).not.toBeNull();
     expect(store.take(n2, wallet)).toBeNull(); // replay
+  });
+
+  it("message is standard SIWS: host as domain, ASCII statement, required fields", () => {
+    const msg = loginMessage(wallet, "abcdef0123456789", "2026-11-22T00:00:00.000Z", "https://binflip.tail1.ts.net");
+    const lines = msg.split("\n");
+    expect(lines[0]).toBe("binflip.tail1.ts.net wants you to sign in with your Solana account:");
+    expect(lines[1]).toBe(wallet);
+    expect(lines[3]).toMatch(/^[\x20-\x7e]+$/);
+    expect(lines.slice(5)).toEqual([
+      "URI: https://binflip.tail1.ts.net",
+      "Version: 1",
+      "Chain ID: mainnet",
+      "Nonce: abcdef0123456789",
+      "Issued At: 2026-11-22T00:00:00.000Z",
+    ]);
+    expect(loginMessage(wallet, "n", "t", "http://localhost:3000").split("\n")[0]).toMatch(/^localhost:3000 wants/);
+  });
+
+  it("only allowed origins can get a login message", () => {
+    const allowed = ["http://localhost:3000", "https://binflip.tail1.ts.net/"];
+    expect(allowedOrigin("https://binflip.tail1.ts.net", allowed)).toBe("https://binflip.tail1.ts.net");
+    expect(allowedOrigin("http://localhost:3000/login", allowed)).toBe("http://localhost:3000");
+    expect(allowedOrigin("https://evil.example", allowed)).toBeNull();
+    expect(allowedOrigin("http://binflip.tail1.ts.net", allowed)).toBeNull();
+    expect(allowedOrigin("not a url", allowed)).toBeNull();
+  });
+
+  it("nonce remembers the origin it was issued for", () => {
+    const store = new NonceStore();
+    const { nonce } = store.issue(wallet, "https://binflip.tail1.ts.net");
+    expect(store.take(nonce, wallet)?.origin).toBe("https://binflip.tail1.ts.net");
   });
 
   it("sessions verify, expire and cannot be forged", () => {

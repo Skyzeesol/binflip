@@ -5,7 +5,7 @@ import nacl from "tweetnacl";
 /**
  * Sign-In With Solana, minimal and dependency-light:
  *   1. client asks for a nonce for its wallet
- *   2. wallet signs `loginMessage(wallet, nonce, issuedAt)` (Phantom signMessage)
+ *   2. wallet signs `loginMessage(wallet, nonce, issuedAt, origin)` (Phantom signMessage)
  *   3. server verifies the ed25519 signature, the nonce (single use, 5 min) and
  *      that the wallet is a registered login wallet, then issues a session cookie.
  * The session is an HMAC-signed token, so the API stays stateless.
@@ -14,35 +14,53 @@ import nacl from "tweetnacl";
 const NONCE_TTL_MS = 5 * 60_000;
 export const SESSION_TTL_MS = 7 * 24 * 3600_000;
 
-export function loginMessage(wallet: string, nonce: string, issuedAt: string, domain: string): string {
+/**
+ * Standard SIWS / EIP-4361 text, so wallets (Phantom mobile is strict) accept it:
+ * the domain must equal the page's host and the statement must be ASCII.
+ */
+export function loginMessage(wallet: string, nonce: string, issuedAt: string, origin: string): string {
   return [
-    `${domain} wants you to sign in with your Solana account:`,
+    `${new URL(origin).host} wants you to sign in with your Solana account:`,
     wallet,
     "",
-    "Binflip paneline giriş. Bu imza işlem yapmaz ve ücret ödemez.",
+    "Binflip paneline giris. Bu imza islem yapmaz ve ucret odemez.",
     "",
+    `URI: ${origin}`,
+    "Version: 1",
+    "Chain ID: mainnet",
     `Nonce: ${nonce}`,
     `Issued At: ${issuedAt}`,
   ].join("\n");
 }
 
-export class NonceStore {
-  private nonces = new Map<string, { wallet: string; issuedAt: string; expires: number }>();
+/** Normalised origin (scheme://host[:port]) if it is one of the allowed panel origins. */
+export function allowedOrigin(origin: string, allowed: string[]): string | null {
+  let o: string;
+  try {
+    o = new URL(origin).origin;
+  } catch {
+    return null;
+  }
+  return allowed.some((a) => a.replace(/\/+$/, "") === o) ? o : null;
+}
 
-  issue(wallet: string): { nonce: string; issuedAt: string } {
+export class NonceStore {
+  private nonces = new Map<string, { wallet: string; origin: string; issuedAt: string; expires: number }>();
+
+  issue(wallet: string, origin = "http://localhost:3000"): { nonce: string; issuedAt: string } {
     this.gc();
     const nonce = randomBytes(16).toString("hex");
     const issuedAt = new Date().toISOString();
-    this.nonces.set(nonce, { wallet, issuedAt, expires: Date.now() + NONCE_TTL_MS });
+    this.nonces.set(nonce, { wallet, origin, issuedAt, expires: Date.now() + NONCE_TTL_MS });
     return { nonce, issuedAt };
   }
 
   /** Single use: a nonce is consumed whether or not verification succeeds. */
-  take(nonce: string, wallet: string): { issuedAt: string } | null {
+  take(nonce: string, wallet: string): { issuedAt: string; origin: string } | null {
     const n = this.nonces.get(nonce);
     this.nonces.delete(nonce);
     if (!n || n.wallet !== wallet || n.expires < Date.now()) return null;
-    return { issuedAt: n.issuedAt };
+    return { issuedAt: n.issuedAt, origin: n.origin };
   }
 
   private gc() {
