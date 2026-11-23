@@ -31,10 +31,10 @@ const MODES: Array<{ id: ManagementMode; hint: string }> = [
 const num = (v: string) => (v.trim() === "" ? null : Number(v));
 const str = (v: number | null | undefined) => (v === null || v === undefined ? "" : String(v));
 
-export function CopyDialog({ leader, onClose, onSaved }: { leader: Leader | null; onClose: () => void; onSaved: () => void }) {
+export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { leader: Leader | null; onClose: () => void; onSaved: () => void; initialAddress?: string }) {
   const isNew = !leader;
   const [step, setStep] = useState(0);
-  const [address, setAddress] = useState("");
+  const [address, setAddress] = useState(initialAddress);
   const [label, setLabel] = useState(leader?.label ?? "");
   const [s, setS] = useState<CopySettings>(leader?.settings ?? DEFAULT_SETTINGS);
   const [saving, setSaving] = useState(false);

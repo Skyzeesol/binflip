@@ -8,6 +8,8 @@ import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, v
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 import { Insights } from "./insights.js";
 import { registerPortfolio } from "./portfolio.js";
+import { registerWallets } from "./wallets.js";
+import { MeteoraData } from "./meteora.js";
 
 const COOKIE = "binflip_session";
 const RANGES = { "7D": 7, "1M": 30, "3M": 90, "1Y": 365, YTD: -1, ALL: 36500 } as const;
@@ -162,7 +164,9 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     return { ok: true };
   });
 
+  const meteora = new MeteoraData();
   registerPortfolio(app, db, config);
+  registerWallets(app, db, config, meteora);
 
   // ── Copy dialog insights (suggested %, High-frequency warning) ─────────
   const insights = new Insights(db, config);

@@ -292,6 +292,18 @@ tr.grouped td { border-top: 0; }
 .acct-withdraw input { height: 28px; }
 .acct-foot { display: flex; align-items: center; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 
+/* ── Copy LP (LP Agent "Copied Wallets") ───────── */
+.cw-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.cw-head h2 { margin: 0 0 2px; font-size: 24px; }
+.link-accent { color: var(--accent); font-weight: 600; }
+.link-accent:hover { text-decoration: underline; }
+.cw-table td { vertical-align: middle; }
+.cw-group td { background: color-mix(in srgb, var(--surface-2) 70%, transparent); font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--muted); padding: 8px 14px; }
+.cw-label { font-weight: 700; font-size: 15px; }
+.cw-label:hover { text-decoration: underline; }
+.cw-addr { display: flex; align-items: center; gap: 2px; }
+.cw-agent { word-break: break-all; max-width: 290px; line-height: 1.35; }
+
 @media (max-width: 900px) {
   .pf-top { grid-template-columns: 1fr; }
   .detail-kpis { grid-template-columns: 1fr 1fr; }

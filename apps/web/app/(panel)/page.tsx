@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { CopyDialog } from "@/components/CopyDialog";
 import { PnlChart } from "@/components/PnlChart";
 import { api, del, post } from "@/lib/api";
 import { MODE_TR, ago, reasonTr, short, signed, solFmt, time } from "@/lib/format";
-import type { Analysis, Leader, LogRow } from "@/lib/types";
+import type { Analysis, Leader, LogRow, Me } from "@/lib/types";
 
 type Tab = "wallets" | "analysis" | "logs";
 
@@ -63,6 +64,10 @@ export default function CopyLpPage() {
 }
 
 function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () => Promise<void>; onEdit: (l: Leader) => void }) {
+  const [agent, setAgent] = useState<{ label: string; publicKey: string } | null>(null);
+  useEffect(() => {
+    void api<Me>("/v1/me").then((m) => setAgent(m.agentWallets[0] ?? null)).catch(() => undefined);
+  }, []);
   const toggle = async (l: Leader) => {
     await post(`/v1/leaders/${l.id}/${l.status === "active" ? "pause" : "resume"}`);
     await reload();
@@ -72,66 +77,82 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
     await del(`/v1/leaders/${l.id}`);
     await reload();
   };
+  const active = leaders.filter((l) => l.status === "active");
+  const paused = leaders.filter((l) => l.status === "paused");
   const groups = [
-    { title: "Aktif", rows: leaders.filter((l) => l.status === "active") },
-    { title: "Duraklatıldı", rows: leaders.filter((l) => l.status === "paused") },
+    { title: "AKTİF", on: true, rows: active },
+    { title: "DURAKLATILDI", on: false, rows: paused },
   ].filter((g) => g.rows.length);
 
-  if (!leaders.length) return <div className="card empty">Henüz kopyalanan cüzdan yok. Sağ üstten bir lider cüzdan ekleyin.</div>;
-
   return (
-    <div className="stack">
-      {groups.map((g) => (
-        <div key={g.title} className="card">
-          <div className="card-pad small muted" style={{ paddingBottom: 0, fontWeight: 600 }}>{g.title}</div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cüzdan</th>
-                  <th>Kopya boyutu</th>
-                  <th>Otomatik çıkış</th>
-                  <th>Yönetim</th>
-                  <th className="num">Pozisyon</th>
-                  <th>Son hareket</th>
-                  <th className="num">PnL</th>
-                  <th>Kopya</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {g.rows.map((l) => {
-                  const z = l.settings;
-                  const size =
-                    z.sizing.mode === "fixed_sol" ? `${z.sizing.fixedSol} SOL sabit` : `Her pozisyonun %${z.sizing.percent ?? "—"}'i${z.sizing.maxPerTxSol ? `, en fazla ${z.sizing.maxPerTxSol} SOL` : ""}`;
-                  const exit = [z.exit.takeProfitPct ? `TP %${z.exit.takeProfitPct}` : null, z.exit.stopLossPct ? `SL %${z.exit.stopLossPct}` : null, z.exit.trailingStopPct ? `Trailing %${z.exit.trailingStopPct}` : null].filter(Boolean).join(" / ") || "Kapalı";
-                  return (
-                    <tr key={l.id} className="clickable" onClick={() => onEdit(l)}>
-                      <td>
-                        <div style={{ fontWeight: 600 }}>{l.label}</div>
-                        <div className="mono muted">{short(l.address, 6)}</div>
-                      </td>
-                      <td>{size}</td>
-                      <td>{exit}</td>
-                      <td><span className="badge badge-accent">{MODE_TR[z.management.mode]}{z.management.mode === "staged_flip" ? ` %${z.management.flipThresholdPct}` : ""}</span></td>
-                      <td className="num">{l.positions}</td>
-                      <td className="muted">{ago(l.lastActivity)}</td>
-                      <td className={`num ${l.pnlSol >= 0 ? "pos" : "neg"}`}>{signed(l.pnlSol)} SOL</td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <button className={`switch ${l.status === "active" ? "on" : ""}`} onClick={() => toggle(l)} aria-label="Kopyalamayı aç/kapat" />
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <button className="btn btn-sm btn-ghost" onClick={() => remove(l)} title="Kopyalamayı bırak">Bırak</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+    <section>
+      <div className="cw-head">
+        <div>
+          <h2>Kopyalanan Cüzdanlar</h2>
+          <div className="muted">{active.length} aktif, {paused.length} duraklatılmış</div>
         </div>
-      ))}
-    </div>
+        <Link className="link-accent" href="/smart-lp">Smart LP'de yeni cüzdan bul →</Link>
+      </div>
+      {!leaders.length ? (
+        <div className="card empty">Henüz kopyalanan cüzdan yok. Sağ üstten bir lider cüzdan ekleyin ya da Smart LP'den seçin.</div>
+      ) : (
+        <div className="card table-wrap">
+          <table className="cw-table">
+            <thead>
+              <tr>
+                <th>Cüzdan</th>
+                <th>Kopya boyutu</th>
+                <th>Otomatik çıkış</th>
+                <th className="num">Pozisyon</th>
+                <th className="num">Son hareket</th>
+                <th className="num">PnL</th>
+                <th>Kopya</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((g) => (
+                <Fragment key={g.title}>
+                  <tr className="cw-group"><td colSpan={8}><span className="dot" style={{ color: g.on ? "var(--pos)" : "var(--muted)" }} /> {g.title} · {g.rows.length}</td></tr>
+                  {g.rows.map((l) => {
+                    const z = l.settings;
+                    const size = z.sizing.mode === "fixed_sol" ? `Pozisyon başına ${z.sizing.fixedSol} SOL` : `Her pozisyonun %${z.sizing.percent ?? "—"}'i`;
+                    const exit = [z.exit.takeProfitPct ? `TP ${z.exit.takeProfitPct}%` : null, z.exit.stopLossPct ? `SL ${z.exit.stopLossPct}%` : null, z.exit.trailingStopPct ? `Trailing ${z.exit.trailingStopPct}%` : null].filter(Boolean).join(" · ");
+                    return (
+                      <tr key={l.id} className="clickable" onClick={() => onEdit(l)}>
+                        <td>
+                          <Link href={`/wallet/${l.address}`} className="cw-label" onClick={(e) => e.stopPropagation()}>{l.label}</Link>
+                          <div className="mono muted cw-addr">
+                            {short(l.address, 6)}
+                            <button className="btn btn-sm btn-ghost" onClick={(e) => (e.stopPropagation(), navigator.clipboard.writeText(l.address))} aria-label="Adresi kopyala">⧉</button>
+                          </div>
+                          {agent && <div className="mono muted small cw-agent">Agent: {agent.label}<br />{agent.publicKey}</div>}
+                        </td>
+                        <td>
+                          {size}
+                          {z.sizing.maxPerTxSol ? <div className="small muted">işlem başına en fazla {z.sizing.maxPerTxSol} SOL</div> : null}
+                          {z.management.mode !== "mirror" && <div><span className="badge badge-accent">{MODE_TR[z.management.mode]}{z.management.mode === "staged_flip" ? ` %${z.management.flipThresholdPct}` : ""}</span></div>}
+                        </td>
+                        <td className={exit ? "" : "muted"}>{exit || "Kapalı"}</td>
+                        <td className="num">{l.positions || "-"}</td>
+                        <td className="num">{ago(l.lastActivity)}</td>
+                        <td className={`num ${l.pnlSol >= 0.005 ? "pos" : l.pnlSol <= -0.005 ? "neg" : ""}`}>{Math.abs(l.pnlSol) < 0.005 ? "0.00" : l.pnlSol.toFixed(2)} SOL</td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <button className={`switch ${l.status === "active" ? "on" : ""}`} onClick={() => toggle(l)} aria-label="Kopyalamayı aç/kapat" />
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <button className="btn btn-sm btn-ghost" onClick={() => remove(l)} title="Kopyalamayı bırak">Bırak</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
