@@ -32,7 +32,7 @@ export interface LogRow {
   id: string;
   time: string;
   kind: string;
-  result: "Open" | "Closed" | "Holding" | "Skipped" | "Failed" | "Pending";
+  result: "Open" | "Closed" | "Holding" | "NotOpened" | "Skipped" | "Failed" | "Pending";
   status: string;
   reason: string | null;
   error: string | null;
@@ -81,6 +81,7 @@ export interface Risk {
   fundProtectionEnabled: boolean;
   fundProtectionLossPct: number;
   fundProtectionTrippedAt: string | null;
+  fundProtectionLimitSol: number | null;
   slippagePct: number;
   minOrganicScore: number | null;
   minMarketCapUsd: number | null;

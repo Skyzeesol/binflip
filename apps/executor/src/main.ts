@@ -17,6 +17,7 @@ import {
   type BuiltTxs,
   type Config,
   type ExecutionJob,
+  type ManagementJob,
   type LeaderAction,
   type Logger,
   type NotificationJob,
@@ -36,6 +37,7 @@ interface Live {
   agentWalletId: string;
   publicKey: string;
   swapback?: ReturnType<typeof startSwapBack>;
+  managementQueue?: Queue<ManagementJob>;
 }
 
 /**
@@ -61,6 +63,7 @@ await runService("executor", async ({ config, log }) => {
   };
   let management: ReturnType<typeof startManagement> | null = null;
   if (live) {
+    live.managementQueue = new Queue<ManagementJob>(QUEUES.MANAGEMENT, { connection });
     live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
     management = startManagement({ db, connection, builder: live.builder, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
   }
@@ -221,7 +224,11 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   await db.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
 
   const base = { userId: ev.userId, leaderLabel: leader.label, kind: action.kind };
-  if (plan.do === "skip") return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) };
+  if (plan.do === "skip") {
+    const paused = plan.reason === "low_balance" ? await autoPauseIfDry(db, ev.userId) : 0;
+    const extra = paused ? `\n⏸ Bot cüzdanı fonsuz: kopyalar art arda açılamadı, ${paused} cüzdan otomatik duraklatıldı. Bakiye yükleyip panelden tekrar açın.` : "";
+    return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) + extra };
+  }
 
   if (dryRun) {
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, true, t.id, null, undefined, exitRulesOf(cs));
@@ -249,6 +256,11 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "confirmed", feeLamports: BigInt(fees) })
       .where(eq(schema.txs.id, t.id));
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId, exitRulesOf(cs));
+    if (plan.do === "open" && plan.empty) {
+      // LP Agent: if the leader's funding add never comes, close the empty copy after ~1 min and get the rent back.
+      const [p] = await db.select({ id: schema.positions.id }).from(schema.positions).where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, action.position)));
+      if (p) await l.managementQueue!.add("manage", { positionId: p.id, kind: "close_empty", reason: "unfunded_empty", activeId: 0 }, { jobId: `mgmt_${p.id}_close_empty`, delay: 60_000, attempts: 3, backoff: { type: "exponential", delay: 10_000 } });
+    }
     // Like LP Agent: whatever token this exit produced is sold back to SOL (retried until sold).
     const after: string[] = [];
     if (plan.do === "rebalance" && leftoverToken && leftoverToken > 0n && tokenMint && action.pool) {
@@ -551,3 +563,21 @@ function exitRulesOf(cs: { takeProfitBps: number | null; stopLossBps: number | n
   return { takeProfitBps: cs.takeProfitBps, stopLossBps: cs.stopLossBps, trailingStopBps: cs.trailingStopBps };
 }
 
+
+/** LP Agent: copies that keep failing for lack of funds pause the user's wallets. */
+const AUTO_PAUSE_AFTER = 3;
+async function autoPauseIfDry(db: Db, userId: string): Promise<number> {
+  const recent = await db
+    .select({ reason: schema.txs.reason })
+    .from(schema.txs)
+    .where(and(eq(schema.txs.userId, userId), inArray(schema.txs.kind, ["open", "add"])))
+    .orderBy(sql`${schema.txs.createdAt} desc`)
+    .limit(AUTO_PAUSE_AFTER);
+  if (recent.length < AUTO_PAUSE_AFTER || !recent.every((r) => r.reason === "low_balance")) return 0;
+  const paused = await db
+    .update(schema.leaders)
+    .set({ status: "paused" })
+    .where(and(eq(schema.leaders.userId, userId), eq(schema.leaders.status, "active")))
+    .returning({ id: schema.leaders.id });
+  return paused.length;
+}

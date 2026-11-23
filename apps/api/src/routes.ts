@@ -190,7 +190,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
       id: tx.id,
       time: tx.createdAt,
       kind: tx.kind,
-      result: resultLabel(tx.status, position?.state ?? null),
+      result: resultLabel(tx.status, position?.state ?? null, tx.reason),
       status: tx.status,
       reason: tx.reason,
       error: tx.error,
@@ -314,6 +314,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
       fundProtectionEnabled: r.fundProtectionEnabled,
       fundProtectionLossPct: r.fundProtectionLossBps / 100,
       fundProtectionTrippedAt: r.fundProtectionTrippedAt,
+      fundProtectionLimitSol: sol(r.fundProtectionLossSol),
       slippagePct: r.slippageBps / 100,
       minOrganicScore: r.minOrganicScore,
       minMarketCapUsd: r.minMarketCapUsd,
@@ -331,8 +332,11 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     if (d.fundProtectionEnabled !== undefined) set.fundProtectionEnabled = d.fundProtectionEnabled;
     if (d.fundProtectionLossPct !== undefined) {
       set.fundProtectionLossBps = Math.round(d.fundProtectionLossPct * 100);
-      set.fundProtectionSince = new Date(); // LP Agent: saving restarts the count
+      // LP Agent: on save the % becomes a fixed SOL amount from that day's net worth and the count restarts.
+      set.fundProtectionSince = new Date();
       set.fundProtectionTrippedAt = null;
+      set.fundProtectionLossSol = null;
+      set.fundProtectionPeakLamports = 0n;
     }
     if (d.slippagePct !== undefined) set.slippageBps = Math.round(d.slippagePct * 100);
     for (const k of ["minOrganicScore", "minMarketCapUsd", "min24hVolumeUsd", "minHolders", "tokenBlacklist"] as const) {
@@ -347,6 +351,15 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     const { reason } = z.object({ reason: z.string().max(200).optional() }).parse(req.body ?? {});
     await risk(db, req.userId!);
     await db.update(schema.userRiskSettings).set({ killSwitch: true, killSwitchReason: reason ?? "panel" }).where(eq(schema.userRiskSettings.userId, req.userId!));
+    return { ok: true };
+  });
+
+  // LP Agent "Resume": start again with the same limit and a fresh count.
+  app.post("/v1/fund-protection/resume", async (req) => {
+    await db
+      .update(schema.userRiskSettings)
+      .set({ fundProtectionTrippedAt: null, fundProtectionSince: new Date(), fundProtectionPeakLamports: 0n })
+      .where(eq(schema.userRiskSettings.userId, req.userId!));
     return { ok: true };
   });
 
@@ -408,8 +421,22 @@ function sol0() {
   return z.number().positive().max(100_000);
 }
 
-function resultLabel(status: string, positionState: string | null): string {
-  if (status === "skipped") return "Skipped";
+/** LP Agent: "Not opened" = the copy could not open (funds, limits); "Skipped" = your settings turned it down. */
+const NOT_OPENED = new Set([
+  "low_balance",
+  "copy_size_zero",
+  "no_sizing_rule",
+  "position_cap_reached",
+  "daily_limit",
+  "fund_protection",
+  "kill_switch",
+  "non_sol_pair",
+  "damm_live_not_supported",
+  "send_failed",
+]);
+
+function resultLabel(status: string, positionState: string | null, reason: string | null = null): string {
+  if (status === "skipped") return reason && NOT_OPENED.has(reason) ? "NotOpened" : "Skipped";
   if (status === "failed") return "Failed";
   if (status === "planned" || status === "submitted" || status === "simulated") return positionState === "ACTIVE" ? "Open" : "Pending";
   if (positionState === "HOLDING") return "Holding";

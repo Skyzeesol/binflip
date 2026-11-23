@@ -107,6 +107,8 @@ export const userRiskSettings = pgTable("user_risk_settings", {
   fundProtectionLossSol: lamports("fund_protection_loss_sol"),
   fundProtectionSince: ts("fund_protection_since"),
   fundProtectionTrippedAt: ts("fund_protection_tripped_at"),
+  /** Highest cumulative realized PnL of closed copies since the count started (drawdown base). */
+  fundProtectionPeakLamports: bigint("fund_protection_peak_lamports", { mode: "bigint" }).notNull().default(sql`0`),
 
   // Account-wide token filters, applied before any open/add (LP Agent defaults).
   minOrganicScore: integer("min_organic_score").default(50),

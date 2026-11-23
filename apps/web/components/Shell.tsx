@@ -69,6 +69,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
         )}
       </header>
+      {risk?.fundProtectionTrippedAt && (
+        <div className="page" style={{ paddingBottom: 0 }}>
+          <div className="banner banner-neg">
+            Durduruldu: zarar limiti doldu. Yeni açma, ekleme, compound ve flip yapılmıyor; çıkışlar liderleri takip ediyor.
+            <div className="spacer" />
+            <Link className="btn btn-sm" href="/settings#limits">Limit / Devam et</Link>
+          </div>
+        </div>
+      )}
       {risk?.killSwitch && (
         <div className="page" style={{ paddingBottom: 0 }}>
           <div className="banner banner-neg">Acil durdurma açık: yeni girişler yapılmıyor, çıkışlar liderleri takip ediyor.</div>

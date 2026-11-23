@@ -16,8 +16,19 @@ export default function CopyLpPage() {
 
   const loadLeaders = useCallback(() => api<Leader[]>("/v1/leaders").then(setLeaders), []);
   useEffect(() => {
-    void loadLeaders().catch(() => undefined);
+    void loadLeaders()
+      .then(() => undefined)
+      .catch(() => undefined);
   }, [loadLeaders]);
+  // Deep link from a "fix" button: /?edit=<leaderId> opens that wallet's copy dialog.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("edit");
+    const l = id ? leaders.find((x) => x.id === id) : undefined;
+    if (l) {
+      setEditing(l);
+      window.history.replaceState(null, "", "/");
+    }
+  }, [leaders]);
 
   return (
     <main className="page">
@@ -195,6 +206,7 @@ const RESULT_TR: Record<string, { label: string; cls: string }> = {
   Open: { label: "Açık", cls: "badge-accent" },
   Closed: { label: "Kapandı", cls: "" },
   Holding: { label: "Tutuluyor", cls: "badge-dry" },
+  NotOpened: { label: "Açılmadı", cls: "badge-dry" },
   Skipped: { label: "Atlandı", cls: "" },
   Failed: { label: "Başarısız", cls: "badge-neg" },
   Pending: { label: "Bekliyor", cls: "badge-dry" },
@@ -253,6 +265,34 @@ function LogsTab({ leaders }: { leaders: Leader[] }) {
   );
 }
 
+/** LP Agent "Fix it in one click": a button next to the reason that leads to the fix. */
+const FIX: Record<string, { label: string; href: (leaderId: string | null) => string }> = {
+  low_balance: { label: "Bakiye yükle", href: () => "/settings#wallet" },
+  send_failed: { label: "Slippage'ı yükselt", href: () => "/settings#limits" },
+  tokens_left_retrying: { label: "Slippage'ı yükselt", href: () => "/settings#limits" },
+  fund_protection: { label: "Limiti düzenle", href: () => "/settings#limits" },
+  daily_limit: { label: "Limiti düzenle", href: () => "/settings#limits" },
+  copy_size_zero: { label: "Kopya boyutunu düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  position_cap_reached: { label: "Kopya boyutunu düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  no_sizing_rule: { label: "Kopya boyutunu düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  meme_protection: { label: "Kopya ayarlarını düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  strategy_not_copied: { label: "Kopya ayarlarını düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  pool_type_not_copied: { label: "Kopya ayarlarını düzenle", href: (id) => `/?edit=${id ?? ""}` },
+  token_filter: { label: "Filtreleri düzenle", href: () => "/settings#filters" },
+  token_blacklisted: { label: "Kara listeyi düzenle", href: () => "/settings#filters" },
+  kill_switch: { label: "Acil durdurmayı kaldır", href: () => "/settings#limits" },
+};
+
+function FixButton({ reason, leaderId }: { reason: string | null; leaderId: string | null }) {
+  const fix = reason ? FIX[reason] : undefined;
+  if (!fix) return null;
+  return (
+    <a className="btn btn-sm" style={{ marginLeft: 8 }} href={fix.href(leaderId)} onClick={(e) => e.stopPropagation()}>
+      {fix.label}
+    </a>
+  );
+}
+
 function FragmentRow({ r, open, onToggle }: { r: LogRow & { more: number }; open: boolean; onToggle: () => void }) {
   const res = RESULT_TR[r.result] ?? { label: r.result, cls: "" };
   return (
@@ -266,7 +306,11 @@ function FragmentRow({ r, open, onToggle }: { r: LogRow & { more: number }; open
         </td>
         <td>{KIND_TR[r.kind] ?? r.kind}</td>
         <td><span className={`badge ${res.cls}`}>{res.label}</span></td>
-        <td>{reasonTr(r.reason)}{r.more ? <span className="muted small"> · +{r.more} aynı nedenle</span> : null}</td>
+        <td>
+          {reasonTr(r.reason)}
+          {r.more ? <span className="muted small"> · +{r.more} aynı nedenle</span> : null}
+          <FixButton reason={r.reason} leaderId={r.source.id} />
+        </td>
         <td className={`num ${r.solDelta !== null && r.solDelta > 0 ? "pos" : ""}`}>{r.solDelta === null ? "—" : signed(r.solDelta)}</td>
         <td className="mono muted">{short(r.position?.pool, 4)}</td>
       </tr>

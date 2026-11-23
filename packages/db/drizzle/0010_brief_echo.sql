@@ -1,0 +1,1 @@
+ALTER TABLE "user_risk_settings" ADD COLUMN "fund_protection_peak_lamports" bigint DEFAULT 0 NOT NULL;

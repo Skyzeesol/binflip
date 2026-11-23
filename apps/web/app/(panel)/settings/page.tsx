@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, patch, put } from "@/lib/api";
+import { api, patch, post, put } from "@/lib/api";
 import { MODE_TR, short } from "@/lib/format";
 import type { ManagementMode, Me, Risk } from "@/lib/types";
 
@@ -60,6 +60,12 @@ export default function SettingsPage() {
     }
   };
 
+  const resume = async () => {
+    await post("/v1/fund-protection/resume");
+    setRisk(await api<Risk>("/v1/risk"));
+    flash("Fon koruması yeniden başladı (aynı limit, sıfır sayaç)");
+  };
+
   const saveManual = async () => {
     if (!manual) return;
     try {
@@ -83,7 +89,7 @@ export default function SettingsPage() {
         {error && <span className="badge badge-neg">{error}</span>}
       </div>
 
-      <section className="card card-pad stack">
+      <section id="wallet" className="card card-pad stack">
         <h3 style={{ margin: 0 }}>Bot cüzdanı</h3>
         {me.agentWallets.length ? (
           me.agentWallets.map((w) => (
@@ -98,8 +104,17 @@ export default function SettingsPage() {
         <div className="note">Mod: <b>{me.mode === "live" ? "CANLI" : "DENEME"}</b>. Canlıya geçiş sadece sunucuda yapılır (<code>docker-compose.live.yml</code>); panelden açılamaz.</div>
       </section>
 
-      <section className="card card-pad stack">
+      <section id="limits" className="card card-pad stack">
         <h3 style={{ margin: 0 }}>Limitler ve fon koruması</h3>
+        {risk.fundProtectionTrippedAt ? (
+          <div className="banner banner-neg" style={{ margin: 0 }}>
+            Durduruldu: zarar limiti doldu. Yeni kopyalar açılmıyor, çıkışlar liderleri takip ediyor.
+            <div className="spacer" />
+            <button className="btn btn-sm" onClick={resume}>Devam et</button>
+          </div>
+        ) : risk.fundProtectionEnabled && risk.fundProtectionLimitSol !== null ? (
+          <div className="note">Limit: zirveden {risk.fundProtectionLimitSol.toFixed(4)} SOL kayıp (kaydedildiği günkü net varlığın %{risk.fundProtectionLossPct}'i).</div>
+        ) : null}
         <div className="row">
           <label className="field">İşlem başı en fazla (SOL)<input type="number" min={0} step="0.1" value={risk.maxSolPerTx} onChange={(e) => r("maxSolPerTx", Number(e.target.value))} /><span className="hint">Hiçbir açma/ekleme bunu geçemez (güvenlik sınırı).</span></label>
           <label className="field">Günlük en fazla (SOL)<input type="number" min={0} step="0.5" value={risk.maxSolPerDay} onChange={(e) => r("maxSolPerDay", Number(e.target.value))} /></label>
@@ -111,7 +126,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="card card-pad stack">
+      <section id="filters" className="card card-pad stack">
         <h3 style={{ margin: 0 }}>Token filtreleri</h3>
         <p className="muted small" style={{ margin: 0 }}>Bir token bunlardan birini geçemezse kopya atlanır. (Kaydedilir; fiyat verisi gerektiren filtreler sonraki sürümde uygulanacak.)</p>
         <div className="row">

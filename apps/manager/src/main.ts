@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, lt } from "drizzle-orm";
 import { PublicKey } from "@solana/web3.js";
 import {
   DlmmTxBuilder,
@@ -23,6 +23,7 @@ import {
   type ManagementMode,
   readLivePosition,
   shouldCompound,
+  evaluateFundProtection,
   valueInY,
   type NotificationJob,
   type PoolInfo,
@@ -109,6 +110,16 @@ async function manageAll(
   management: Queue<ManagementJob>,
   compoundMin: bigint,
 ) {
+  if (dryRun) {
+    // LP Agent: an empty copy whose funding never came is closed after ~1 minute.
+    const stale = await db
+      .update(schema.positions)
+      .set({ state: "CLOSED", closedAt: new Date(), closeReason: "unfunded_empty" })
+      .where(and(eq(schema.positions.state, "OPENING"), eq(schema.positions.dryRun, true), eq(schema.positions.depositedSol, 0n), lt(schema.positions.openedAt, new Date(Date.now() - 60_000))))
+      .returning({ id: schema.positions.id, userId: schema.positions.userId });
+    for (const p of stale) await notify(p.userId, "[DENEME] Fonlama gelmedi: boş kopya 1 dk sonra kapatılırdı (rent geri alınır).");
+  }
+
   const rows = await db
     .select()
     .from(schema.positions)
@@ -127,6 +138,7 @@ async function manageAll(
   }
 
   const manual = new Map((await db.select().from(schema.manualSettings)).map((m) => [m.userId, m]));
+  const tripped = await fundProtectionTick(db, builder, dryRun, log, notify);
 
   for (const { positions: pos, copy_settings: copySet, leaders: leader } of rows) {
     const info = pools.get(pos.pool);
@@ -144,7 +156,7 @@ async function manageAll(
     const label = leader?.label ?? "manuel";
 
     if (!dryRun) {
-      await manageLive(db, builder, pos, mode, exits, flip, management, log, cs?.compoundIntervalMinutes ?? null, compoundMin);
+      await manageLive(db, builder, pos, mode, exits, flip, management, log, cs?.compoundIntervalMinutes ?? null, compoundMin, tripped.has(pos.userId));
       continue;
     }
 
@@ -162,7 +174,9 @@ async function manageAll(
     const d = decide(state, mode, exits, flip);
     sim.peakY = Math.max(sim.peakY, d.valueY);
 
-    if (d.do === "flip") {
+    if (d.do === "flip" && tripped.has(pos.userId)) {
+      // LP Agent: once the loss limit is hit, only exits keep running.
+    } else if (d.do === "flip") {
       const next = applyFlip(state, d);
       sim = { ...sim, bins: next.bins, lastFlipActiveId: next.lastFlipActiveId, lowerBinId: next.lowerBinId, upperBinId: next.upperBinId, flips: sim.flips + 1 };
       await record(db, pos, `flip_${pos.id}_${info.activeBinId}`, "flip", d);
@@ -254,6 +268,7 @@ async function manageLive(
   log: Logger,
   compoundMinutes: number | null,
   compoundMin: bigint,
+  fundProtectionTripped = false,
 ) {
   if (!pos.ourPosition) return;
   const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
@@ -264,6 +279,8 @@ async function manageLive(
     .set({ peakValue: String(peak / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
     .where(eq(schema.positions.id, pos.id));
   await snapshot(db, pos, d.valueY);
+  // Loss limit hit: exits only (no flips, no compounds), like LP Agent.
+  if (fundProtectionTripped && d.do !== "close") return;
   if (d.do === "hold") {
     const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: compoundMinutes, minLamports: compoundMin });
     if (c.do === "compound") {
@@ -344,4 +361,59 @@ async function discoverManual(db: Db, builder: DlmmTxBuilder, log: Logger, notif
       await notify(w.userId, `🧭 Bot cüzdanında yeni pozisyon bulundu ve yönetime alındı: ${p.pool.slice(0, 6)}… (${(value / 1e9).toFixed(4)} SOL, mod ${m?.managementMode ?? "staged_flip"}). PnL bu değerden ölçülecek.`);
     }
   }
+}
+
+/**
+ * Fund protection (LP Agent): realized PnL of copies closed since the count
+ * started, measured from its peak. Trips → new opens/adds/compounds/rebalances
+ * and flips stop; exits keep following leaders. Returns the users tripped now.
+ */
+async function fundProtectionTick(
+  db: Db,
+  builder: DlmmTxBuilder,
+  dryRun: boolean,
+  log: Logger,
+  notify: (userId: string, text: string) => Promise<void>,
+): Promise<Set<string>> {
+  const tripped = new Set<string>();
+  const risks = await db.select().from(schema.userRiskSettings).where(eq(schema.userRiskSettings.fundProtectionEnabled, true));
+  for (const r of risks) {
+    if (r.fundProtectionTrippedAt) {
+      tripped.add(r.userId);
+      continue;
+    }
+    const since = r.fundProtectionSince ?? new Date();
+    if (!r.fundProtectionSince) await db.update(schema.userRiskSettings).set({ fundProtectionSince: since }).where(eq(schema.userRiskSettings.userId, r.userId));
+    const mine = await db.select().from(schema.positions).where(and(eq(schema.positions.userId, r.userId), eq(schema.positions.dryRun, dryRun)));
+    const realized = mine
+      .filter((p) => p.state === "CLOSED" && p.leaderId && p.closedAt && p.closedAt >= since && p.currentValueSol !== null)
+      .reduce((s, p) => s + BigInt(Math.round(Number(p.currentValueSol) * 1e9)) - p.depositedSol, 0n);
+    let netWorth = mine.filter((p) => p.state === "ACTIVE" && p.currentValueSol !== null).reduce((s, p) => s + BigInt(Math.round(Number(p.currentValueSol) * 1e9)), 0n);
+    if (!dryRun) {
+      const [w] = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.userId, r.userId));
+      if (w) netWorth += BigInt(await builder.connection.getBalance(new PublicKey(w.publicKey)).catch(() => 0));
+    }
+    if (r.fundProtectionLossSol === null && netWorth === 0n) continue; // nothing to size the limit from yet
+    const st = evaluateFundProtection({
+      realizedLamports: realized,
+      peakLamports: r.fundProtectionPeakLamports,
+      limitLamports: r.fundProtectionLossSol,
+      lossBps: r.fundProtectionLossBps,
+      netWorthLamports: netWorth,
+    });
+    await db
+      .update(schema.userRiskSettings)
+      .set({
+        fundProtectionPeakLamports: st.peakLamports,
+        fundProtectionLossSol: st.limitLamports,
+        ...(st.tripped ? { fundProtectionTrippedAt: new Date() } : {}),
+      })
+      .where(eq(schema.userRiskSettings.userId, r.userId));
+    if (st.tripped) {
+      tripped.add(r.userId);
+      log.warn({ userId: r.userId, drawdownSol: Number(st.drawdownLamports) / 1e9 }, "fund protection tripped");
+      await notify(r.userId, `🛑 Zarar limiti doldu: kapanan kopyalardaki kayıp zirveden ${(Number(st.drawdownLamports) / 1e9).toFixed(4)} SOL (limit ${(Number(st.limitLamports) / 1e9).toFixed(4)} SOL). Yeni açma/ekleme/compound/flip durdu, çıkışlar liderleri takip ediyor. Panelden "Devam et" ile yeniden başlatabilirsiniz.`);
+    }
+  }
+  return tripped;
 }

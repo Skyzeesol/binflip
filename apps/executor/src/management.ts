@@ -78,6 +78,7 @@ export function startManagement(p: {
     if (!pos.leaderId && manual && !manual.enabled) return { skipped: "manual_off" };
     const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
+    if (j.kind === "close_empty") return closeIfStillEmpty(pos, label);
     if (pos.state !== "ACTIVE" || !pos.ourPosition || pos.dryRun) return { skipped: `state_${pos.state}` };
 
     const [existing] = await db.select().from(schema.txs).where(and(eq(schema.txs.userId, pos.userId), eq(schema.txs.idempotencyKey, key)));
@@ -162,6 +163,18 @@ export function startManagement(p: {
       .where(eq(schema.positions.id, pos.id));
     await notify(pos.userId, `[CANLI] ${label}: ${j.reason.replace("_", " ")} yapıldı (${progress.signatures.length} işlem); token fiyatın üstüne kondu.`);
     return { flipped: true };
+  }
+
+  /** LP Agent: an empty copy whose funding never came is closed after ~1 minute; the rent comes back. */
+  async function closeIfStillEmpty(pos: typeof schema.positions.$inferSelect, label: string) {
+    if (pos.state !== "OPENING" || !pos.ourPosition || pos.dryRun) return { skipped: "funded_or_gone" };
+    const chain = await builder.positionBins(pos.pool, pos.ourPosition);
+    if (chain.bins.some((b) => b.x > 0 || b.y > 0)) return { skipped: "funded" };
+    const built = await builder.remove({ pool: pos.pool, position: pos.ourPosition, bps: 10_000, close: true });
+    for (const [i, tx] of built.txs.entries()) await sender.send(tx, built.extraSigners.get(i) ?? [], { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS });
+    await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "unfunded_empty" }).where(eq(schema.positions.id, pos.id));
+    await notify(pos.userId, `[CANLI] ${label}: fonlama gelmedi, boş kopya kapatıldı ve rent geri alındı.`);
+    return { closedEmpty: true };
   }
 
   /** Claim fees, add SOL fees back below price and token fees above it (or sell them). */

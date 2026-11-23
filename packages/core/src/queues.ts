@@ -37,7 +37,7 @@ export const SWAPBACK_MAX_ATTEMPTS = 1000;
 /** manager → executor: act on a management decision. The executor re-checks it on chain first. */
 export interface ManagementJob {
   positionId: string;
-  kind: "close" | "flip" | "compound";
+  kind: "close" | "flip" | "compound" | "close_empty";
   reason: string;
   /** Active bin when the manager decided; part of the job id so one bin = one action. */
   activeId: number;
