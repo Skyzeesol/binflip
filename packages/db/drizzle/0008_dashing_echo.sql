@@ -1,0 +1,1 @@
+ALTER TABLE "positions" ADD COLUMN "current_value_sol" numeric(30, 9);

@@ -174,7 +174,7 @@ async function manageAll(
     if (d.do === "close") {
       await db
         .update(schema.positions)
-        .set({ state: "CLOSED", closedAt: new Date(), closeReason: d.reason, simState: sim as never, lastManagedAt: new Date() })
+        .set({ state: "CLOSED", closedAt: new Date(), closeReason: d.reason, simState: sim as never, currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
         .where(eq(schema.positions.id, pos.id));
       await record(db, pos, `close_${pos.id}`, "close", d);
       await notify(pos.userId, `[DENEME] ${label}: ${reasonTr(d.reason)} → pozisyonu kapatırdım (PnL %${(d.pnlBps / 100).toFixed(2)}, ${(d.valueY / 1e9).toFixed(4)} SOL)`);
@@ -184,9 +184,19 @@ async function manageAll(
 
     await db
       .update(schema.positions)
-      .set({ simState: sim as never, peakValue: String(sim.peakY / 1e9), lastManagedAt: new Date() })
+      .set({ simState: sim as never, peakValue: String(sim.peakY / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
       .where(eq(schema.positions.id, pos.id));
+    await snapshot(db, pos, d.valueY);
   }
+}
+
+/** One pnl_snapshots row per position every ~5 minutes (for the Analysis chart). */
+const lastSnap = new Map<string, number>();
+async function snapshot(db: Db, pos: typeof schema.positions.$inferSelect, valueY: number) {
+  const now = Date.now();
+  if (now - (lastSnap.get(pos.id) ?? 0) < 5 * 60_000) return;
+  lastSnap.set(pos.id, now);
+  await db.insert(schema.pnlSnapshots).values({ userId: pos.userId, positionId: pos.id, valueSol: BigInt(Math.round(valueY)), activeBinId: null });
 }
 
 function initSim(pos: typeof schema.positions.$inferSelect, info: PoolInfo): SimState {
@@ -252,8 +262,9 @@ async function manageLive(
   const peak = Math.max(state.peakY, d.valueY);
   await db
     .update(schema.positions)
-    .set({ peakValue: String(peak / 1e9), lastManagedAt: new Date() })
+    .set({ peakValue: String(peak / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
     .where(eq(schema.positions.id, pos.id));
+  await snapshot(db, pos, d.valueY);
   if (d.do === "hold") {
     const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: compoundMinutes, minLamports: compoundMin });
     if (c.do === "compound") {

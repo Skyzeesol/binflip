@@ -297,6 +297,8 @@ export const positions = pgTable(
     simState: jsonb("sim_state").$type<Record<string, unknown>>(),
     lastManagedAt: ts("last_managed_at"),
     lastCompoundAt: ts("last_compound_at"),
+    /** Latest value the manager computed (SOL), incl. unclaimed fees. Final value once CLOSED. */
+    currentValueSol: numeric("current_value_sol", { precision: 30, scale: 9 }),
     openedAt: ts("opened_at"),
     closedAt: ts("closed_at"),
     closeReason: text("close_reason"),
