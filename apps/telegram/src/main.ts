@@ -2,14 +2,15 @@ import { Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { QUEUES, runService, type NotificationJob } from "@binflip/core";
 import { createDb } from "@binflip/db";
+import { CommandPoller } from "./commands.js";
 
 /**
  * telegram — delivers notifications. Without TELEGRAM_BOT_TOKEN it only logs
  * them, so the dry-run feed is visible in `docker compose logs telegram`.
- * Commands (/status /pause /stop) come with the bot token, after the panel.
+ * With the token, commands from the configured chat only: /durum /stop /devam /yardim.
  */
 await runService("telegram", async ({ config, log }) => {
-  const { ping, close } = createDb(config.DATABASE_URL, { max: 2 });
+  const { db, ping, close } = createDb(config.DATABASE_URL, { max: 2 });
   const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const token = config.TELEGRAM_BOT_TOKEN;
   const chatId = config.TELEGRAM_CHAT_ID;
@@ -33,8 +34,10 @@ await runService("telegram", async ({ config, log }) => {
   worker.on("failed", (job, err) => log.warn({ err: err.message, attempts: job?.attemptsMade }, "notification failed"));
 
   await ping();
+  const commands = token && chatId ? new CommandPoller(token, chatId, db, log) : null;
+  commands?.start();
   return {
     checks: { postgres: ping, redis: async () => void (await connection.ping()) },
-    cleanups: [() => close(), async () => void (await connection.quit()), () => worker.close()],
+    cleanups: [async () => commands?.stop(), () => close(), async () => void (await connection.quit()), () => worker.close()],
   };
 });
