@@ -20,6 +20,8 @@ import { createDb, schema } from "@binflip/db";
 import { LogsWatcher } from "./logsWatcher.js";
 
 const METEORA_PROGRAMS = [PROGRAM_IDS.DLMM, PROGRAM_IDS.DAMM_V2];
+/** Redis client used to flag leader token sells (set when the service starts). */
+let sellFlags: Redis;
 const REFRESH_LEADERS_MS = 30_000;
 
 /**
@@ -205,8 +207,6 @@ async function flagTokenSells(tx: RawTransaction, address: string, actions: Lead
     if ((post.get(mint) ?? 0n) < before) await sellFlags.set(leaderSoldKey(address, mint), String(Date.now()), "EX", 600);
   }
 }
-
-let sellFlags: Redis;
 
 function bigintToString(_k: string, v: unknown) {
   return typeof v === "bigint" ? v.toString() : v;
