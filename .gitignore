@@ -7,3 +7,4 @@ dist/
 secrets/
 keystore/
 coverage/
+.next/
