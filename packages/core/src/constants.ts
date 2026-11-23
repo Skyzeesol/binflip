@@ -19,6 +19,8 @@ export const QUEUES = {
   SWAPBACK: "swapback",
   /** manager → executor: a management decision (flip / exit) for one of our live positions. */
   MANAGEMENT: "management",
+  /** api → executor: account actions asked in the panel (withdraw to the main wallet). */
+  ACCOUNT: "account",
 } as const;
 
 /** Position lifecycle (HANDOFF §5). */

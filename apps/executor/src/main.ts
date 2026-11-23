@@ -32,6 +32,7 @@ import {
 } from "@binflip/core";
 import { createDb, schema, type Db } from "@binflip/db";
 import { startSwapBack } from "./swapback.js";
+import { startAccount } from "./account.js";
 import { startManagement } from "./management.js";
 
 type PositionRow = typeof schema.positions.$inferSelect;
@@ -69,10 +70,12 @@ await runService("executor", async ({ config, log }) => {
     return run;
   };
   let management: ReturnType<typeof startManagement> | null = null;
+  let account: ReturnType<typeof startAccount> | null = null;
   if (live) {
     live.managementQueue = new Queue<ManagementJob>(QUEUES.MANAGEMENT, { connection });
     live.swapback = startSwapBack({ db, connection, builder: live.builder, sender: live.sender, publicKey: live.publicKey, config, log, notifications });
     management = startManagement({ db, connection, builder: live.builder, damm: live.damm, sender: live.sender, swapback: live.swapback, config, log, notifications, serial });
+    account = startAccount({ db, connection, sender: live.sender, publicKey: live.publicKey, config, log, notifications, serial });
   }
 
   const worker = new Worker<ExecutionJob>(
@@ -103,6 +106,7 @@ await runService("executor", async ({ config, log }) => {
       () => worker.close(),
       ...(live?.swapback ? [() => live.swapback!.close()] : []),
       ...(management ? [() => management!.close()] : []),
+      ...(account ? [() => account!.close()] : []),
     ],
   };
 });
@@ -307,6 +311,13 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "confirmed", feeLamports: BigInt(fees) })
       .where(eq(schema.txs.id, t.id));
     await applyToPositions(db, plan, action, ev, cs.managementMode, ours, false, t.id, ourPosition, l.agentWalletId, exitRulesOf(cs));
+    if (ours && (plan.do === "claim" || plan.do === "close") && ours.unclaimedFeeSol && Number(ours.unclaimedFeeSol) > 0) {
+      // Portfolio "Fee Earned": the fees this claim/close took out (last value the manager read).
+      await db
+        .update(schema.positions)
+        .set({ claimedFeeSol: sql`${schema.positions.claimedFeeSol} + ${ours.unclaimedFeeSol}::numeric`, unclaimedFeeSol: "0" })
+        .where(eq(schema.positions.id, ours.id));
+    }
     if (plan.do === "open" && plan.empty) {
       // LP Agent: if the leader's funding add never comes, close the empty copy after ~1 min and get the rent back.
       const [p] = await db.select({ id: schema.positions.id }).from(schema.positions).where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, action.position)));

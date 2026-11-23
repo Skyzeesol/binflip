@@ -72,6 +72,7 @@ export const txKind = pgEnum("tx_kind", [
   "close",
   "swap",
   "rebalance",
+  "withdraw",
 ]);
 
 // ── Users & wallets ──────────────────────────────────────────────────────
@@ -307,6 +308,18 @@ export const positions = pgTable(
     simState: jsonb("sim_state").$type<Record<string, unknown>>(),
     lastManagedAt: ts("last_managed_at"),
     lastCompoundAt: ts("last_compound_at"),
+    /** Pool tokens and geometry, refreshed by the manager (portfolio display). */
+    mintX: text("mint_x"),
+    mintY: text("mint_y"),
+    binStep: integer("bin_step"),
+    activeBinId: integer("active_bin_id"),
+    /** Unclaimed fees now and fees claimed so far (claims + compounds), in SOL. */
+    unclaimedFeeSol: numeric("unclaimed_fee_sol", { precision: 30, scale: 9 }),
+    claimedFeeSol: numeric("claimed_fee_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    /** Part of claimed fees that went back into the position (already inside current value). */
+    compoundedFeeSol: numeric("compounded_fee_sol", { precision: 30, scale: 9 }).notNull().default("0"),
+    /** Live positions: last on-chain bins [{id,x,y}] for the bin chart (dry-run uses sim_state). */
+    chainBins: jsonb("chain_bins").$type<Array<{ id: number; x: number; y: number }>>(),
     /** Latest value the manager computed (SOL), incl. unclaimed fees. Final value once CLOSED. */
     currentValueSol: numeric("current_value_sol", { precision: 30, scale: 9 }),
     openedAt: ts("opened_at"),

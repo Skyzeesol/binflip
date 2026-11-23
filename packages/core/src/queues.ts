@@ -53,10 +53,24 @@ export const SWAPBACK_MAX_ATTEMPTS = 1000;
 /** manager → executor: act on a management decision. The executor re-checks it on chain first. */
 export interface ManagementJob {
   positionId: string;
-  kind: "close" | "flip" | "compound" | "close_empty";
+  kind: "close" | "flip" | "compound" | "close_empty" | "decrease" | "claim";
   reason: string;
+  /** Requested from the panel: run it as asked, without re-deciding (only state checks). */
+  manual?: boolean;
+  /** decrease: share to withdraw (bps). */
+  bps?: number;
+  /** claim: sell the claimed token fees to SOL (LP Agent default on). */
+  swapToSol?: boolean;
   /** Active bin when the manager decided; part of the job id so one bin = one action. */
   activeId: number;
+}
+
+/** api → executor: send SOL from the agent wallet to the main wallet (SWEEP_TO_ADDRESS only). */
+export interface WithdrawJob {
+  userId: string;
+  /** Lamports; "max" = everything except the fee buffer. */
+  lamports: string;
+  requestId: string;
 }
 
 /** anyone → telegram: a human-readable notification. */

@@ -192,7 +192,7 @@ async function manageAll(
     if (d.do === "close") {
       await db
         .update(schema.positions)
-        .set({ state: "CLOSED", closedAt: new Date(), closeReason: d.reason, simState: sim as never, currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
+        .set({ state: "CLOSED", closedAt: new Date(), closeReason: d.reason, simState: sim as never, currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date(), ...geometry(info) })
         .where(eq(schema.positions.id, pos.id));
       await record(db, pos, `close_${pos.id}`, "close", d);
       await notify(pos.userId, `[DENEME] ${label}: ${reasonTr(d.reason)} → pozisyonu kapatırdım (PnL %${(d.pnlBps / 100).toFixed(2)}, ${(d.valueY / 1e9).toFixed(4)} SOL)`);
@@ -202,10 +202,15 @@ async function manageAll(
 
     await db
       .update(schema.positions)
-      .set({ simState: sim as never, peakValue: String(sim.peakY / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
+      .set({ simState: sim as never, peakValue: String(sim.peakY / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date(), ...geometry(info) })
       .where(eq(schema.positions.id, pos.id));
     await snapshot(db, pos, d.valueY);
   }
+}
+
+/** Pool tokens and bin geometry for the portfolio (range vs price, token names). */
+function geometry(info: PoolInfo) {
+  return { mintX: info.mintX, mintY: info.mintY, binStep: info.binStep, activeBinId: info.activeBinId };
 }
 
 /** One pnl_snapshots row per position every ~5 minutes (for the Analysis chart). */
@@ -279,9 +284,18 @@ async function manageLive(
   const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
   const d = decide(state, mode, exits, flip);
   const peak = Math.max(state.peakY, d.valueY);
+  const unclaimed = Number(feeY) + Number(feeX) * Math.pow(1 + binStep / 10_000, activeId);
+  const info = await builder.poolInfo(pos.pool);
   await db
     .update(schema.positions)
-    .set({ peakValue: String(peak / 1e9), currentValueSol: String(d.valueY / 1e9), lastManagedAt: new Date() })
+    .set({
+      peakValue: String(peak / 1e9),
+      currentValueSol: String(d.valueY / 1e9),
+      lastManagedAt: new Date(),
+      ...geometry(info),
+      unclaimedFeeSol: String(unclaimed / 1e9),
+      chainBins: state.bins.filter((b) => b.x > 0 || b.y > 0).map((b) => ({ id: b.id, x: Number(b.x), y: Number(b.y) })),
+    })
     .where(eq(schema.positions.id, pos.id));
   await snapshot(db, pos, d.valueY);
   // Loss limit hit: exits only (no flips, no compounds), like LP Agent.

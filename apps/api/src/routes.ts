@@ -7,6 +7,7 @@ import { schema, type Db } from "@binflip/db";
 import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 import { Insights } from "./insights.js";
+import { registerPortfolio } from "./portfolio.js";
 
 const COOKIE = "binflip_session";
 const RANGES = { "7D": 7, "1M": 30, "3M": 90, "1Y": 365, YTD: -1, ALL: 36500 } as const;
@@ -160,6 +161,8 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     await db.delete(schema.leaders).where(eq(schema.leaders.id, id));
     return { ok: true };
   });
+
+  registerPortfolio(app, db, config);
 
   // ── Copy dialog insights (suggested %, High-frequency warning) ─────────
   const insights = new Insights(db, config);

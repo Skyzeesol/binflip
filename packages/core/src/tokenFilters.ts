@@ -7,6 +7,9 @@
 export interface TokenInfo {
   mint: string;
   symbol: string | null;
+  name?: string | null;
+  icon?: string | null;
+  decimals?: number | null;
   organicScore: number | null;
   mcapUsd: number | null;
   volume24hUsd: number | null;
@@ -59,6 +62,9 @@ export class TokenInfoClient {
       ? {
           mint,
           symbol: t.symbol ?? null,
+          name: t.name ?? null,
+          icon: typeof t.icon === "string" ? t.icon : null,
+          decimals: typeof t.decimals === "number" ? t.decimals : null,
           organicScore: typeof t.organicScore === "number" ? t.organicScore : null,
           mcapUsd: typeof t.mcap === "number" ? t.mcap : null,
           volume24hUsd: t.stats24h ? (t.stats24h.buyVolume ?? 0) + (t.stats24h.sellVolume ?? 0) : null,

@@ -1,6 +1,6 @@
 import { Worker, type Job, type Queue } from "bullmq";
 import type { Redis } from "ioredis";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   QUEUES,
   WSOL_MINT,
@@ -81,6 +81,7 @@ export function startManagement(p: {
     const cs = copySet ?? manual ?? null;
     const label = leader?.label ?? "manuel";
     if (j.kind === "close_empty") return closeIfStillEmpty(pos, label);
+    if (j.manual) return manualAction(pos, j, key, label);
     if (pos.protocol === "damm_v2") return dammExit(pos, label, key, j);
     if (pos.state !== "ACTIVE" || !pos.ourPosition || pos.dryRun) return { skipped: `state_${pos.state}` };
 
@@ -110,7 +111,7 @@ export function startManagement(p: {
       ? [existing]
       : await db
           .insert(schema.txs)
-          .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: j.kind, status: "planned", reason: j.reason, dryRun: false, plan: progress as never })
+          .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: j.kind as "close" | "flip", status: "planned", reason: j.reason, dryRun: false, plan: progress as never })
           .onConflictDoNothing()
           .returning();
     if (!t) return { skipped: "race" };
@@ -210,10 +211,10 @@ export function startManagement(p: {
   }
 
   /** Claim fees, add SOL fees back below price and token fees above it (or sell them). */
-  async function compound(pos: typeof schema.positions.$inferSelect, label: string, key: string, feeX: bigint, feeY: bigint, activeId: number) {
+  async function compound(pos: typeof schema.positions.$inferSelect, label: string, key: string, feeX: bigint, feeY: bigint, activeId: number, reason = "auto_compound") {
     const [t] = await db
       .insert(schema.txs)
-      .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: "compound", status: "planned", reason: "auto_compound", dryRun: false })
+      .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: "compound", status: "planned", reason, dryRun: false })
       .onConflictDoNothing()
       .returning();
     if (!t) return { skipped: "duplicate" };
@@ -249,9 +250,128 @@ export function startManagement(p: {
     }
     await db.update(schema.txs).set({ status: "confirmed", solDelta: -feeY, plan: { signatures: sigs, feeX: feeX.toString(), feeY: feeY.toString() } as never }).where(eq(schema.txs.id, t.id));
     // Compounded fees are profit, not new capital: depositedSol stays, so PnL shows them as gain.
-    await db.update(schema.positions).set({ lastCompoundAt: new Date() }).where(eq(schema.positions.id, pos.id));
+    const info = await builder.poolInfo(pool);
+    const feesValue = Number(feeY) + Number(feeX) * Math.pow(1 + info.binStep / 10_000, activeId);
+    await addClaimed(pos.id, feesValue);
+    // Token fees sold to SOL leave the position; only what went back in counts as compounded.
+    const compounded = (feeY > 0n && ranges.sol ? Number(feeY) : 0) + (feeX > 0n && ranges.token ? feesValue - Number(feeY) : 0);
+    await db
+      .update(schema.positions)
+      .set({ lastCompoundAt: new Date(), compoundedFeeSol: sql`${schema.positions.compoundedFeeSol} + ${String(compounded / 1e9)}::numeric` })
+      .where(eq(schema.positions.id, pos.id));
     await notify(pos.userId, `[CANLI] ${label}: auto-compound (${lines.join(", ") || "sadece claim"}), ${sigs.length} işlem`);
     return { compounded: true };
+  }
+
+  async function addClaimed(positionId: string, lamports: number) {
+    if (lamports <= 0) return;
+    await db
+      .update(schema.positions)
+      .set({ claimedFeeSol: sql`${schema.positions.claimedFeeSol} + ${String(lamports / 1e9)}::numeric`, unclaimedFeeSol: "0" })
+      .where(eq(schema.positions.id, positionId));
+  }
+
+  /**
+   * Actions the user asked for in the panel (LP Agent "Manage Positions"):
+   * zap out (close), decrease by %, claim fees (optionally sold to SOL), compound.
+   * They run as asked: only the position state is checked, the engine is not consulted.
+   */
+  async function manualAction(pos: typeof schema.positions.$inferSelect, j: ManagementJob, key: string, label: string) {
+    if (pos.state !== "ACTIVE") return { skipped: `state_${pos.state}` };
+    const bps = j.kind === "close" ? 10_000 : Math.min(10_000, Math.max(1, j.bps ?? 10_000));
+    const kind = j.kind === "decrease" ? "remove" : j.kind === "claim" ? "claim" : j.kind === "compound" ? "compound" : "close";
+    const what = j.kind === "close" ? "kapatma (SOL'e)" : j.kind === "decrease" ? `%${bps / 100} azaltma` : j.kind === "claim" ? `fee claim${j.swapToSol ? " (SOL'e)" : ""}` : "compound";
+
+    if (pos.dryRun) {
+      const [t] = await db
+        .insert(schema.txs)
+        .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind, status: "planned", reason: "manual", dryRun: true, plan: { bps, swapToSol: j.swapToSol ?? false } as never })
+        .onConflictDoNothing()
+        .returning();
+      if (!t) return { skipped: "duplicate" };
+      const value = pos.currentValueSol === null ? null : Number(pos.currentValueSol);
+      if (j.kind === "close") {
+        await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "manual" }).where(eq(schema.positions.id, pos.id));
+      } else if (j.kind === "decrease") {
+        // Scale the virtual position and its cost basis alike: the PnL % stays, the size shrinks.
+        const keep = 1 - bps / 10_000;
+        const sim = pos.simState as { bins?: Array<{ id: number; x: number; y: number }>; depositedY?: number } | null;
+        await db
+          .update(schema.positions)
+          .set({
+            depositedSol: BigInt(Math.round(Number(pos.depositedSol) * keep)),
+            currentValueSol: value === null ? null : String(value * keep),
+            simState: sim ? ({ ...sim, depositedY: (sim.depositedY ?? 0) * keep, bins: (sim.bins ?? []).map((b) => ({ ...b, x: b.x * keep, y: b.y * keep })) } as never) : null,
+          })
+          .where(eq(schema.positions.id, pos.id));
+      }
+      await notify(pos.userId, `[DENEME] ${label}: panelden ${what} istendi → yapardım.`);
+      return { planned: true };
+    }
+    if (!pos.ourPosition) return { skipped: "no_position" };
+
+    const [t] = await db
+      .insert(schema.txs)
+      .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind, status: "planned", reason: "manual", dryRun: false, plan: { bps, swapToSol: j.swapToSol ?? false } as never })
+      .onConflictDoNothing()
+      .returning();
+    if (!t) return { skipped: "duplicate" };
+    const save = (v: Partial<typeof schema.txs.$inferInsert>) => db.update(schema.txs).set(v).where(eq(schema.txs.id, t.id));
+    const sigs: string[] = [];
+    const onSignature = async (sig: string) => {
+      sigs.push(sig);
+      await save({ status: "submitted", signature: sig });
+    };
+    const sendAll = async (built: BuiltTxs) => {
+      for (const [i, tx] of built.txs.entries()) await sender.send(tx, built.extraSigners.get(i) ?? [], opts(onSignature));
+    };
+
+    const damm = pos.protocol === "damm_v2";
+    let tokenMint: string;
+    if (damm) {
+      const info = await p.damm.poolInfo(pos.pool);
+      tokenMint = info.solIsA ? info.mintB : info.mintA;
+    } else {
+      const info = await builder.poolInfo(pos.pool);
+      tokenMint = info.mintY === WSOL_MINT ? info.mintX : info.mintY;
+    }
+
+    if (j.kind === "compound") {
+      if (damm) return { skipped: "compound_dlmm_only" };
+      await db.delete(schema.txs).where(eq(schema.txs.id, t.id)); // compound() writes its own row
+      const { activeId, feeX, feeY } = await readLivePosition(builder, pos);
+      return compound(pos, label, key, feeX, feeY, activeId, "manual");
+    }
+
+    const before = await builder.tokenBalance(tokenMint);
+    if (j.kind === "claim") {
+      const unclaimed = pos.unclaimedFeeSol === null ? 0 : Number(pos.unclaimedFeeSol) * 1e9;
+      await sendAll(damm ? await p.damm.claim({ pool: pos.pool, position: pos.ourPosition }) : await builder.claim({ pool: pos.pool, position: pos.ourPosition }));
+      await addClaimed(pos.id, unclaimed);
+    } else {
+      const close = bps === 10_000;
+      const built = damm
+        ? await p.damm.remove({ pool: pos.pool, position: pos.ourPosition, bps, close })
+        : await builder.remove({ pool: pos.pool, position: pos.ourPosition, bps, close });
+      await sendAll(built);
+      if (close) {
+        await db.update(schema.positions).set({ state: "CLOSED", closedAt: new Date(), closeReason: "manual" }).where(eq(schema.positions.id, pos.id));
+      } else {
+        // What was taken out leaves the cost basis too, so the remaining PnL % stays meaningful.
+        await db
+          .update(schema.positions)
+          .set({ depositedSol: BigInt(Math.round(Number(pos.depositedSol) * (1 - bps / 10_000))) })
+          .where(eq(schema.positions.id, pos.id));
+      }
+    }
+    const received = (await builder.tokenBalance(tokenMint)) - before;
+    await save({ status: "confirmed", plan: { bps, swapToSol: j.swapToSol ?? false, signatures: sigs } as never });
+    const sell = j.kind !== "claim" || j.swapToSol;
+    if (received > 0n && sell) {
+      await p.swapback.enqueue({ userId: pos.userId, key: t.id, leaderEventId: null, positionId: pos.id, mint: tokenMint, pool: pos.pool, amount: received.toString(), label });
+    }
+    await notify(pos.userId, `[CANLI] ${label}: panelden ${what} yapıldı (${sigs.length} işlem)${received > 0n && sell ? ", token SOL'e çevrilmek üzere kuyrukta" : ""}.`);
+    return { done: true };
   }
 
   return { close: () => worker.close() };
