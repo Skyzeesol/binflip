@@ -24,7 +24,7 @@ export function PairCell({ p }: { p: PfPosition }) {
           <span className={`src src-${p.source}`} title={p.source === "auto" ? `Liderden kopyalandı${p.leaderLabel ? `: ${p.leaderLabel}` : ""}` : "Senin açtığın ya da cüzdanda bulunan pozisyon"}>
             {p.source === "auto" ? "⚙ Auto" : "✎ Manual"}
           </span>
-          {p.dryRun && <span className="src src-dry">deneme</span>}
+          {p.dryRun && <span className="src src-dry">dry run</span>}
           {p.token?.holders !== null && p.token?.holders !== undefined && p.token.holders < 100 && <span className="warn-ico" title={`Çok az holder: ${p.token.holders}`}>⚠</span>}
         </div>
         <div className="pair-sub">
@@ -141,18 +141,18 @@ export function OpenPositions({ list, actions }: { list: PfPosition[]; actions: 
     <section className="card pf-section">
       <div className="pf-section-head">
         <div>
-          <h2>Açık pozisyonlar ({shown.length})</h2>
+          <h2>Open Positions ({shown.length})</h2>
           <div className="pf-totals">
-            <span>Toplam değer <b><Amount sol={t.value} d={2} /></b></span>
-            <span>Toplam uPnL <b className={tone(t.upnl)}><Amount sol={t.upnl} d={2} /></b> <Pct v={pct(t.upnl)} className={tone(t.upnl)} /></span>
-            <span>Claim edilen fee <b className="pos"><Amount sol={t.claimed} d={2} /></b></span>
-            <span>Bekleyen fee <b className="pos"><Amount sol={t.unclaimed} d={2} /></b></span>
+            <span>Total value <b><Amount sol={t.value} d={2} /></b></span>
+            <span>Total uPnL <b className={tone(t.upnl)}><Amount sol={t.upnl} d={2} /></b> <Pct v={pct(t.upnl)} className={tone(t.upnl)} /></span>
+            <span>Claimed fees <b className="pos"><Amount sol={t.claimed} d={2} /></b></span>
+            <span>Unclaimed fees <b className="pos"><Amount sol={t.unclaimed} d={2} /></b></span>
           </div>
         </div>
         <div className="pf-tools">
-          <label className="toggle-label">Havuza göre grupla <button className={`switch ${group ? "on" : ""}`} onClick={() => setGroup(!group)} aria-pressed={group} /></label>
+          <label className="toggle-label">Group by pool <button className={`switch ${group ? "on" : ""}`} onClick={() => setGroup(!group)} aria-pressed={group} /></label>
           <select className="sel" value={proto} onChange={(e) => setProto(e.target.value as typeof proto)} aria-label="Tip">
-            <option value="all">Tip: hepsi</option>
+            <option value="all">Type: All</option>
             <option value="dlmm">DLMM</option>
             <option value="damm_v2">DAMM V2</option>
           </select>
@@ -165,11 +165,11 @@ export function OpenPositions({ list, actions }: { list: PfPosition[]; actions: 
             <thead>
               <tr>
                 <th style={{ width: 28 }} />
-                <th>Pozisyon/Havuz</th>
-                {th("age", "Yaş")}
-                {th("invested", "Yatırılan")}
-                {th("value", "Değer")}
-                {th("fee", "Toplam fee")}
+                <th>Position/Pool</th>
+                {th("age", "Age")}
+                {th("invested", "Invested")}
+                {th("value", "Value")}
+                {th("fee", "Total fee")}
                 {th("pnl", "uPnL")}
                 {th("dpr", "DPR")}
                 <th>
@@ -180,7 +180,7 @@ export function OpenPositions({ list, actions }: { list: PfPosition[]; actions: 
                   </span>
                 </th>
                 <th>TP/SL</th>
-                <th className="num">İşlem</th>
+                <th className="num">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -198,7 +198,7 @@ export function OpenPositions({ list, actions }: { list: PfPosition[]; actions: 
                     <td style={{ minWidth: 190 }}><RangeBar p={p} mode={rangeMode} /></td>
                     <td>
                       <button className="exits-badge" onClick={(e) => (e.stopPropagation(), actions.exits(p))}>
-                        {p.exits.takeProfitPct || p.exits.stopLossPct ? `TP ${p.exits.takeProfitPct ?? "—"}% · SL ${p.exits.stopLossPct ?? "—"}%` : "Ayarla"}
+                        {p.exits.takeProfitPct || p.exits.stopLossPct ? `TP ${p.exits.takeProfitPct ?? "—"}% · SL ${p.exits.stopLossPct ?? "—"}%` : "Set"}
                       </button>
                     </td>
                     <td className="num"><ActionMenu items={actions.menu(p)} /></td>
@@ -206,12 +206,12 @@ export function OpenPositions({ list, actions }: { list: PfPosition[]; actions: 
                 )),
               )}
               {!shown.length && (
-                <tr><td colSpan={11} className="empty"><b>Pozisyon yok</b><div className="small">Bir lider pozisyon açınca kopyası burada görünür.</div></td></tr>
+                <tr><td colSpan={11} className="empty"><b>No positions</b><div className="small">Bir lider pozisyon açınca kopyası burada görünür.</div></td></tr>
               )}
               {shown.length > 0 && (
                 <tr className="total-row">
                   <td />
-                  <td><b>Toplam</b></td>
+                  <td><b>Total</b></td>
                   <td />
                   <td className="num"><Amount sol={t.invested} /></td>
                   <td className="num"><Amount sol={t.value} /></td>
@@ -257,29 +257,29 @@ export function HistoricalPositions(p: {
   return (
     <section className="card pf-section">
       <div className="pf-section-head">
-        <h2>Geçmiş pozisyonlar</h2>
+        <h2>Historical Positions</h2>
         <div className="pf-tools">
           <div className="pop-wrap">
-            <button className="btn btn-sm" onClick={() => (setDraft(p.filter), setOpen(!open))}>⛉ Filtre{active ? ` (${active})` : ""}</button>
+            <button className="btn btn-sm" onClick={() => (setDraft(p.filter), setOpen(!open))}>⛉ Filters{active ? ` (${active})` : ""}</button>
             {open && (
               <div className="pop">
-                <label className="field small">Tip
+                <label className="field small">Type
                   <select value={draft.protocol} onChange={(e) => setDraft({ ...draft, protocol: e.target.value as HistFilter["protocol"] })}>
-                    <option value="all">Hepsi</option>
+                    <option value="all">All</option>
                     <option value="dlmm">DLMM</option>
                     <option value="damm_v2">DAMM V2</option>
                   </select>
                 </label>
-                <div className="field small">Kaynak
+                <div className="field small">Source
                   <div className="seg full">
                     {(["all", "manual", "auto"] as const).map((s) => (
-                      <button key={s} className={draft.source === s ? "on" : ""} onClick={() => setDraft({ ...draft, source: s })}>{s === "all" ? "Hepsi" : s === "manual" ? "✎ Manual" : "⚙ Auto"}</button>
+                      <button key={s} className={draft.source === s ? "on" : ""} onClick={() => setDraft({ ...draft, source: s })}>{s === "all" ? "All" : s === "manual" ? "✎ Manual" : "⚙ Auto"}</button>
                     ))}
                   </div>
                 </div>
-                <label className="field small">Havuz
+                <label className="field small">Pool
                   <select value={draft.pool} onChange={(e) => setDraft({ ...draft, pool: e.target.value })}>
-                    <option value="">Tüm havuzlar</option>
+                    <option value="">All pools</option>
                     {p.pools.map((x) => <option key={x.pool} value={x.pool}>{x.token ? `${x.token} / SOL` : short(x.pool, 6)}</option>)}
                   </select>
                 </label>
@@ -291,13 +291,13 @@ export function HistoricalPositions(p: {
                   </div>
                 </div>
                 <div className="pop-foot">
-                  <button className="btn" onClick={() => (p.setFilter(EMPTY_FILTER), setDraft(EMPTY_FILTER), setOpen(false))}>Sıfırla</button>
-                  <button className="btn btn-primary" onClick={() => (p.setFilter(draft), setOpen(false))}>Uygula</button>
+                  <button className="btn" onClick={() => (p.setFilter(EMPTY_FILTER), setDraft(EMPTY_FILTER), setOpen(false))}>Reset</button>
+                  <button className="btn btn-primary" onClick={() => (p.setFilter(draft), setOpen(false))}>Apply</button>
                 </div>
               </div>
             )}
           </div>
-          <label className="toggle-label" title="Çok küçük (toz) PnL'li satırları gizler">Küçük PnL'i gizle <button className={`switch ${hideSmall ? "on" : ""}`} onClick={() => setHideSmall(!hideSmall)} aria-pressed={hideSmall} /></label>
+          <label className="toggle-label" title="Çok küçük (toz) PnL'li satırları gizler">Hide small PnL <button className={`switch ${hideSmall ? "on" : ""}`} onClick={() => setHideSmall(!hideSmall)} aria-pressed={hideSmall} /></label>
           <ViewToggle view={view} setView={setView} />
         </div>
       </div>
@@ -307,14 +307,14 @@ export function HistoricalPositions(p: {
             <thead>
               <tr>
                 <th style={{ width: 28 }} />
-                <th>Pozisyon/Havuz</th>
-                {th("age", "Yaş")}
-                {th("invested", "Yatırılan")}
-                {th("fee", "Toplam fee")}
+                <th>Position/Pool</th>
+                {th("age", "Age")}
+                {th("invested", "Invested")}
+                {th("fee", "Total fee")}
                 {th("pnl", "PnL")}
                 {th("dpr", "DPR")}
-                {th("closed", "Kapanış")}
-                <th className="num">İşlem</th>
+                {th("closed", "Closed")}
+                <th className="num">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -353,13 +353,13 @@ function Cards({ list, actions, open = false }: { list: PfPosition[]; actions: R
             <ActionMenu items={actions.menu(p)} />
           </div>
           <div className="pf-card-grid">
-            <span className="muted">Yaş</span><span>{age(p.ageMs)}</span>
-            <span className="muted">Yatırılan</span><span><Amount sol={p.invested} /></span>
-            {open && <><span className="muted">Değer</span><span><Amount sol={p.value} /></span></>}
-            <span className="muted">Toplam fee</span><span className="pos"><Amount sol={p.totalFee} /> · <Pct v={p.feePct} /></span>
+            <span className="muted">Age</span><span>{age(p.ageMs)}</span>
+            <span className="muted">Invested</span><span><Amount sol={p.invested} /></span>
+            {open && <><span className="muted">Value</span><span><Amount sol={p.value} /></span></>}
+            <span className="muted">Total fee</span><span className="pos"><Amount sol={p.totalFee} /> · <Pct v={p.feePct} /></span>
             <span className="muted">{open ? "uPnL" : "PnL"}</span><span className={tone(p.pnl)}><Amount sol={p.pnl} /> · <Pct v={p.pnlPct} /></span>
             <span className="muted">DPR</span><span className={tone(p.dpr)}><Pct v={p.dpr} /></span>
-            {!open && <><span className="muted">Kapanış</span><span>{closedAt(p.closedAt)}</span></>}
+            {!open && <><span className="muted">Closed</span><span>{closedAt(p.closedAt)}</span></>}
           </div>
           {open && <RangeBar p={p} mode="pct" />}
         </div>
@@ -371,8 +371,8 @@ function Cards({ list, actions, open = false }: { list: PfPosition[]; actions: R
 function ViewToggle({ view, setView }: { view: "table" | "card"; setView: (v: "table" | "card") => void }) {
   return (
     <div className="seg">
-      <button className={view === "card" ? "on" : ""} onClick={() => setView("card")}>▦ Kart</button>
-      <button className={view === "table" ? "on" : ""} onClick={() => setView("table")}>▤ Tablo</button>
+      <button className={view === "card" ? "on" : ""} onClick={() => setView("card")}>▦ Card</button>
+      <button className={view === "table" ? "on" : ""} onClick={() => setView("table")}>▤ Table</button>
     </div>
   );
 }

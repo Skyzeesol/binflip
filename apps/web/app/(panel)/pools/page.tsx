@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { compact } from "@/components/Num";
-import { ago, short } from "@/lib/format";
+import { short } from "@/lib/format";
+import { ageOfIso, ColumnsPicker, CopyBtn, FilterIcon, Leaf, TokenIcon, Updated, usd, useColumns } from "@/components/market";
 
 export interface PoolRow {
   address: string;
@@ -22,7 +23,23 @@ export interface PoolRow {
   price: number;
   createdAt: string | null;
   launchpad: string | null;
+  organicScore?: number | null;
+  tokenLiquidity?: number | null;
+  dynamicFeePct?: number | null;
 }
+
+type Col = "liq" | "vol" | "fees" | "mcap" | "holders" | "age" | "tliq" | "dynfee" | "apr";
+const COLS: ReadonlyArray<{ id: Col; label: string; on: boolean }> = [
+  { id: "liq", label: "Liquidity", on: true },
+  { id: "vol", label: "Volume", on: true },
+  { id: "fees", label: "Fees", on: true },
+  { id: "mcap", label: "MCAP", on: true },
+  { id: "holders", label: "Holders", on: true },
+  { id: "age", label: "Age", on: true },
+  { id: "tliq", label: "T LIQ", on: true },
+  { id: "dynfee", label: "Dynamic fee", on: true },
+  { id: "apr", label: "APR", on: false },
+];
 
 type Win = "30m" | "1h" | "2h" | "4h" | "12h" | "24h";
 interface Filters {
@@ -34,12 +51,6 @@ interface Filters {
 // New users start with a floor so the list is not flooded with dust pools (LP Agent default).
 const DEFAULTS: Filters = { q: "", quote: "sol", minTvl: "5000", maxTvl: "", minVolume: "10000", minVolume1h: "", minFees: "", minMcap: "", maxMcap: "", minHolders: "", minAgeH: "", maxAgeH: "", minBaseFee: "", maxBaseFee: "", binStep: "" };
 
-const money = (v: number) => `$${compact(v, 2)}`;
-const ageOf = (iso: string | null) => {
-  if (!iso) return "—";
-  const h = (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  return h < 24 ? `${Math.max(1, Math.round(h))} sa` : h < 24 * 365 ? `${(h / 24).toFixed(0)} g` : `${(h / 24 / 365).toFixed(1)} y`;
-};
 
 /** LP Agent "Pools": every Meteora pool, sorted by Fee/TVL, with filters. */
 export default function PoolsPage() {
@@ -53,6 +64,7 @@ export default function PoolsPage() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ total: number; pages: number; rows: PoolRow[]; updatedAt: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const cols = useColumns<Col>("binflip.poolCols", COLS);
 
   useEffect(() => {
     const urlQ = new URLSearchParams(window.location.search).get("q");
@@ -106,114 +118,134 @@ export default function PoolsPage() {
       {label}
     </th>
   );
+  const setWindow = (w: Win) => {
+    setWin(w);
+    try {
+      localStorage.setItem("binflip.poolWindow", w);
+    } catch {
+      /* storage blocked */
+    }
+  };
+  const W = win.toUpperCase();
+  const nCols = 2 + cols.shown.size;
 
   return (
-    <main className="page page-wide">
-      <div className="page-head">
-        <h1>Havuzlar</h1>
-        <div className="seg">
+    <main className="page page-full" lang="en">
+      <div className="mk-bar">
+        <div className="mk-tabs">
           <button className={protocol === "dlmm" ? "on" : ""} onClick={() => (setProtocol("dlmm"), setPage(1))}>DLMM</button>
           <button className={protocol === "damm_v2" ? "on" : ""} onClick={() => (setProtocol("damm_v2"), setPage(1))}>DAMM V2</button>
         </div>
         <div className="spacer" />
-        <label className="toggle-label">Pencere
-          <select className="sel" value={win} onChange={(e) => { setWin(e.target.value as Win); try { localStorage.setItem("binflip.poolWindow", e.target.value); } catch { /* storage blocked */ } }}>
-            {(["24h", "12h", "4h", "2h", "1h", "30m"] as const).map((w) => <option key={w} value={w}>{w}</option>)}
-          </select>
-        </label>
         <div className="pop-wrap">
-          <button className="btn btn-sm" onClick={() => (setDraft(f), setOpen(!open))}>⛉ Filtreler{active ? ` (${active})` : ""}</button>
+          <button className="btn btn-sm tool-btn" onClick={() => (setDraft(f), setOpen(!open))}><FilterIcon />Filters{active ? ` (${active})` : ""}</button>
           {open && (
             <div className="pop pop-wide">
-              <label className="field small">Havuz ya da token (ad veya adres)
+              <label className="field small">Pool ya da token (ad veya adres)
                 <input type="text" value={draft.q} onChange={(e) => setDraft({ ...draft, q: e.target.value })} placeholder="ör. BTC ya da mint adresi" />
               </label>
-              <div className="field small">Karşı token
+              <div className="field small">Quote token
                 <div className="seg full">
-                  {(["sol", "usdc", "all"] as const).map((q) => <button key={q} className={draft.quote === q ? "on" : ""} onClick={() => setDraft({ ...draft, quote: q })}>{q === "sol" ? "SOL" : q === "usdc" ? "USDC" : "Hepsi"}</button>)}
+                  {(["sol", "usdc", "all"] as const).map((q) => <button key={q} className={draft.quote === q ? "on" : ""} onClick={() => setDraft({ ...draft, quote: q })}>{q === "sol" ? "SOL" : q === "usdc" ? "USDC" : "All"}</button>)}
                 </div>
               </div>
               <div className="filter-grid">
-                <Range label="Likidite ($)" a="minTvl" b="maxTvl" d={draft} set={setDraft} />
-                <Range label="Piyasa değeri ($)" a="minMcap" b="maxMcap" d={draft} set={setDraft} />
-                <Range label="Yaş (saat)" a="minAgeH" b="maxAgeH" d={draft} set={setDraft} />
-                <Range label="Taban fee (%)" a="minBaseFee" b="maxBaseFee" d={draft} set={setDraft} />
-                <One label={`Hacim ${win} en az ($)`} k="minVolume" d={draft} set={setDraft} />
-                <One label="Hacim 1s en az ($)" k="minVolume1h" d={draft} set={setDraft} />
-                <One label={`Fee ${win} en az ($)`} k="minFees" d={draft} set={setDraft} />
-                <One label="Holder en az" k="minHolders" d={draft} set={setDraft} />
+                <Range label="Liquidity ($)" a="minTvl" b="maxTvl" d={draft} set={setDraft} />
+                <Range label="MCAP ($)" a="minMcap" b="maxMcap" d={draft} set={setDraft} />
+                <Range label="Age (saat)" a="minAgeH" b="maxAgeH" d={draft} set={setDraft} />
+                <Range label="Base fee (%)" a="minBaseFee" b="maxBaseFee" d={draft} set={setDraft} />
+                <One label={`Min Volume ${W} ($)`} k="minVolume" d={draft} set={setDraft} />
+                <One label="Min Volume 1H ($)" k="minVolume1h" d={draft} set={setDraft} />
+                <One label={`Min Fees ${W} ($)`} k="minFees" d={draft} set={setDraft} />
+                <One label="Min Holders" k="minHolders" d={draft} set={setDraft} />
                 {protocol === "dlmm" && <One label="Bin step" k="binStep" d={draft} set={setDraft} />}
               </div>
               <div className="small muted">Tutarlarda 500k, 1.5m, 2b yazabilirsin.</div>
               <div className="pop-foot">
-                <button className="btn" onClick={() => (setDraft({ ...DEFAULTS, minTvl: "", minVolume: "" }), apply({ ...DEFAULTS, minTvl: "", minVolume: "" }))}>Hepsini temizle</button>
-                <button className="btn btn-primary" onClick={() => apply(parseAmounts(draft))}>Uygula</button>
+                <button className="btn" onClick={() => (setDraft({ ...DEFAULTS, minTvl: "", minVolume: "" }), apply({ ...DEFAULTS, minTvl: "", minVolume: "" }))}>Clear</button>
+                <button className="btn btn-primary" onClick={() => apply(parseAmounts(draft))}>Apply</button>
               </div>
             </div>
           )}
         </div>
-      </div>
-      <div className="small muted" style={{ marginBottom: 10 }}>
-        {data ? `${data.total.toLocaleString("tr-TR")} havuz eşleşiyor · ${ago(data.updatedAt)} güncellendi` : "Yükleniyor…"}
+        <ColumnsPicker all={COLS} shown={cols.shown} toggle={cols.toggle} />
       </div>
       {err && <div className="banner banner-neg">{err}</div>}
-      <div className="card table-wrap">
-        <table className="pf-table">
-          <thead>
-            <tr>
-              <th>Havuz</th>
-              {th("fee_tvl", "Fee/TVL")}
-              {th("tvl", "Likidite")}
-              {th("volume", "Hacim")}
-              <th className="num">Fee</th>
-              <th className="num">MCAP</th>
-              <th className="num">Holder</th>
-              <th className="num">Yaş</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.rows.filter((r) => !(f.minTvl && r.tvl < Number(f.minTvl))).map((r) => (
-              <tr key={r.address} className="clickable" onClick={() => router.push(`/pools/${r.address}?protocol=${protocol}`)}>
-                <td>
-                  <div className="pair">
-                    <div className="pair-icons">
-                      <span className="pair-ph">{(r.base.symbol ?? "?").slice(0, 1)}</span>
-                      {r.base.icon && <img src={r.base.icon} alt="" onError={(e) => (e.currentTarget.style.display = "none")} />}
-                      <span className="pair-sol" aria-hidden>{r.quote.symbol === "SOL" ? "◎" : "$"}</span>
-                    </div>
-                    <div className="pair-text">
-                      <div className="pair-top"><span className="pair-name">{r.base.symbol} / {r.quote.symbol}</span>{r.launchpad && <span className="src src-manual">{r.launchpad}</span>}</div>
-                      <div className="pair-sub">
-                        <span className="proto">{protocol === "dlmm" ? "DLMM" : "DAMM V2"}</span>
-                        {protocol === "dlmm" && <span className="muted">bin {r.binStep}</span>}
-                        <span className="muted">fee {r.baseFeePct}%</span>
-                        <span className="mono muted">{short(r.address, 4)}</span>
-                        <a className="muted" href={`https://app.meteora.ag/${protocol === "dlmm" ? "dlmm" : "dammv2"}/${r.address}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Meteora">↗</a>
+      <div className="card mk-card">
+        <div className="mk-head">
+          <div><b>{data ? data.total.toLocaleString("en-US") : "—"} pools</b> <span className="muted">on Solana</span></div>
+          <div className="spacer" />
+          <Updated at={data?.updatedAt} />
+        </div>
+        <div className="table-wrap">
+          <table className="mk-table">
+            <thead>
+              <tr>
+                <th>Pool</th>
+                <th className={`num sortable ${sort.k === "fee_tvl" ? "sorted" : ""}`}>
+                  <span onClick={() => setSort((s) => ({ k: "fee_tvl", dir: s.k === "fee_tvl" && s.dir === "desc" ? "asc" : "desc" }))}>{sort.k === "fee_tvl" ? (sort.dir === "desc" ? "↓ " : "↑ ") : ""}Fee/TVL</span>{" "}
+                  <select className="th-sel" value={win} onChange={(e) => setWindow(e.target.value as Win)}>
+                    {(["30m", "1h", "2h", "4h", "12h", "24h"] as const).map((w) => <option key={w} value={w}>{w.toUpperCase()}</option>)}
+                  </select>
+                </th>
+                {cols.has("liq") && th("tvl", "Liquidity")}
+                {cols.has("vol") && th("volume", `Volume ${W}`)}
+                {cols.has("fees") && <th className="num">Fees {W}</th>}
+                {cols.has("mcap") && <th className="num">MCAP</th>}
+                {cols.has("holders") && <th className="num">Holders</th>}
+                {cols.has("age") && <th className="num">Age</th>}
+                {cols.has("tliq") && <th className="num" title="Tokenin bütün DEX'lerdeki toplam likiditesi (Jupiter)">T LIQ</th>}
+                {cols.has("dynfee") && <th className="num" title="Şu anki toplam swap fee'si (taban + volatiliteye bağlı dinamik kısım)">Dynamic fee</th>}
+                {cols.has("apr") && <th className="num">APR</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {data?.rows.filter((r) => !(f.minTvl && r.tvl < Number(f.minTvl))).map((r) => (
+                <tr key={r.address} className="clickable" onClick={() => router.push(`/pools/${r.address}?protocol=${protocol}`)}>
+                  <td>
+                    <div className="tok">
+                      <span className="pair-ico">
+                        <TokenIcon icon={r.base.icon} symbol={r.base.symbol} size={30} />
+                        <span className="quote-ico" aria-hidden>{r.quote.symbol === "SOL" ? "◎" : "$"}</span>
+                      </span>
+                      <div className="tok-text">
+                        <div className="tok-top"><b>{r.base.symbol} / {r.quote.symbol}</b><span className="fee-badge" title="Base fee">{r.baseFeePct.toFixed(2)}%</span><Leaf score={r.organicScore} /></div>
+                        <div className="tok-sub">
+                          <span className={`proto ${protocol === "dlmm" ? "" : "proto-damm"}`}>{protocol === "dlmm" ? "DLMM" : "DAMM V2"}</span>
+                          {protocol === "dlmm" && <span className="muted">bin {r.binStep}</span>}
+                          <span className="mono muted">{short(r.address, 6)}</span>{r.launchpad && <span className="lp-tag">{r.launchpad}</span>}
+                          <CopyBtn text={r.address} />
+                          <a className="muted" href={`https://app.meteora.ag/${protocol === "dlmm" ? "dlmm" : "dammv2"}/${r.address}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Meteora">↗</a>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </td>
-                <td className="num pos">{r.feeTvl.toFixed(2)}%</td>
-                <td className="num">{money(r.tvl)}</td>
-                <td className="num">{money(r.volume)}</td>
-                <td className="num">{money(r.fees)}</td>
-                <td className="num">{r.base.mcap ? money(r.base.mcap) : "—"}</td>
-                <td className="num">{r.base.holders ? compact(r.base.holders, 0) : "—"}</td>
-                <td className="num muted">{ageOf(r.createdAt)}</td>
-              </tr>
-            ))}
-            {data && !data.rows.length && <tr><td colSpan={8} className="empty">Filtrelere uyan havuz yok.</td></tr>}
-          </tbody>
-        </table>
+                  </td>
+                  <td className="num"><span className="pos strong">{r.feeTvl.toFixed(2)}%</span></td>
+                  {cols.has("liq") && <td className="num">{usd(r.tvl)}</td>}
+                  {cols.has("vol") && <td className="num">{usd(r.volume)}</td>}
+                  {cols.has("fees") && <td className="num">{usd(r.fees)}</td>}
+                  {cols.has("mcap") && <td className="num">{r.base.mcap ? usd(r.base.mcap) : "—"}</td>}
+                  {cols.has("holders") && <td className="num">{r.base.holders ? (r.base.holders >= 1000 ? compact(r.base.holders, 1) : r.base.holders) : "—"}</td>}
+                  {cols.has("age") && <td className="num">{ageOfIso(r.createdAt)}</td>}
+                  {cols.has("tliq") && <td className="num">{usd(r.tokenLiquidity)}</td>}
+                  {cols.has("dynfee") && <td className="num">{r.dynamicFeePct === null || r.dynamicFeePct === undefined ? "—" : `${r.dynamicFeePct.toFixed(2)}%`}</td>}
+                  {cols.has("apr") && <td className="num">{r.apr ? `${compact(r.apr, 1)}%` : "—"}</td>}
+                </tr>
+              ))}
+              {data && !data.rows.length && <tr><td colSpan={nCols} className="empty">Filtrelere uyan pool yok.</td></tr>}
+              {!data && !err && <tr><td colSpan={nCols} className="empty">Yükleniyor…</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
       {data && data.pages > 1 && (
         <div className="pager">
-          <button className="btn btn-sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Önceki</button>
-          <span className="small muted">Sayfa {page} / {data.pages.toLocaleString("tr-TR")}</span>
-          <button className="btn btn-sm" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>Sonraki ›</button>
+          <button className="btn btn-sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Prev</button>
+          <span className="small muted">Page {page} / {data.pages.toLocaleString("en-US")}</span>
+          <button className="btn btn-sm" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>Next ›</button>
         </div>
       )}
-      <p className="small muted">İpucu: küçük bir havuzda yüksek Fee/TVL hızla kaybolabilir. Pozisyon açmadan önce likiditeye, hacme ve yaşa birlikte bak. <Link className="link-accent" href="/portfolio">Portföy →</Link></p>
+      <p className="small muted">İpucu: küçük bir havuzda yüksek Fee/TVL hızla kaybolabilir. Pozisyon açmadan önce likiditeye, hacme ve yaşa birlikte bak. <Link className="link-accent" href="/portfolio">Portfolio →</Link></p>
     </main>
   );
 }

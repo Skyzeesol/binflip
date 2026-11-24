@@ -38,7 +38,7 @@ export function FeeHistory(p: {
         </div>
         <div className="spacer" />
         <select className="sel" value={p.proto} onChange={(e) => p.setProto(e.target.value as Proto)}>
-          <option value="all">Tüm protokoller</option>
+          <option value="all">All protocols</option>
           <option value="dlmm">DLMM</option>
           <option value="damm_v2">DAMM V2</option>
         </select>
@@ -51,9 +51,9 @@ export function FeeHistory(p: {
           </button>
         </div>
         <select className="sel" value={p.group} disabled={view === "calendar"} onChange={(e) => p.setGroup(e.target.value as Group)}>
-          <option value="day">Günlük</option>
-          <option value="week">Haftalık</option>
-          <option value="month">Aylık</option>
+          <option value="day">Daily</option>
+          <option value="week">Weekly</option>
+          <option value="month">Monthly</option>
         </select>
         <select className="sel" value={p.range} onChange={(e) => p.setRange(e.target.value as Range)}>
           {(["7D", "MTD", "1M", "3M", "1Y", "YTD", "ALL"] as const).map((r) => (
@@ -63,7 +63,7 @@ export function FeeHistory(p: {
       </div>
       {view === "chart" ? <Bars series={p.series} /> : <Calendar days={p.metric === "pnl" ? p.days : p.feeDays} />}
       <div className="pf-history-foot">
-        <span className="muted">{p.metric === "pnl" ? "Toplam kâr" : "Toplam fee"}</span>{" "}
+        <span className="muted">{p.metric === "pnl" ? "Total profit" : "Total fee"}</span>{" "}
         <Amount sol={total} d={2} className={total >= 0 ? "pos" : "neg"} />
       </div>
     </div>

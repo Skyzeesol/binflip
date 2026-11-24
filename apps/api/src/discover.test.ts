@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safetyLabel, safetyScore } from "./discover.js";
+import { feeTvlChange, safetyLabel, safetyScore } from "./discover.js";
 
 describe("safety score", () => {
   it("revoked authorities, spread supply, organic and many holders = safe", () => {
@@ -13,5 +13,16 @@ describe("safety score", () => {
   });
   it("no audit data = no score", () => {
     expect(safetyScore({})).toBeNull();
+  });
+});
+
+describe("fee/tvl change", () => {
+  it("compares a window with the one before it", () => {
+    expect(feeTvlChange({ "30m": 2, "1h": 3 }, "30m")).toBeCloseTo(100);
+    expect(feeTvlChange({ "1h": 1, "2h": 3 }, "1h")).toBeCloseTo(-50);
+    expect(feeTvlChange({ "4h": 4, "12h": 8 }, "4h")).toBeCloseTo(100);
+  });
+  it("no previous fees = no change", () => {
+    expect(feeTvlChange({ "30m": 2, "1h": 2 }, "30m")).toBeNull();
   });
 });

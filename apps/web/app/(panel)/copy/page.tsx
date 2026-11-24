@@ -32,17 +32,17 @@ export default function CopyLpPage() {
   }, [leaders]);
 
   return (
-    <main className="page">
+    <main className="page" lang="en">
       <div className="page-head">
         <h1>Copy LP</h1>
         <div className="spacer" />
-        <button className="btn btn-primary" onClick={() => setEditing(null)}>+ Cüzdan kopyala</button>
+        <button className="btn btn-primary" onClick={() => setEditing(null)}>+ Copy wallet</button>
       </div>
 
       <div className="tabs">
-        <button className={`tab ${tab === "wallets" ? "active" : ""}`} onClick={() => setTab("wallets")}>Kopyalanan Cüzdanlar<span className="count">{leaders.length}</span></button>
-        <button className={`tab ${tab === "analysis" ? "active" : ""}`} onClick={() => setTab("analysis")}>Analiz</button>
-        <button className={`tab ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>Kopya Kayıtları</button>
+        <button className={`tab ${tab === "wallets" ? "active" : ""}`} onClick={() => setTab("wallets")}>Copied Wallets<span className="count">{leaders.length}</span></button>
+        <button className={`tab ${tab === "analysis" ? "active" : ""}`} onClick={() => setTab("analysis")}>Analysis</button>
+        <button className={`tab ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>Copy Logs</button>
       </div>
 
       {tab === "wallets" && <Wallets leaders={leaders} reload={loadLeaders} onEdit={setEditing} />}
@@ -80,15 +80,15 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
   const active = leaders.filter((l) => l.status === "active");
   const paused = leaders.filter((l) => l.status === "paused");
   const groups = [
-    { title: "AKTİF", on: true, rows: active },
-    { title: "DURAKLATILDI", on: false, rows: paused },
+    { title: "ACTIVE", on: true, rows: active },
+    { title: "PAUSED", on: false, rows: paused },
   ].filter((g) => g.rows.length);
 
   return (
     <section>
       <div className="cw-head">
         <div>
-          <h2>Kopyalanan Cüzdanlar</h2>
+          <h2>Copied Wallets</h2>
           <div className="muted">{active.length} aktif, {paused.length} duraklatılmış</div>
         </div>
         <Link className="link-accent" href="/smart-lp">Smart LP'de yeni cüzdan bul →</Link>
@@ -100,13 +100,13 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
           <table className="cw-table">
             <thead>
               <tr>
-                <th>Cüzdan</th>
-                <th>Kopya boyutu</th>
-                <th>Otomatik çıkış</th>
-                <th className="num">Pozisyon</th>
-                <th className="num">Son hareket</th>
+                <th>Wallet</th>
+                <th>Copy size</th>
+                <th>Auto exit</th>
+                <th className="num">Positions</th>
+                <th className="num">Last activity</th>
                 <th className="num">PnL</th>
-                <th>Kopya</th>
+                <th>Copy</th>
                 <th />
               </tr>
             </thead>
@@ -133,7 +133,7 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
                           {z.sizing.maxPerTxSol ? <div className="small muted">işlem başına en fazla {z.sizing.maxPerTxSol} SOL</div> : null}
                           {z.management.mode !== "mirror" && <div><span className="badge badge-accent">{MODE_TR[z.management.mode]}{z.management.mode === "staged_flip" ? ` %${z.management.flipThresholdPct}` : ""}</span></div>}
                         </td>
-                        <td className={exit ? "" : "muted"}>{exit || "Kapalı"}</td>
+                        <td className={exit ? "" : "muted"}>{exit || "Off"}</td>
                         <td className="num">{l.positions || "-"}</td>
                         <td className="num">{ago(l.lastActivity)}</td>
                         <td className={`num ${l.pnlSol >= 0.005 ? "pos" : l.pnlSol <= -0.005 ? "neg" : ""}`}>{Math.abs(l.pnlSol) < 0.005 ? "0.00" : l.pnlSol.toFixed(2)} SOL</td>
@@ -141,7 +141,7 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
                           <button className={`switch ${l.status === "active" ? "on" : ""}`} onClick={() => toggle(l)} aria-label="Kopyalamayı aç/kapat" />
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
-                          <button className="btn btn-sm btn-ghost" onClick={() => remove(l)} title="Kopyalamayı bırak">Bırak</button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => remove(l)} title="Kopyalamayı bırak">Remove</button>
                         </td>
                       </tr>
                     );
@@ -157,12 +157,12 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
 }
 
 const RANGES = [
-  { id: "7D", label: "7G" },
-  { id: "1M", label: "1A" },
-  { id: "3M", label: "3A" },
+  { id: "7D", label: "7D" },
+  { id: "1M", label: "1M" },
+  { id: "3M", label: "3M" },
   { id: "1Y", label: "1Y" },
-  { id: "YTD", label: "Yılbaşından" },
-  { id: "ALL", label: "Tümü" },
+  { id: "YTD", label: "YTD" },
+  { id: "ALL", label: "ALL" },
 ] as const;
 
 function AnalysisTab({ leaders }: { leaders: Leader[] }) {
@@ -183,17 +183,17 @@ function AnalysisTab({ leaders }: { leaders: Leader[] }) {
       {data && (
         <>
           <div className="grid-kpi">
-            <div className="card card-pad"><div className="kpi-label">Toplam PnL (tahmini)</div><div className={`kpi-value num ${data.totals.pnlSol >= 0 ? "pos" : "neg"}`}>{signed(data.totals.pnlSol)} SOL</div></div>
-            <div className="card card-pad"><div className="kpi-label">Açılan kopya</div><div className="kpi-value num">{data.totals.opened}</div></div>
-            <div className="card card-pad"><div className="kpi-label">Ödenen ağ ücreti</div><div className="kpi-value num">{data.totals.networkFeesSol.toFixed(4)} SOL</div></div>
+            <div className="card card-pad"><div className="kpi-label">Total PnL (est.)</div><div className={`kpi-value num ${data.totals.pnlSol >= 0 ? "pos" : "neg"}`}>{signed(data.totals.pnlSol)} SOL</div></div>
+            <div className="card card-pad"><div className="kpi-label">Copies opened</div><div className="kpi-value num">{data.totals.opened}</div></div>
+            <div className="card card-pad"><div className="kpi-label">Network fees paid</div><div className="kpi-value num">{data.totals.networkFeesSol.toFixed(4)} SOL</div></div>
           </div>
           <div className="card card-pad">
-            <div className="kpi-label" style={{ marginBottom: 8 }}>Kümülatif PnL, cüzdan bazında</div>
+            <div className="kpi-label" style={{ marginBottom: 8 }}>Cumulative PnL by wallet</div>
             <PnlChart series={data.series} labelOf={labelOf} />
           </div>
           <div className="card table-wrap">
             <table>
-              <thead><tr><th>Cüzdan</th><th className="num">Açılan</th><th className="num">Açık</th><th className="num">Yatırılan</th><th className="num">PnL</th></tr></thead>
+              <thead><tr><th>Wallet</th><th className="num">Opened</th><th className="num">Open</th><th className="num">Invested</th><th className="num">PnL</th></tr></thead>
               <tbody>
                 {data.wallets.map((w) => (
                   <tr key={w.leaderId ?? "manual"}>
@@ -216,24 +216,24 @@ function AnalysisTab({ leaders }: { leaders: Leader[] }) {
 }
 
 const LOG_TABS = [
-  { id: "all", label: "Tümü" },
-  { id: "not_opened", label: "Açılmayan" },
-  { id: "failed", label: "Başarısız" },
-  { id: "open", label: "Açık" },
-  { id: "closed", label: "Kapalı" },
+  { id: "all", label: "All" },
+  { id: "not_opened", label: "Not opened" },
+  { id: "failed", label: "Failed" },
+  { id: "open", label: "Open" },
+  { id: "closed", label: "Closed" },
 ] as const;
 
 const RESULT_TR: Record<string, { label: string; cls: string }> = {
-  Open: { label: "Açık", cls: "badge-accent" },
-  Closed: { label: "Kapandı", cls: "" },
-  Holding: { label: "Tutuluyor", cls: "badge-dry" },
-  NotOpened: { label: "Açılmadı", cls: "badge-dry" },
-  Skipped: { label: "Atlandı", cls: "" },
-  Failed: { label: "Başarısız", cls: "badge-neg" },
-  Pending: { label: "Bekliyor", cls: "badge-dry" },
+  Open: { label: "Open", cls: "badge-accent" },
+  Closed: { label: "Closed", cls: "" },
+  Holding: { label: "Holding", cls: "badge-dry" },
+  NotOpened: { label: "Not opened", cls: "badge-dry" },
+  Skipped: { label: "Skipped", cls: "" },
+  Failed: { label: "Failed", cls: "badge-neg" },
+  Pending: { label: "Pending", cls: "badge-dry" },
 };
 
-const KIND_TR: Record<string, string> = { open: "Açma", add: "Ekleme", remove: "Çekme", close: "Kapama", claim: "Claim", flip: "Flip", compound: "Compound", swap: "Swap", rebalance: "Rebalance", reshape: "Reshape" };
+const KIND_TR: Record<string, string> = { open: "Open", add: "Add", remove: "Remove", close: "Close", claim: "Claim", flip: "Flip", compound: "Compound", swap: "Swap", rebalance: "Rebalance", reshape: "Reshape" };
 
 function LogsTab({ leaders }: { leaders: Leader[] }) {
   const [tab, setTab] = useState<(typeof LOG_TABS)[number]["id"]>("all");
@@ -266,13 +266,13 @@ function LogsTab({ leaders }: { leaders: Leader[] }) {
         </div>
         <div className="spacer" />
         <select value={leaderId} onChange={(e) => setLeaderId(e.target.value)} style={{ width: 220 }}>
-          <option value="">Tüm cüzdanlar</option>
+          <option value="">All wallets</option>
           {leaders.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
         </select>
       </div>
       <div className="card table-wrap">
         <table>
-          <thead><tr><th>Zaman</th><th>Kaynak</th><th>İşlem</th><th>Sonuç</th><th>Neden</th><th className="num">SOL</th><th>Havuz</th></tr></thead>
+          <thead><tr><th>Time</th><th>Source</th><th>Action</th><th>Result</th><th>Reason</th><th className="num">SOL</th><th>Pool</th></tr></thead>
           <tbody>
             {folded.map((r) => (
               <FragmentRow key={r.id} r={r} open={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)} />
@@ -288,20 +288,20 @@ function LogsTab({ leaders }: { leaders: Leader[] }) {
 
 /** LP Agent "Fix it in one click": a button next to the reason that leads to the fix. */
 const FIX: Record<string, { label: string; href: (leaderId: string | null) => string }> = {
-  low_balance: { label: "Bakiye yükle", href: () => "/settings#wallet" },
-  send_failed: { label: "Slippage'ı yükselt", href: () => "/settings#limits" },
-  tokens_left_retrying: { label: "Slippage'ı yükselt", href: () => "/settings#limits" },
-  fund_protection: { label: "Limiti düzenle", href: () => "/settings#limits" },
-  daily_limit: { label: "Limiti düzenle", href: () => "/settings#limits" },
-  copy_size_zero: { label: "Kopya boyutunu düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  position_cap_reached: { label: "Kopya boyutunu düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  no_sizing_rule: { label: "Kopya boyutunu düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  meme_protection: { label: "Kopya ayarlarını düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  strategy_not_copied: { label: "Kopya ayarlarını düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  pool_type_not_copied: { label: "Kopya ayarlarını düzenle", href: (id) => `/copy?edit=${id ?? ""}` },
-  token_filter: { label: "Filtreleri düzenle", href: () => "/settings#filters" },
-  token_blacklisted: { label: "Kara listeyi düzenle", href: () => "/settings#filters" },
-  kill_switch: { label: "Acil durdurmayı kaldır", href: () => "/settings#limits" },
+  low_balance: { label: "Top up", href: () => "/settings#wallet" },
+  send_failed: { label: "Raise slippage", href: () => "/settings#limits" },
+  tokens_left_retrying: { label: "Raise slippage", href: () => "/settings#limits" },
+  fund_protection: { label: "Edit limits", href: () => "/settings#limits" },
+  daily_limit: { label: "Edit limits", href: () => "/settings#limits" },
+  copy_size_zero: { label: "Edit copy size", href: (id) => `/copy?edit=${id ?? ""}` },
+  position_cap_reached: { label: "Edit copy size", href: (id) => `/copy?edit=${id ?? ""}` },
+  no_sizing_rule: { label: "Edit copy size", href: (id) => `/copy?edit=${id ?? ""}` },
+  meme_protection: { label: "Edit copy settings", href: (id) => `/copy?edit=${id ?? ""}` },
+  strategy_not_copied: { label: "Edit copy settings", href: (id) => `/copy?edit=${id ?? ""}` },
+  pool_type_not_copied: { label: "Edit copy settings", href: (id) => `/copy?edit=${id ?? ""}` },
+  token_filter: { label: "Edit filters", href: () => "/settings#filters" },
+  token_blacklisted: { label: "Edit blacklist", href: () => "/settings#filters" },
+  kill_switch: { label: "Turn off emergency stop", href: () => "/settings#limits" },
 };
 
 /** LP Agent: kept tokens show as Holding, with a countdown and a Sell now button. */
@@ -321,8 +321,8 @@ function HoldCountdown({ row }: { row: LogRow }) {
   };
   return (
     <span className="small" style={{ marginLeft: 8 }}>
-      <span className="badge badge-dry">{left > 0 ? `${left} sn` : "satılıyor"}</span>
-      {!done && left > 0 && <button className="btn btn-sm" style={{ marginLeft: 6 }} onClick={sell}>Şimdi sat</button>}
+      <span className="badge badge-dry">{left > 0 ? `${left}s` : "selling"}</span>
+      {!done && left > 0 && <button className="btn btn-sm" style={{ marginLeft: 6 }} onClick={sell}>Sell now</button>}
     </span>
   );
 }
@@ -345,8 +345,8 @@ function FragmentRow({ r, open, onToggle }: { r: LogRow & { more: number }; open
         <td className="muted num">{time(r.time)}</td>
         <td>
           <span style={{ fontWeight: 600 }}>{r.source.label}</span>
-          {r.source.status === "paused" && <span className="badge" style={{ marginLeft: 6 }}>Duraklatıldı</span>}
-          {r.dryRun && <span className="badge badge-dry" style={{ marginLeft: 6 }}>deneme</span>}
+          {r.source.status === "paused" && <span className="badge" style={{ marginLeft: 6 }}>Paused</span>}
+          {r.dryRun && <span className="badge badge-dry" style={{ marginLeft: 6 }}>dry run</span>}
         </td>
         <td>{KIND_TR[r.kind] ?? r.kind}</td>
         <td><span className={`badge ${res.cls}`}>{res.label}</span></td>

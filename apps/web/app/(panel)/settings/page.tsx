@@ -19,11 +19,11 @@ interface Manual {
 
 type Tab = "general" | "swap" | "security" | "notify" | "account";
 const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "general", label: "Genel" },
+  { id: "general", label: "General" },
   { id: "swap", label: "Swap" },
-  { id: "security", label: "Güvenlik" },
-  { id: "notify", label: "Bildirimler" },
-  { id: "account", label: "Hesap" },
+  { id: "security", label: "Security" },
+  { id: "notify", label: "Notifications" },
+  { id: "account", label: "Account" },
 ];
 // Old deep links (#limits, #filters, #wallet) land on the right tab.
 const HASH_TAB: Record<string, Tab> = { limits: "general", general: "general", swap: "swap", filters: "security", security: "security", notify: "notify", wallet: "account", account: "account" };
@@ -137,7 +137,7 @@ export default function SettingsPage() {
   return (
     <main className="page stack">
       <div className="page-head">
-        <h1>Ayarlar</h1>
+        <h1>Settings</h1>
         <div className="spacer" />
         {saved && <span className="badge badge-pos">{saved}</span>}
         {error && <span className="badge badge-neg">{error}</span>}
@@ -161,46 +161,46 @@ export default function SettingsPage() {
           </section>
 
           <section className="card card-pad stack">
-            <h3 style={{ margin: 0 }}>Kendi açtığım pozisyonlar (Manage Manual Position)</h3>
+            <h3 style={{ margin: 0 }}>Manage Manual Position</h3>
             <p className="muted small" style={{ margin: 0 }}>Bot cüzdanını Phantom'a ekleyip kendin açtığın pozisyonlar ~5 dakikada bir bulunur ve bu kurallarla yönetilir. PnL, yönetime alındığı andaki değerden ölçülür.</p>
             <label className="check"><input type="checkbox" checked={manual.enabled} onChange={(e) => m("enabled", e.target.checked)} /><span>Kendi pozisyonlarımı yönet</span></label>
             <div className="row">
-              <label className="field">Yönetim modu<select value={manual.mode} onChange={(e) => m("mode", e.target.value)}>{(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"] as const).map((x) => <option key={x} value={x}>{MODE_TR[x]}</option>)}</select></label>
-              <label className="field">Flip eşiği (%)<input type="number" min={1} max={90} step="0.5" value={manual.flipThresholdPct} onChange={(e) => m("flipThresholdPct", Number(e.target.value))} /></label>
-              {manual.mode === "precision_hybrid" && <label className="field">Reshape aralığı (bin)<input type="number" min={1} max={51} value={manual.reshapeBins ?? 12} onChange={(e) => m("reshapeBins", Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))))} /></label>}
+              <label className="field">Management mode<select value={manual.mode} onChange={(e) => m("mode", e.target.value)}>{(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"] as const).map((x) => <option key={x} value={x}>{MODE_TR[x]}</option>)}</select></label>
+              <label className="field">Flip threshold (%)<input type="number" min={1} max={90} step="0.5" value={manual.flipThresholdPct} onChange={(e) => m("flipThresholdPct", Number(e.target.value))} /></label>
+              {manual.mode === "precision_hybrid" && <label className="field">Reshape bins<input type="number" min={1} max={51} value={manual.reshapeBins ?? 12} onChange={(e) => m("reshapeBins", Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))))} /></label>}
               <label className="field">Take profit (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.takeProfitPct)} onChange={(e) => m("takeProfitPct", num(e.target.value))} /></label>
               <label className="field">Stop loss (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.stopLossPct)} onChange={(e) => m("stopLossPct", num(e.target.value))} /></label>
               <label className="field">Trailing stop (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.trailingStopPct)} onChange={(e) => m("trailingStopPct", num(e.target.value))} /></label>
-              <label className="field">Auto-compound (dk)<input type="number" min={5} placeholder="kapalı" value={str(manual.compoundMinutes)} onChange={(e) => m("compoundMinutes", num(e.target.value))} /></label>
+              <label className="field">Auto-compound (min)<input type="number" min={5} placeholder="kapalı" value={str(manual.compoundMinutes)} onChange={(e) => m("compoundMinutes", num(e.target.value))} /></label>
             </div>
-            <div><button className="btn btn-primary" onClick={saveManual}>Kaydet</button></div>
+            <div><button className="btn btn-primary" onClick={saveManual}>Save</button></div>
           </section>
 
           <section className="card card-pad stack">
-            <h3 style={{ margin: 0 }}>Limitler ve fon koruması</h3>
+            <h3 style={{ margin: 0 }}>Limits & Fund Protection</h3>
             {risk.fundProtectionTrippedAt ? (
               <div className="banner banner-neg" style={{ margin: 0 }}>
                 Durduruldu: zarar limiti doldu. Yeni kopyalar açılmıyor, çıkışlar liderleri takip ediyor.
                 <div className="spacer" />
-                <button className="btn btn-sm" onClick={resume}>Devam et</button>
+                <button className="btn btn-sm" onClick={resume}>Resume</button>
               </div>
             ) : risk.fundProtectionEnabled && risk.fundProtectionLimitSol !== null ? (
               <div className="note">Limit: zirveden {risk.fundProtectionLimitSol.toFixed(4)} SOL kayıp (kaydedildiği günkü net varlığın %{risk.fundProtectionLossPct}'i).</div>
             ) : null}
             <div className="row">
-              <label className="field">İşlem başı en fazla (SOL)<input type="number" min={0} step="0.1" value={risk.maxSolPerTx} onChange={(e) => r("maxSolPerTx", Number(e.target.value))} /><span className="hint">Hiçbir açma/ekleme bunu geçemez.</span></label>
-              <label className="field">Günlük en fazla (SOL)<input type="number" min={0} step="0.5" value={risk.maxSolPerDay} onChange={(e) => r("maxSolPerDay", Number(e.target.value))} /></label>
+              <label className="field">Max per tx (SOL)<input type="number" min={0} step="0.1" value={risk.maxSolPerTx} onChange={(e) => r("maxSolPerTx", Number(e.target.value))} /><span className="hint">Hiçbir açma/ekleme bunu geçemez.</span></label>
+              <label className="field">Max per day (SOL)<input type="number" min={0} step="0.5" value={risk.maxSolPerDay} onChange={(e) => r("maxSolPerDay", Number(e.target.value))} /></label>
             </div>
-            <label className="check"><input type="checkbox" checked={risk.fundProtectionEnabled} onChange={(e) => r("fundProtectionEnabled", e.target.checked)} /><span>Fon koruması<div className="hint">Kapanan kopyalardaki zarar, net varlığın bu yüzdesine ulaşınca yeni girişler durur; çıkışlar liderleri takip etmeye devam eder.</div></span></label>
-            <label className="field">Zirveden en fazla zarar (%)<input type="number" min={1} max={100} value={risk.fundProtectionLossPct} onChange={(e) => r("fundProtectionLossPct", Number(e.target.value))} /><span className="hint">Kaydetmek sayacı sıfırlar.</span></label>
-            <div><button className="btn btn-primary" onClick={saveRisk}>Kaydet</button></div>
+            <label className="check"><input type="checkbox" checked={risk.fundProtectionEnabled} onChange={(e) => r("fundProtectionEnabled", e.target.checked)} /><span>Fund protection<div className="hint">Kapanan kopyalardaki zarar, net varlığın bu yüzdesine ulaşınca yeni girişler durur; çıkışlar liderleri takip etmeye devam eder.</div></span></label>
+            <label className="field">Max loss from peak (%)<input type="number" min={1} max={100} value={risk.fundProtectionLossPct} onChange={(e) => r("fundProtectionLossPct", Number(e.target.value))} /><span className="hint">Kaydetmek sayacı sıfırlar.</span></label>
+            <div><button className="btn btn-primary" onClick={saveRisk}>Save</button></div>
           </section>
 
           <section className="card card-pad stack">
-            <h3 style={{ margin: 0 }}>Bu cihaz</h3>
+            <h3 style={{ margin: 0 }}>This device</h3>
             <label className="check">
               <input type="checkbox" checked={sounds} onChange={(e) => (setSounds(e.target.checked), setSoundsState(e.target.checked))} />
-              <span>Pozisyon sesleri<div className="hint">Portfolio açıkken bir pozisyon açılınca ya da kapanınca kısa bir ses çalar. Açınca bir kez çalar.</div></span>
+              <span>Position sounds<div className="hint">Portfolio açıkken bir pozisyon açılınca ya da kapanınca kısa bir ses çalar. Açınca bir kez çalar.</div></span>
             </label>
           </section>
         </>
@@ -211,21 +211,21 @@ export default function SettingsPage() {
           <h3 style={{ margin: 0 }}>Swap</h3>
           <label className="field">Slippage (%)<input type="number" min={0.1} max={50} step="0.1" value={risk.slippagePct} onChange={(e) => r("slippagePct", Number(e.target.value))} /><span className="hint">Botun yaptığı bütün swap'lar için: zap, kopyalar, kapanışlar, token → SOL satışları.{risk.slippagePct > 7 ? " ⚠ %7 üstü yüksek." : ""}</span></label>
           <div className="note">Yöntem: <b>Jupiter</b> (platform ücreti yok). Rota bulunamazsa ya da Jupiter hata verirse aynı Meteora havuzu üzerinden satılır. Kopyalar "fiyat değişti" diye başarısız oluyorsa slippage'ı biraz yükselt; volatil tokenler daha fazla pay ister.</div>
-          <div><button className="btn btn-primary" onClick={saveRisk}>Kaydet</button></div>
+          <div><button className="btn btn-primary" onClick={saveRisk}>Save</button></div>
         </section>
       )}
 
       {tab === "security" && (
         <section className="card card-pad stack">
-          <h3 style={{ margin: 0 }}>Token filtreleri</h3>
+          <h3 style={{ margin: 0 }}>Token filters</h3>
           <p className="muted small" style={{ margin: 0 }}>Bir pozisyon açılmadan ya da kopyalanmadan önce uygulanır. Geçemeyen token atlanır; Kopya Kayıtları hangi filtrenin durdurduğunu gösterir.</p>
           <div className="row">
-            <label className="field">Jupiter Organic Score (en az)<input type="number" min={0} max={100} value={str(risk.minOrganicScore)} onChange={(e) => r("minOrganicScore", num(e.target.value))} /><span className="hint">Botlar ve sybil'ler hariç gerçek zincir aktivitesi (0–100).</span></label>
-            <label className="field">Piyasa değeri (en az, $)<input type="number" min={0} step="10000" value={str(risk.minMarketCapUsd)} onChange={(e) => r("minMarketCapUsd", num(e.target.value))} /></label>
-            <label className="field">24s hacim (en az, $)<input type="number" min={0} step="10000" value={str(risk.min24hVolumeUsd)} onChange={(e) => r("min24hVolumeUsd", num(e.target.value))} /></label>
-            <label className="field">Holder (en az)<input type="number" min={0} value={str(risk.minHolders)} onChange={(e) => r("minHolders", num(e.target.value))} /><span className="hint">0 = sınır yok.</span></label>
+            <label className="field">Min Organic Score (Jupiter)<input type="number" min={0} max={100} value={str(risk.minOrganicScore)} onChange={(e) => r("minOrganicScore", num(e.target.value))} /><span className="hint">Botlar ve sybil'ler hariç gerçek zincir aktivitesi (0–100).</span></label>
+            <label className="field">Min Market Cap ($)<input type="number" min={0} step="10000" value={str(risk.minMarketCapUsd)} onChange={(e) => r("minMarketCapUsd", num(e.target.value))} /></label>
+            <label className="field">Min 24H Volume ($)<input type="number" min={0} step="10000" value={str(risk.min24hVolumeUsd)} onChange={(e) => r("min24hVolumeUsd", num(e.target.value))} /></label>
+            <label className="field">Min Holders<input type="number" min={0} value={str(risk.minHolders)} onChange={(e) => r("minHolders", num(e.target.value))} /><span className="hint">0 = sınır yok.</span></label>
           </div>
-          <div className="field">Kara liste ({risk.tokenBlacklist.length})
+          <div className="field">Blacklist ({risk.tokenBlacklist.length})
             <div className="amount-row">
               <input type="text" className="mono" placeholder="Token adresi yapıştır" value={newToken} onChange={(e) => setNewToken(e.target.value)} />
               <button className="btn btn-sm" disabled={!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(newToken.trim())} onClick={() => (r("tokenBlacklist", [...new Set([...risk.tokenBlacklist, newToken.trim()])]), setNewToken(""))}>Ekle</button>
@@ -237,13 +237,13 @@ export default function SettingsPage() {
               {!risk.tokenBlacklist.length && <span className="muted small">Kara listede token yok.</span>}
             </div>
           </div>
-          <div><button className="btn btn-primary" onClick={saveRisk}>Filtreleri kaydet</button></div>
+          <div><button className="btn btn-primary" onClick={saveRisk}>Save filters</button></div>
         </section>
       )}
 
       {tab === "notify" && (
         <section className="card card-pad stack">
-          <h3 style={{ margin: 0 }}>Telegram bildirimleri</h3>
+          <h3 style={{ margin: 0 }}>Telegram notifications</h3>
           <p className="muted small" style={{ margin: 0 }}>Kapattığın türler Telegram'a gönderilmez (loglarda yine görünür). Komutlar: /durum, /stop, /devam, /ac &lt;havuz&gt;, /iptal.</p>
           {NOTIFY.map((n) => (
             <label key={n.k} className="check">
@@ -257,7 +257,7 @@ export default function SettingsPage() {
       {tab === "account" && (
         <>
           <section className="card card-pad stack">
-            <h3 style={{ margin: 0 }}>Bot cüzdanı</h3>
+            <h3 style={{ margin: 0 }}>Agent wallet</h3>
             {me.agentWallets.length ? (
               me.agentWallets.map((w) => (
                 <div key={w.id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -269,14 +269,14 @@ export default function SettingsPage() {
               <p className="muted" style={{ margin: 0 }}>Henüz bot cüzdanı yok. Sunucuda <code>wallet:create</code> ile oluşturulur.</p>
             )}
             <div className="note">
-              Mod: <b>{me.mode === "live" ? "CANLI" : "DENEME"}</b>. Canlıya geçiş sadece sunucuda yapılır (<code>docker-compose.live.yml</code>). Özel anahtar panelde hiçbir zaman gösterilmez ya da dışa aktarılmaz; şifreli keystore sadece sunucudadır. Yatırma ve ana cüzdana çekme sağ üstteki hesap menüsünde.
+              Mod: <b>{me.mode === "live" ? "LIVE" : "DRY RUN"}</b>. Canlıya geçiş sadece sunucuda yapılır (<code>docker-compose.live.yml</code>). Özel anahtar panelde hiçbir zaman gösterilmez ya da dışa aktarılmaz; şifreli keystore sadece sunucudadır. Yatırma ve ana cüzdana çekme sağ üstteki hesap menüsünde.
             </div>
           </section>
           <section className="card card-pad stack">
             <h3 style={{ margin: 0 }}>Claim SOL</h3>
             <p className="muted small" style={{ margin: 0 }}>Her token hesabı ~0,002 SOL rent tutar. Boş (bakiyesi 0) olanlar kapatılır, SOL bot cüzdanına geri döner.</p>
             <div className="note">Boş token hesabı: <b>{acc?.emptyAccounts ?? "—"}</b> · geri alınabilir: <b>{acc?.claimableSol !== undefined ? `${acc.claimableSol.toFixed(4)} SOL` : "—"}</b></div>
-            <div><button className="btn btn-primary" disabled={!acc?.emptyAccounts} onClick={claimSol}>SOL'ü geri al</button></div>
+            <div><button className="btn btn-primary" disabled={!acc?.emptyAccounts} onClick={claimSol}>Claim SOL</button></div>
           </section>
           <section className="card card-pad">
             <div className="small muted">Giriş cüzdanı: <span className="mono">{me.user.loginWallet}</span> · Bot cüzdanından ayrıdır, sadece mesaj imzalar. Rol: {me.user.role}.</div>

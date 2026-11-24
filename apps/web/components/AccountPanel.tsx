@@ -48,8 +48,8 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
         <span className="dot" style={{ color: me.mode === "live" ? "var(--neg)" : "var(--warn)" }} /> {wallet ? short(wallet, 4) : "Hesap"} ▾
       </button>
       {open && (
-        <div className="acct-pop">
-          <div className="kpi-label">BOT CÜZDANI {me.mode === "live" ? <span className="badge badge-live">CANLI</span> : <span className="badge badge-dry">DENEME</span>}</div>
+        <div className="acct-pop" lang="en">
+          <div className="kpi-label">AGENT WALLET {me.mode === "live" ? <span className="badge badge-live">LIVE</span> : <span className="badge badge-dry">DRY RUN</span>}</div>
           {wallet ? (
             <div className="acct-addr">
               <span className="mono">{wallet}</span>
@@ -60,9 +60,9 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
           )}
           <div className="acct-grid">
             <span className="muted">SOL</span><b><Amount sol={acc?.sol ?? null} /></b>
-            <span className="muted">Token'lar</span><b><Amount sol={acc?.tokensValue ?? null} /></b>
-            <span className="muted">Pozisyonlar</span><b><Amount sol={acc?.positionsValue ?? null} /></b>
-            <span className="muted">Net varlık</span><b><Amount sol={acc?.netWorth ?? null} /></b>
+            <span className="muted">Tokens</span><b><Amount sol={acc?.tokensValue ?? null} /></b>
+            <span className="muted">Positions</span><b><Amount sol={acc?.positionsValue ?? null} /></b>
+            <span className="muted">Net worth</span><b><Amount sol={acc?.netWorth ?? null} /></b>
           </div>
           {!!acc?.tokens.length && (
             <div className="acct-tokens">
@@ -75,16 +75,16 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
           )}
           {wallet && (
             <>
-              <div className="kpi-label" style={{ marginTop: 12 }}>YATIR</div>
+              <div className="kpi-label" style={{ marginTop: 12 }}>DEPOSIT</div>
               <div className="note">Bu adrese SOL gönder (Phantom/Jupiter'den). Sadece Solana ağı.</div>
-              <div className="kpi-label" style={{ marginTop: 12 }}>ANA CÜZDANA ÇEK</div>
+              <div className="kpi-label" style={{ marginTop: 12 }}>WITHDRAW TO MAIN WALLET</div>
               {acc?.mainWallet ? (
                 <>
                   <div className="small muted">Alıcı (sunucuda sabit): <span className="mono">{short(acc.mainWallet, 6)}</span></div>
                   <div className="acct-withdraw">
                     <input type="number" min={0} step="0.01" placeholder="SOL" value={amount} onChange={(e) => setAmount(e.target.value)} />
-                    <button className="btn btn-sm" disabled={busy || !(Number(amount) > 0)} onClick={() => withdraw(false)}>Çek</button>
-                    <button className="btn btn-sm" disabled={busy} onClick={() => confirm("Bot cüzdanındaki SOL'ün tamamı (işlem ücreti payı hariç) ana cüzdana gönderilsin mi? Açık pozisyonlar etkilenmez.") && withdraw(true)}>Tümü</button>
+                    <button className="btn btn-sm" disabled={busy || !(Number(amount) > 0)} onClick={() => withdraw(false)}>Withdraw</button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => confirm("Bot cüzdanındaki SOL'ün tamamı (işlem ücreti payı hariç) ana cüzdana gönderilsin mi? Açık pozisyonlar etkilenmez.") && withdraw(true)}>Max</button>
                   </div>
                 </>
               ) : (
@@ -96,13 +96,13 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
           {!!acc?.emptyAccounts && acc.mode === "live" && (
             <div className="note">
               {acc.emptyAccounts} boş token hesabında ~{(acc.claimableSol ?? 0).toFixed(4)} SOL rent var.{" "}
-              <button className="btn btn-sm" onClick={() => void post("/v1/account/claim-sol").then(() => setMsg("Claim SOL kuyruğa alındı.")).catch((e) => setMsg((e as Error).message))}>SOL'ü geri al</button>
+              <button className="btn btn-sm" onClick={() => void post("/v1/account/claim-sol").then(() => setMsg("Claim SOL kuyruğa alındı.")).catch((e) => setMsg((e as Error).message))}>Claim SOL</button>
             </div>
           )}
           <div className="acct-foot">
-            <Link className="btn btn-sm btn-ghost" href="/settings" onClick={() => setOpen(false)}>Ayarlar</Link>
+            <Link className="btn btn-sm btn-ghost" href="/settings" onClick={() => setOpen(false)}>Settings</Link>
             <div className="spacer" />
-            <button className="btn btn-sm btn-ghost" onClick={onLogout} title={me.user.loginWallet}>Çıkış ({short(me.user.loginWallet, 4)})</button>
+            <button className="btn btn-sm btn-ghost" onClick={onLogout} title={me.user.loginWallet}>Log out ({short(me.user.loginWallet, 4)})</button>
           </div>
         </div>
       )}

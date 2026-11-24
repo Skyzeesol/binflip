@@ -11,11 +11,11 @@ import { useCurrency } from "@/lib/currency";
 
 const NAV = [
   { href: "/", label: "Discover" },
-  { href: "/pools", label: "Havuzlar" },
+  { href: "/pools", label: "Pools" },
   { href: "/smart-lp", label: "Smart LP" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/copy", label: "Copy LP" },
-  { href: "/settings", label: "Ayarlar" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -62,12 +62,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <SearchBox />
         {me && (
           <span className={`badge ${me.mode === "live" ? "badge-live" : "badge-dry"}`} title={me.mode === "live" ? "Gerçek işlemler imzalanıyor" : "Hiçbir işlem imzalanmıyor"}>
-            <span className="dot" /> {me.mode === "live" ? "CANLI" : "DENEME"}
+            <span className="dot" /> {me.mode === "live" ? "LIVE" : "DRY RUN"}
           </span>
         )}
         {risk && (
           <button className={`btn btn-sm btn-danger ${risk.killSwitch ? "on" : ""}`} onClick={toggleKill}>
-            {risk.killSwitch ? "Durduruldu — devam et" : "Acil durdur"}
+            {risk.killSwitch ? "Stopped — Resume" : "Emergency stop"}
           </button>
         )}
         <div className="seg cur-toggle" title="Tutarları SOL ya da USD göster">
@@ -81,7 +81,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className="banner banner-neg">
             Durduruldu: zarar limiti doldu. Yeni açma, ekleme, compound ve flip yapılmıyor; çıkışlar liderleri takip ediyor.
             <div className="spacer" />
-            <Link className="btn btn-sm" href="/settings#limits">Limit / Devam et</Link>
+            <Link className="btn btn-sm" href="/settings#limits">Limits / Resume</Link>
           </div>
         </div>
       )}

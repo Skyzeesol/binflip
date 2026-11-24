@@ -56,7 +56,7 @@ export default function PoolPage({ params }: { params: Promise<{ address: string
   const mine = (d?.mine ?? []).filter((m) => (tab === "open" ? m.state !== "CLOSED" : m.state === "CLOSED"));
 
   return (
-    <main className="page page-wide">
+    <main className="page page-wide" lang="en">
       {err && <div className="banner banner-neg">{err}</div>}
       {p && (
         <div className="pool-head card">
@@ -76,14 +76,14 @@ export default function PoolPage({ params }: { params: Promise<{ address: string
             </div>
           </div>
           <div className="pool-stats">
-            <Stat l="Fiyat" v={`${p.price.toPrecision(4)} SOL`} />
-            <Stat l="Piyasa değeri" v={p.base.mcap ? money(p.base.mcap) : "—"} />
+            <Stat l="Price" v={`${p.price.toPrecision(4)} SOL`} />
+            <Stat l="MCAP" v={p.base.mcap ? money(p.base.mcap) : "—"} />
             <Stat l="TVL" v={money(p.tvl)} />
-            <Stat l="Hacim 24s" v={money(d!.volume24h)} />
-            <Stat l="Fee 24s" v={money(d!.fees24h)} />
-            <Stat l="Fee/TVL 24s" v={`${(d!.feeTvl["24h"] ?? 0).toFixed(2)}%`} cls="pos" />
-            <Stat l="Fee/TVL 1s" v={`${(d!.feeTvl["1h"] ?? 0).toFixed(2)}%`} cls="pos" />
-            <Stat l="Tah. APR" v={`${compact(p.apr, 1)}%`} />
+            <Stat l="Volume 24H" v={money(d!.volume24h)} />
+            <Stat l="Fees 24H" v={money(d!.fees24h)} />
+            <Stat l="Fee/TVL 24H" v={`${(d!.feeTvl["24h"] ?? 0).toFixed(2)}%`} cls="pos" />
+            <Stat l="Fee/TVL 1H" v={`${(d!.feeTvl["1h"] ?? 0).toFixed(2)}%`} cls="pos" />
+            <Stat l="Est. APR" v={`${compact(p.apr, 1)}%`} />
           </div>
         </div>
       )}
@@ -93,26 +93,26 @@ export default function PoolPage({ params }: { params: Promise<{ address: string
           <section className="card card-pad">{p && <CandleChart pool={address} protocol={protocol} lines={lines} />}</section>
           {d?.token && (
             <section className="card card-pad pool-token">
-              <Stat l="Organic score" v={d.token.organicScore === null ? "—" : d.token.organicScore.toFixed(0)} cls={d.token.organicScore !== null && d.token.organicScore < 50 ? "neg" : ""} />
-              <Stat l="Holder" v={d.token.holders?.toLocaleString("tr-TR") ?? "—"} cls={d.token.holders !== null && d.token.holders < 100 ? "neg" : ""} />
-              <Stat l="Token hacmi 24s" v={d.token.volume24hUsd ? money(d.token.volume24hUsd) : "—"} />
-              <Stat l="Token yaşı" v={d.token.createdAt ? closedAt(d.token.createdAt) : "—"} />
-              <Stat l="Havuzdaki token" v={`${compact(d.reserves.x, 2)} ${p?.base.symbol}`} />
-              <Stat l="Havuzdaki SOL" v={`${compact(d.reserves.y, 2)}`} />
+              <Stat l="Organic Score" v={d.token.organicScore === null ? "—" : d.token.organicScore.toFixed(0)} cls={d.token.organicScore !== null && d.token.organicScore < 50 ? "neg" : ""} />
+              <Stat l="Holders" v={d.token.holders?.toLocaleString("tr-TR") ?? "—"} cls={d.token.holders !== null && d.token.holders < 100 ? "neg" : ""} />
+              <Stat l="Token Volume 24H" v={d.token.volume24hUsd ? money(d.token.volume24hUsd) : "—"} />
+              <Stat l="Token Age" v={d.token.createdAt ? closedAt(d.token.createdAt) : "—"} />
+              <Stat l="Pool token reserve" v={`${compact(d.reserves.x, 2)} ${p?.base.symbol}`} />
+              <Stat l="Pool SOL reserve" v={`${compact(d.reserves.y, 2)}`} />
             </section>
           )}
           <section className="card">
             <div className="tabs" style={{ padding: "0 12px", marginBottom: 0 }}>
-              <button className={`tab ${tab === "open" ? "active" : ""}`} onClick={() => setTab("open")}>Pozisyonların</button>
-              <button className={`tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>Geçmiş</button>
+              <button className={`tab ${tab === "open" ? "active" : ""}`} onClick={() => setTab("open")}>Your Positions</button>
+              <button className={`tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>History</button>
             </div>
             <div className="table-wrap">
               <table className="pf-table">
-                <thead><tr><th>Pozisyon</th><th>Kaynak</th><th className="num">Yatırılan</th><th className="num">Değer</th><th>Aralık (bin)</th><th className="num">{tab === "open" ? "Açılış" : "Kapanış"}</th></tr></thead>
+                <thead><tr><th>Position</th><th>Source</th><th className="num">Invested</th><th className="num">Value</th><th>Range (bin)</th><th className="num">{tab === "open" ? "Opened" : "Closed"}</th></tr></thead>
                 <tbody>
                   {mine.map((m) => (
                     <tr key={m.id} className="clickable" onClick={() => (window.location.href = "/portfolio")}>
-                      <td>{m.strategy ?? "—"} {m.dryRun && <span className="src src-dry">deneme</span>}</td>
+                      <td>{m.strategy ?? "—"} {m.dryRun && <span className="src src-dry">dry run</span>}</td>
                       <td><span className={`src src-${m.source}`}>{m.source === "auto" ? "⚙ Auto" : m.origin === "telegram" ? "✎ Telegram" : "✎ Manual"}</span></td>
                       <td className="num"><Amount sol={m.invested} /></td>
                       <td className="num"><Amount sol={m.value} /></td>
@@ -227,28 +227,28 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
 
   return (
     <aside className="card create-panel">
-      <h3>Pozisyon aç</h3>
-      <div className="field small">Yatırılacak SOL
+      <h3>Create Position</h3>
+      <div className="field small">Amount (SOL)
         <div className="amount-row">
           <input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
-          <button className="btn btn-sm" onClick={() => setAmount((maxAmt / 2).toFixed(3))} disabled={!bal}>YARI</button>
+          <button className="btn btn-sm" onClick={() => setAmount((maxAmt / 2).toFixed(3))} disabled={!bal}>HALF</button>
           <button className="btn btn-sm" onClick={() => setAmount(maxAmt.toFixed(3))} disabled={!bal}>MAX</button>
         </div>
         <div className="chips">
           {[0.1, 0.5, 1, 5].map((v) => <button key={v} className={`chip ${amt === v ? "on" : ""}`} disabled={bal !== null && acc?.mode === "live" && v > bal} onClick={() => setAmount(String(v))}>{v} SOL</button>)}
         </div>
-        <span className="hint">Bakiye: {bal === null ? "—" : `${bal.toFixed(4)} SOL`}{acc?.mode !== "live" ? " (deneme modu)" : ""}</span>
+        <span className="hint">Balance: {bal === null ? "—" : `${bal.toFixed(4)} SOL`}{acc?.mode !== "live" ? " (dry run)" : ""}</span>
       </div>
 
       {dlmm && (
         <>
-          <div className="field small">Strateji
+          <div className="field small">Strategy
             <div className="seg full">
               {(["spot", "curve", "bid_ask"] as const).map((s) => <button key={s} className={strategy === s ? "on" : ""} onClick={() => setStrategy(s)}>{s === "spot" ? "Spot" : s === "curve" ? "Curve" : "Bid-Ask"}</button>)}
             </div>
             <ShapePreview strategy={strategy} lo={p.range.lo} hi={p.range.hi} />
           </div>
-          <div className="field small">Aralık (fiyattan %)
+          <div className="field small">Range (% from price)
             <div className="chips">
               {PRESETS.map((r) => <button key={r.id} className={`chip ${p.range.lo === r.lo && p.range.hi === r.hi ? "on" : ""}`} onClick={() => p.setRange({ lo: r.lo, hi: r.hi })}>{r.id}%</button>)}
             </div>
@@ -266,31 +266,31 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
       )}
       {!dlmm && <div className="note">DAMM V2: tutarı yaz, yeter. Strateji ve aralık yok; SOL havuzun oranına göre bölünür (yarısı token'a çevrilir).</div>}
 
-      <div className="divider">Binflip yönetimi</div>
+      <div className="divider">Binflip management</div>
       {dlmm && (
-        <label className="field small">Yönetim modu
+        <label className="field small">Management mode
           <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
-            <option value="staged_flip">Kademeli flip</option>
-            <option value="bottom_flip">Dipte flip</option>
+            <option value="staged_flip">Staged Flip</option>
+            <option value="bottom_flip">Bottom Flip</option>
             <option value="precision_hybrid">Precision Hybrid</option>
-            <option value="mirror">Sadece tut (yönetme)</option>
+            <option value="mirror">Hold only (no management)</option>
           </select>
         </label>
       )}
-      {dlmm && mode === "staged_flip" && <label className="field small">Flip eşiği (%)<input type="number" min={1} value={flip} onChange={(e) => setFlip(e.target.value)} /></label>}
+      {dlmm && mode === "staged_flip" && <label className="field small">Flip threshold (%)<input type="number" min={1} value={flip} onChange={(e) => setFlip(e.target.value)} /></label>}
       {dlmm && mode === "precision_hybrid" && (
-        <label className="field small">Reshape aralığı (bin)<input type="number" min={1} max={51} value={reshape} onChange={(e) => setReshape(e.target.value)} />
+        <label className="field small">Reshape bins<input type="number" min={1} max={51} value={reshape} onChange={(e) => setReshape(e.target.value)} />
           <span className="hint">Fiyat bu kadar bin kayınca likidite yeni fiyatın etrafına %50 Spot + %50 Bid-Ask olarak tek işlemle yeniden dağıtılır. İlk açılış seçtiğin stratejiyle yapılır.</span>
         </label>
       )}
-      <div className="field small">Fee'ler
+      <div className="field small">Fees
         <div className="seg full">
           <button className={feeMode === "compound" ? "on" : ""} onClick={() => setFeeMode("compound")} disabled={!dlmm}>Auto-compound</button>
-          <button className={feeMode === "sell" ? "on" : ""} onClick={() => setFeeMode("sell")}>Sürekli SOL'e sat</button>
-          <button className={feeMode === "hold" ? "on" : ""} onClick={() => setFeeMode("hold")}>Bekle</button>
+          <button className={feeMode === "sell" ? "on" : ""} onClick={() => setFeeMode("sell")}>Always sell to SOL</button>
+          <button className={feeMode === "hold" ? "on" : ""} onClick={() => setFeeMode("hold")}>Hold</button>
         </div>
       </div>
-      {feeMode !== "hold" && <label className="field small">Her kaç dakikada (eşik aşılınca)<input type="number" min={5} value={interval} onChange={(e) => setInterval_(e.target.value)} /></label>}
+      {feeMode !== "hold" && <label className="field small">Interval (min, eşik aşılınca)<input type="number" min={5} value={interval} onChange={(e) => setInterval_(e.target.value)} /></label>}
       <div className="row3">
         <label className="field small">TP %<input type="number" placeholder="—" value={tp} onChange={(e) => setTp(e.target.value)} /></label>
         <label className="field small">SL %<input type="number" placeholder="—" value={sl} onChange={(e) => setSl(e.target.value)} /></label>
@@ -298,16 +298,16 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
       </div>
 
       <div className="cost">
-        <div><span>Yatırılan</span><b>{amt.toFixed(4)} SOL</b></div>
-        <div><span>Swap ve işlem ücreti payı</span><b>{(dlmm && est ? est.swapBufferSol : 0.02).toFixed(4)} SOL</b></div>
-        <div><span>Pozisyon rent'i (geri gelir)</span><b>{(dlmm && est ? est.positionRentSol : 0.02).toFixed(4)} SOL</b></div>
-        {dlmm && <div><span>Yeni bin rent'i (geri gelmez)</span><b className={est?.newBinRentSol ? "neg" : ""}>{est?.newBinRentSol === null || !est ? "—" : `${est.newBinRentSol.toFixed(4)} SOL`}</b></div>}
+        <div><span>Deposit</span><b>{amt.toFixed(4)} SOL</b></div>
+        <div><span>Swap & network fee buffer</span><b>{(dlmm && est ? est.swapBufferSol : 0.02).toFixed(4)} SOL</b></div>
+        <div><span>Position rent (refundable)</span><b>{(dlmm && est ? est.positionRentSol : 0.02).toFixed(4)} SOL</b></div>
+        {dlmm && <div><span>New bin rent (non-refundable)</span><b className={est?.newBinRentSol ? "neg" : ""}>{est?.newBinRentSol === null || !est ? "—" : `${est.newBinRentSol.toFixed(4)} SOL`}</b></div>}
         {dlmm && est?.newBinArrays ? <div className="small neg">Aralığın {est.newBinArrays} bin dizisi henüz açılmamış; ilk açan sen olursun. Aralığı daraltarak bunu önleyebilirsin.</div> : null}
-        <div className="cost-total"><span>Gereken toplam</span><b>{costs.toFixed(4)} SOL</b></div>
+        <div className="cost-total"><span>Total required</span><b>{costs.toFixed(4)} SOL</b></div>
       </div>
       {short_ && <div className="neg small">İşlem ücretleri için SOL yetmiyor.</div>}
       {msg && <div className={`small ${msg.ok ? "pos" : "neg"}`}>{msg.text}</div>}
-      <button className="btn btn-primary create-btn" disabled={busy || amt <= 0 || short_} onClick={open}>{busy ? "Gönderiliyor…" : "Pozisyon aç"}</button>
+      <button className="btn btn-primary create-btn" disabled={busy || amt <= 0 || short_} onClick={open}>{busy ? "Gönderiliyor…" : "Create Position"}</button>
       <div className="small muted">Bot cüzdanından açılır; cüzdan onayı istenmez. <Link className="link-accent" href="/settings">Slippage</Link></div>
     </aside>
   );

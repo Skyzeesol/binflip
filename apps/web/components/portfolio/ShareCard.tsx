@@ -36,7 +36,7 @@ export function ShareCard({ p, onClose }: { p: PfPosition; onClose: () => void }
     g.fillText("Binflip", 108, 92);
     g.fillStyle = "#8b8b94";
     g.font = "500 26px system-ui, sans-serif";
-    g.fillText(p.closedAt ? "Kapanan pozisyon" : "Açık pozisyon", W - 330, 90);
+    g.fillText(p.closedAt ? "Closed position" : "Open position", W - 330, 90);
     // Pair
     const sym = p.token?.symbol ?? "TOKEN";
     g.fillStyle = "#ececef";
@@ -54,9 +54,9 @@ export function ShareCard({ p, onClose }: { p: PfPosition; onClose: () => void }
     g.fillText(`${(p.pnl ?? 0) >= 0 ? "+" : ""}${(p.pnl ?? 0).toFixed(4)} SOL`, 70, 500);
     // Stats
     const stats: Array<[string, string]> = [
-      ["Yatırılan", `${p.invested.toFixed(3)} SOL`],
+      ["Invested", `${p.invested.toFixed(3)} SOL`],
       ["Fee", `${p.totalFee.toFixed(4)} SOL`],
-      ["Süre", p.ageMs === null ? "—" : p.ageMs < 48 * 3_600_000 ? `${(p.ageMs / 3_600_000).toFixed(1)} sa` : `${(p.ageMs / 86_400_000).toFixed(1)} g`],
+      ["Duration", p.ageMs === null ? "—" : p.ageMs < 48 * 3_600_000 ? `${(p.ageMs / 3_600_000).toFixed(1)}h` : `${(p.ageMs / 86_400_000).toFixed(1)}d`],
     ];
     stats.forEach(([k, v], i) => {
       const x = 70 + i * 300;
@@ -91,14 +91,14 @@ export function ShareCard({ p, onClose }: { p: PfPosition; onClose: () => void }
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-wide" role="dialog" aria-modal="true">
         <div className="modal-head">
-          <div className="modal-title">PnL kartı</div>
+          <div className="modal-title">Share PnL</div>
           <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Kapat">✕</button>
         </div>
         <div className="modal-body stack">
           <canvas ref={ref} style={{ width: "100%", height: "auto", borderRadius: 12 }} />
           <div className="pop-foot">
-            <button className="btn" onClick={download}>PNG indir</button>
-            <button className="btn btn-primary" onClick={share}>Paylaş</button>
+            <button className="btn" onClick={download}>Download PNG</button>
+            <button className="btn btn-primary" onClick={share}>Share</button>
           </div>
         </div>
       </div>

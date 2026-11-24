@@ -53,16 +53,16 @@ export const REASONS: Record<string, string> = {
   take_profit: "Take profit",
   stop_loss: "Stop loss",
   trailing_stop: "Trailing stop",
-  staged_flip: "Kademeli flip",
-  bottom_flip: "Dipte flip",
+  staged_flip: "Staged Flip",
+  bottom_flip: "Bottom Flip",
   rl_reshape: "Precision Hybrid reshape",
   auto_compound: "Auto-compound",
 };
 export const reasonTr = (r: string | null) => (r ? (REASONS[r] ?? r) : "—");
 
 export const MODE_TR: Record<string, string> = {
-  mirror: "Sadece aynala",
-  staged_flip: "Kademeli flip",
-  bottom_flip: "Dipte flip",
+  mirror: "Mirror only",
+  staged_flip: "Staged Flip",
+  bottom_flip: "Bottom Flip",
   precision_hybrid: "Precision Hybrid",
 };

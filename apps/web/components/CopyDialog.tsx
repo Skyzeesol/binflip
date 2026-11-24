@@ -64,12 +64,12 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
   const mgmtSum = `${MODE_TR[s.management.mode]}${s.management.mode === "staged_flip" ? ` %${s.management.flipThresholdPct}` : s.management.mode === "precision_hybrid" ? ` ${s.management.reshapeBins ?? 12} bin` : ""}${s.management.compoundMinutes ? ` · compound ${s.management.compoundMinutes} dk` : ""}`;
 
   const steps = [
-    { title: "Boyut", sum: sizeSum },
-    { title: "Çıkış kuralları", sum: exitSum },
-    { title: "Ne kopyalanacak", sum: copySum },
-    { title: "Koruma", sum: protSum },
-    { title: "Etiket", sum: isNew ? label || "—" : label },
-    { title: "Pozisyon yönetimi", sum: mgmtSum, ours: true },
+    { title: "Sizing", sum: sizeSum },
+    { title: "Exit Rules", sum: exitSum },
+    { title: "What to Copy", sum: copySum },
+    { title: "Protection", sum: protSum },
+    { title: "Label", sum: isNew ? label || "—" : label },
+    { title: "Management", sum: mgmtSum, ours: true },
   ];
 
   const save = async () => {
@@ -91,7 +91,7 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
     <div className="overlay" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="dialog-head">
-          <h2>{isNew ? "Yeni cüzdan kopyala" : `${leader.label} — kopya ayarları`}</h2>
+          <h2>{isNew ? "Copy a new wallet" : `${leader.label} — copy settings`}</h2>
           <div className="spacer" />
           <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Kapat">✕</button>
         </div>
@@ -110,10 +110,10 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
           <div className="step-panel">
             {step === 0 && (
               <div className="stack">
-                <div><h3>Boyut</h3><p className="muted">Liderin her pozisyonunun ne kadarını kopyalayacağınız.</p></div>
+                <div><h3>Sizing</h3><p className="muted">Liderin her pozisyonunun ne kadarını kopyalayacağınız.</p></div>
                 <div className="row">
-                  <label className="check"><input type="radio" checked={s.sizing.mode === "percent_of_leader"} onChange={() => set("sizing", { mode: "percent_of_leader" })} /><span>Liderin yüzdesi<div className="hint">Her pozisyon bu oranda ölçeklenir.</div></span></label>
-                  <label className="check"><input type="radio" checked={s.sizing.mode === "fixed_sol"} onChange={() => set("sizing", { mode: "fixed_sol" })} /><span>Sabit SOL<div className="hint">Her yeni pozisyon aynı tutarla açılır.</div></span></label>
+                  <label className="check"><input type="radio" checked={s.sizing.mode === "percent_of_leader"} onChange={() => set("sizing", { mode: "percent_of_leader" })} /><span>Copy % of leader<div className="hint">Her pozisyon bu oranda ölçeklenir.</div></span></label>
+                  <label className="check"><input type="radio" checked={s.sizing.mode === "fixed_sol"} onChange={() => set("sizing", { mode: "fixed_sol" })} /><span>Fixed SOL<div className="hint">Her yeni pozisyon aynı tutarla açılır.</div></span></label>
                 </div>
                 {ins?.highFrequency && (
                   <div className="banner banner-warn" style={{ margin: 0, display: "block" }}>
@@ -124,21 +124,21 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
                   </div>
                 )}
                 {s.sizing.mode === "percent_of_leader" ? (
-                  <label className="field">Kopya yüzdesi (%)<input type="number" min={1} max={10000} value={str(s.sizing.percent)} onChange={(e) => set("sizing", { percent: num(e.target.value) })} /><span className="hint">1–10000. {ins?.suggestedPct != null ? <>Önerilen: <b>%{ins.suggestedPct.toFixed(2)}</b> (sizin {ins.ourNetWorthSol?.toFixed(2)} SOL ÷ liderin {ins.leaderNetWorthSol?.toFixed(2)} SOL) <button className="btn btn-sm" onClick={() => set("sizing", { percent: Math.max(1, Math.round(ins.suggestedPct! * 100) / 100) })}>Uygula</button></> : "Önerilen: sizin net varlığınız ÷ liderin net varlığı."}{ins?.suggestedPct != null && ins.suggestedPct <= 1 ? " Lider sizden çok büyük: işlem başı üst sınır koymanız önerilir." : ""}</span></label>
+                  <label className="field">Copy %<input type="number" min={1} max={10000} value={str(s.sizing.percent)} onChange={(e) => set("sizing", { percent: num(e.target.value) })} /><span className="hint">1–10000. {ins?.suggestedPct != null ? <>Önerilen: <b>%{ins.suggestedPct.toFixed(2)}</b> (sizin {ins.ourNetWorthSol?.toFixed(2)} SOL ÷ liderin {ins.leaderNetWorthSol?.toFixed(2)} SOL) <button className="btn btn-sm" onClick={() => set("sizing", { percent: Math.max(1, Math.round(ins.suggestedPct! * 100) / 100) })}>Uygula</button></> : "Önerilen: sizin net varlığınız ÷ liderin net varlığı."}{ins?.suggestedPct != null && ins.suggestedPct <= 1 ? " Lider sizden çok büyük: işlem başı üst sınır koymanız önerilir." : ""}</span></label>
                 ) : (
-                  <label className="field">Pozisyon başına SOL<input type="number" min={0} step="0.01" value={str(s.sizing.fixedSol)} onChange={(e) => set("sizing", { fixedSol: num(e.target.value) })} /></label>
+                  <label className="field">SOL per position<input type="number" min={0} step="0.01" value={str(s.sizing.fixedSol)} onChange={(e) => set("sizing", { fixedSol: num(e.target.value) })} /></label>
                 )}
                 <div className="row">
-                  <label className="field">İşlem başı en fazla (SOL)<input type="number" min={0} step="0.01" placeholder="sınırsız" value={str(s.sizing.maxPerTxSol)} onChange={(e) => set("sizing", { maxPerTxSol: num(e.target.value) })} /><span className="hint">Her açma ve eklemede üst sınır. Boş = sınırsız. Açılış kısılırsa sonraki eklemeler aynı küçük oranla yapılır (30 gün).</span></label>
-                  <label className="field">Pozisyon başına en fazla (SOL)<input type="number" min={0} step="0.01" placeholder="sınırsız" value={str(s.sizing.maxPerPositionSol)} onChange={(e) => set("sizing", { maxPerPositionSol: num(e.target.value) })} /><span className="hint">Bir pozisyona toplam yatırılabilecek tutar.</span></label>
+                  <label className="field">Max Increase Amount per Tx (SOL)<input type="number" min={0} step="0.01" placeholder="sınırsız" value={str(s.sizing.maxPerTxSol)} onChange={(e) => set("sizing", { maxPerTxSol: num(e.target.value) })} /><span className="hint">Her açma ve eklemede üst sınır. Boş = sınırsız. Açılış kısılırsa sonraki eklemeler aynı küçük oranla yapılır (30 gün).</span></label>
+                  <label className="field">Max per position (SOL)<input type="number" min={0} step="0.01" placeholder="sınırsız" value={str(s.sizing.maxPerPositionSol)} onChange={(e) => set("sizing", { maxPerPositionSol: num(e.target.value) })} /><span className="hint">Bir pozisyona toplam yatırılabilecek tutar.</span></label>
                 </div>
               </div>
             )}
 
             {step === 1 && (
               <div className="stack">
-                <div><h3>Çıkış kuralları</h3><p className="muted">Kopya, lider kapatmadan önce kendi kendine ne zaman kapanır. Hangisi önce gelirse.</p></div>
-                <label className="check"><input type="checkbox" checked={s.exit.withLeader} onChange={(e) => set("exit", { withLeader: e.target.checked })} /><span>Liderle çık<div className="hint">Lider kapatınca kopya da kapanır.</div></span></label>
+                <div><h3>Exit Rules</h3><p className="muted">Kopya, lider kapatmadan önce kendi kendine ne zaman kapanır. Hangisi önce gelirse.</p></div>
+                <label className="check"><input type="checkbox" checked={s.exit.withLeader} onChange={(e) => set("exit", { withLeader: e.target.checked })} /><span>Exit with leader<div className="hint">Lider kapatınca kopya da kapanır.</div></span></label>
                 <label className="check"><input type="checkbox" checked={s.exit.followExitsWhilePaused} onChange={(e) => set("exit", { followExitsWhilePaused: e.target.checked })} /><span>Duraklatılmışken de çıkışları takip et<div className="hint">Kapalıyken (LP Agent gibi) duraklatılan cüzdandan kapanışlar dahil hiçbir şey kopyalanmaz; açık kopyalar kendi TP/SL'leriyle kalır.</div></span></label>
                 <div className="row">
                   <label className="field">Take profit (%)<input type="number" min={0} step="0.5" placeholder="kapalı" value={str(s.exit.takeProfitPct)} onChange={(e) => set("exit", { takeProfitPct: num(e.target.value) })} /></label>
@@ -150,7 +150,7 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
 
             {step === 2 && (
               <div className="stack">
-                <div><h3>Ne kopyalanacak</h3><p className="muted">İşaretlenmeyen tipteki lider pozisyonları atlanır.</p></div>
+                <div><h3>What to Copy</h3><p className="muted">İşaretlenmeyen tipteki lider pozisyonları atlanır.</p></div>
                 <div className="row">
                   {STRATS.map((x) => (
                     <label key={x.id} className="check">
@@ -165,12 +165,12 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
 
             {step === 3 && (
               <div className="stack">
-                <div><h3>Koruma</h3><p className="muted">Bu liderin işlemlerinde botun ne yapacağını değiştiren korumalar.</p></div>
-                <label className="check"><input type="checkbox" checked={s.protection.memeProtection} onChange={(e) => set("protection", { memeProtection: e.target.checked })} /><span>Meme koruması<div className="hint">Yatırımın %95'ten fazlası SOL/USDC/USDT dışı token'daysa açma/ekleme atlanır.</div></span></label>
+                <div><h3>Protection</h3><p className="muted">Bu liderin işlemlerinde botun ne yapacağını değiştiren korumalar.</p></div>
+                <label className="check"><input type="checkbox" checked={s.protection.memeProtection} onChange={(e) => set("protection", { memeProtection: e.target.checked })} /><span>Meme Protection<div className="hint">Yatırımın %95'ten fazlası SOL/USDC/USDT dışı token'daysa açma/ekleme atlanır.</div></span></label>
                 <label className="check"><input type="checkbox" checked={s.protection.smartTokenRetention} onChange={(e) => set("protection", { smartTokenRetention: e.target.checked })} /><span>Smart Token Retention<div className="hint">Lider çekip kısa sürede aynı token'ı geri eklerse, kopya token'ı satmak yerine bir süre tutar ve geri eklemede kullanır (bir satış + bir alım tasarrufu). Tutulan token'ın fiyatı düşebilir; sadece sık geri ekleme yapan liderlerde açın.{ins?.exitSample ? ` Bu cüzdan, çıkışlarının %${ins.reAdd1mPct?.toFixed(0)}'inde 1 dk, %${ins.reAdd5mPct?.toFixed(0)}'inde 5 dk içinde geri ekliyor (${ins.exitSample} çıkış).` : ""}</div></span></label>
                 {s.protection.smartTokenRetention && (
                   <div className="row">
-                    <label className="field">Tutma süresi<select value={s.protection.strHoldSeconds} onChange={(e) => set("protection", { strHoldSeconds: Number(e.target.value) })}>{[30, 60, 120, 300].map((v) => <option key={v} value={v}>{v < 60 ? `${v} sn` : `${v / 60} dk`}</option>)}</select></label>
+                    <label className="field">Hold for<select value={s.protection.strHoldSeconds} onChange={(e) => set("protection", { strHoldSeconds: Number(e.target.value) })}>{[30, 60, 120, 300].map((v) => <option key={v} value={v}>{v < 60 ? `${v} sn` : `${v / 60} dk`}</option>)}</select></label>
                     <label className="field">Fiyat şu kadar düşerse hemen sat (%)<input type="number" min={0.5} max={50} step="0.5" value={s.protection.strSellOnDropPct} onChange={(e) => set("protection", { strSellOnDropPct: Number(e.target.value) })} /></label>
                   </div>
                 )}
@@ -179,15 +179,15 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
 
             {step === 4 && (
               <div className="stack">
-                <div><h3>Etiket</h3><p className="muted">Listelerde ve kayıtlarda bu cüzdanın adı.</p></div>
-                {isNew && <label className="field">Lider cüzdan adresi<input type="text" className="mono" placeholder="ör. zbmg9d5x…" value={address} onChange={(e) => setAddress(e.target.value)} /><span className="hint">Sadece kopyalamaya başladıktan sonra açılan pozisyonlar kopyalanır.</span></label>}
-                <label className="field">Etiket<input type="text" maxLength={60} placeholder="ör. Disiplinli Karınca" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
+                <div><h3>Label</h3><p className="muted">Listelerde ve kayıtlarda bu cüzdanın adı.</p></div>
+                {isNew && <label className="field">Leader wallet address<input type="text" className="mono" placeholder="ör. zbmg9d5x…" value={address} onChange={(e) => setAddress(e.target.value)} /><span className="hint">Sadece kopyalamaya başladıktan sonra açılan pozisyonlar kopyalanır.</span></label>}
+                <label className="field">Label<input type="text" maxLength={60} placeholder="ör. Disiplinli Karınca" value={label} onChange={(e) => setLabel(e.target.value)} /></label>
               </div>
             )}
 
             {step === 5 && (
               <div className="stack">
-                <div><h3>Pozisyon yönetimi</h3><p className="muted">Bizim farkımız: kopyalanan pozisyonu kendi kurallarımızla yönetmek.</p></div>
+                <div><h3>Management</h3><p className="muted">Bizim farkımız: kopyalanan pozisyonu kendi kurallarımızla yönetmek.</p></div>
                 {MODES.map((m) => (
                   <label key={m.id} className="check">
                     <input type="radio" checked={s.management.mode === m.id} onChange={() => set("management", { mode: m.id })} />
@@ -195,12 +195,12 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
                   </label>
                 ))}
                 {s.management.mode === "staged_flip" && (
-                  <label className="field">Flip eşiği (%)<input type="number" min={1} max={90} step="0.5" value={s.management.flipThresholdPct} onChange={(e) => set("management", { flipThresholdPct: Number(e.target.value) })} /><span className="hint">Varsayılan %10. Bin step 100'de %10 ≈ 11 bin, bin step 20'de ≈ 53 bin.</span></label>
+                  <label className="field">Flip threshold (%)<input type="number" min={1} max={90} step="0.5" value={s.management.flipThresholdPct} onChange={(e) => set("management", { flipThresholdPct: Number(e.target.value) })} /><span className="hint">Varsayılan %10. Bin step 100'de %10 ≈ 11 bin, bin step 20'de ≈ 53 bin.</span></label>
                 )}
                 {s.management.mode === "precision_hybrid" && (
-                  <label className="field">Reshape aralığı (bin)<input type="number" min={1} max={51} step={1} value={s.management.reshapeBins ?? 12} onChange={(e) => set("management", { reshapeBins: Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))) })} /><span className="hint">1–51, varsayılan 12. Küçük değer fiyatı daha sıkı takip eder ama daha çok işlem ücreti demek. Aralık 160 bin'den genişse reshape yapılmaz (tek işleme sığmaz).</span></label>
+                  <label className="field">Reshape bins<input type="number" min={1} max={51} step={1} value={s.management.reshapeBins ?? 12} onChange={(e) => set("management", { reshapeBins: Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))) })} /><span className="hint">1–51, varsayılan 12. Küçük değer fiyatı daha sıkı takip eder ama daha çok işlem ücreti demek. Aralık 160 bin'den genişse reshape yapılmaz (tek işleme sığmaz).</span></label>
                 )}
-                <label className="field">Auto-compound (dakika)<input type="number" min={5} placeholder="kapalı" value={str(s.management.compoundMinutes)} onChange={(e) => set("management", { compoundMinutes: num(e.target.value) })} /><span className="hint">Bu aralıkla, fee'ler en az 0,02 SOL ettiğinde claim edilip pozisyona geri eklenir.</span></label>
+                <label className="field">Auto-compound (min)<input type="number" min={5} placeholder="kapalı" value={str(s.management.compoundMinutes)} onChange={(e) => set("management", { compoundMinutes: num(e.target.value) })} /><span className="hint">Bu aralıkla, fee'ler en az 0,02 SOL ettiğinde claim edilip pozisyona geri eklenir.</span></label>
               </div>
             )}
           </div>
@@ -209,10 +209,10 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
         <div className="dialog-foot">
           {error && <span className="neg small">{error}</span>}
           <div className="spacer" />
-          {step > 0 && <button className="btn" onClick={() => setStep(step - 1)}>Geri</button>}
-          {step < steps.length - 1 && <button className="btn" onClick={() => setStep(step + 1)}>İleri</button>}
+          {step > 0 && <button className="btn" onClick={() => setStep(step - 1)}>Back</button>}
+          {step < steps.length - 1 && <button className="btn" onClick={() => setStep(step + 1)}>Next</button>}
           <button className="btn btn-primary" onClick={save} disabled={saving || (isNew && (!address.trim() || !label.trim()))}>
-            {saving ? "Kaydediliyor…" : isNew ? "Kopyala" : "Kaydet"}
+            {saving ? "Kaydediliyor…" : isNew ? "Copy" : "Save"}
           </button>
         </div>
       </div>

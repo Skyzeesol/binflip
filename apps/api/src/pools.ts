@@ -6,7 +6,7 @@ import { Queue } from "bullmq";
 import { PublicKey } from "@solana/web3.js";
 import { PROGRAM_IDS, QUEUES, TokenInfoClient, binsForRange, type Config, type OpenJob } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
-import { MeteoraData, num, poolRow } from "./meteora.js";
+import { MeteoraData, jupTokens, num, poolRow } from "./meteora.js";
 
 const SOL = "So11111111111111111111111111111111111111112";
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -89,7 +89,14 @@ export function registerPools(app: FastifyInstance<any, any, any, any>, db: Db, 
           (q.maxBaseFee === undefined || r.baseFeePct <= q.maxBaseFee)
         );
       });
-      return { total: res.total, pages: res.pages, page: q.page, rows: rows.slice(0, q.pageSize), filtered: post, updatedAt: new Date().toISOString() };
+      const page = rows.slice(0, q.pageSize);
+      // LP Agent's organic leaf and token liquidity (T LIQ) come from Jupiter.
+      const jt = await jupTokens(page.map((r) => r.base.mint)).catch(() => new Map<string, Record<string, any>>());
+      const enriched = page.map((r) => {
+        const t = jt.get(r.base.mint);
+        return { ...r, organicScore: t?.organicScore === undefined ? null : num(t.organicScore), tokenLiquidity: t?.liquidity === undefined ? null : num(t.liquidity) };
+      });
+      return { total: res.total, pages: res.pages, page: q.page, rows: enriched, filtered: post, updatedAt: new Date().toISOString() };
     } catch (err) {
       return reply.code(502).send({ error: `Meteora verisi alınamadı: ${(err as Error).message}` });
     }

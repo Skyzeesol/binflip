@@ -72,18 +72,18 @@ export default function PortfolioPage() {
     menu: (p) =>
       p.state === "ACTIVE"
         ? [
-            { label: "Detaylar", onClick: () => setDetail(p.id) },
-            { label: "Fee claim", onClick: () => setAction({ p, kind: "claim" }) },
+            { label: "Details", onClick: () => setDetail(p.id) },
+            { label: "Claim fees", onClick: () => setAction({ p, kind: "claim" }) },
             { label: "Compound", onClick: () => setAction({ p, kind: "compound" }), disabled: p.protocol !== "dlmm" },
-            { label: "Azalt", onClick: () => setAction({ p, kind: "decrease" }) },
+            { label: "Decrease", onClick: () => setAction({ p, kind: "decrease" }) },
             { label: "TP / SL", onClick: () => setExits(p) },
-            { label: "PnL kartı", onClick: () => setShare(p) },
-            { label: "Kapat (SOL'e)", onClick: () => setAction({ p, kind: "close" }), danger: true },
+            { label: "Share PnL", onClick: () => setShare(p) },
+            { label: "Zap out (SOL)", onClick: () => setAction({ p, kind: "close" }), danger: true },
           ]
         : [
-            { label: "Detaylar", onClick: () => setDetail(p.id) },
-            { label: "PnL kartı", onClick: () => setShare(p) },
-            ...(p.position ? [{ label: "Solscan'de aç", onClick: () => window.open(`https://solscan.io/account/${p.position}`, "_blank") }] : []),
+            { label: "Details", onClick: () => setDetail(p.id) },
+            { label: "Share PnL", onClick: () => setShare(p) },
+            ...(p.position ? [{ label: "View on Solscan", onClick: () => window.open(`https://solscan.io/account/${p.position}`, "_blank") }] : []),
           ],
   };
   const done = (msg: string) => {
@@ -96,13 +96,13 @@ export default function PortfolioPage() {
 
   const s = pf?.summary;
   return (
-    <main className="page page-wide">
+    <main className="page page-wide" lang="en">
       <div className="pf-head">
         <div className="pf-addr">
-          <span className="mono">{acc?.wallet ?? "Bot cüzdanı henüz yok"}</span>
+          <span className="mono">{acc?.wallet ?? "No agent wallet yet"}</span>
           {acc?.wallet && <button className="btn btn-sm btn-ghost" onClick={() => navigator.clipboard.writeText(acc.wallet!)} title="Kopyala" aria-label="Adresi kopyala">⧉</button>}
           <span className="badge">◎ Solana</span>
-          {acc?.mode === "dry_run" && <span className="badge badge-dry">deneme</span>}
+          {acc?.mode === "dry_run" && <span className="badge badge-dry">dry run</span>}
         </div>
         <div className="pf-sub muted small">
           {acc?.wallet && (
@@ -119,19 +119,19 @@ export default function PortfolioPage() {
       <section className="card pf-top">
         <div className="pf-metrics">
           <div className="pf-networth">
-            <div className="kpi-label" title="Cüzdandaki SOL + token'lar + açık pozisyonlar + bekleyen fee'ler">TOPLAM NET VARLIK</div>
+            <div className="kpi-label" title="Cüzdandaki SOL + token'lar + açık pozisyonlar + bekleyen fee'ler">NET WORTH</div>
             <div className="kpi-big"><Amount sol={acc?.netWorth ?? null} d={2} /></div>
           </div>
-          <Kpi label="KAPANAN" v={s ? String(s.totalClosed) : "—"} />
-          <Kpi label="KAZANMA ORANI" v={s?.winRate === null || !s ? "—" : `${s.winRate.toFixed(2)}%`} cls={s?.winRate != null ? (s.winRate >= 50 ? "pos" : "neg") : ""} />
-          <Kpi label="ORT. YATIRIM" v={<Amount sol={s?.avgInvested ?? null} d={2} />} />
-          <Kpi label="KAZANILAN FEE" v={<Amount sol={s?.feeEarned ?? null} d={2} />} cls="pos" />
-          <Kpi label="TOPLAM KÂR" v={<Amount sol={s?.totalProfit ?? null} d={2} />} cls={tone(s?.totalProfit)} />
-          <Kpi label="ORT. AYLIK KÂR" v={<Amount sol={s?.avgMonthlyProfit ?? null} d={2} />} cls={tone(s?.avgMonthlyProfit)} />
-          <Kpi label="BEKLENEN DEĞER (EV)" v={<Amount sol={s?.expectedValue ?? null} d={2} />} cls={tone(s?.expectedValue)} title="(kazanma oranı × ort. kazanç) + (kaybetme oranı × ort. kayıp)" />
+          <Kpi label="CLOSED" v={s ? String(s.totalClosed) : "—"} />
+          <Kpi label="WIN RATE" v={s?.winRate === null || !s ? "—" : `${s.winRate.toFixed(2)}%`} cls={s?.winRate != null ? (s.winRate >= 50 ? "pos" : "neg") : ""} />
+          <Kpi label="AVG INVESTED" v={<Amount sol={s?.avgInvested ?? null} d={2} />} />
+          <Kpi label="FEE EARNED" v={<Amount sol={s?.feeEarned ?? null} d={2} />} cls="pos" />
+          <Kpi label="TOTAL PROFIT" v={<Amount sol={s?.totalProfit ?? null} d={2} />} cls={tone(s?.totalProfit)} />
+          <Kpi label="AVG MONTHLY PROFIT" v={<Amount sol={s?.avgMonthlyProfit ?? null} d={2} />} cls={tone(s?.avgMonthlyProfit)} />
+          <Kpi label="EXPECTED VALUE (EV)" v={<Amount sol={s?.expectedValue ?? null} d={2} />} cls={tone(s?.expectedValue)} title="(kazanma oranı × ort. kazanç) + (kaybetme oranı × ort. kayıp)" />
         </div>
         <div className="pf-chart">
-          <div className="kpi-label">{metric === "pnl" ? "KÂR GEÇMİŞİ" : "FEE GEÇMİŞİ"}</div>
+          <div className="kpi-label">{metric === "pnl" ? "PROFIT HISTORY" : "FEE HISTORY"}</div>
           {pf && (
             <FeeHistory
               metric={metric} setMetric={setMetric} group={group} setGroup={setGroup} range={range} setRange={setRange} proto={proto} setProto={setProto}

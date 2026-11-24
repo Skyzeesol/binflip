@@ -79,14 +79,14 @@ export default function SmartLpPage() {
   );
 
   return (
-    <main className="page page-wide">
+    <main className="page page-wide" lang="en">
       <div className="page-head">
         <h1>Smart LP</h1>
         <span className="muted small">LP fee'lerinden para kazanan cüzdanlar</span>
         <div className="spacer" />
         <div className="seg">
-          <button className={view === "card" ? "on" : ""} onClick={() => setView("card")}>▦ Kart</button>
-          <button className={view === "table" ? "on" : ""} onClick={() => setView("table")}>▤ Tablo</button>
+          <button className={view === "card" ? "on" : ""} onClick={() => setView("card")}>▦ Card</button>
+          <button className={view === "table" ? "on" : ""} onClick={() => setView("table")}>▤ Table</button>
         </div>
       </div>
 
@@ -94,41 +94,41 @@ export default function SmartLpPage() {
         <div className="banner banner-warn">
           Cüzdanına göre boyutlandı: toplam kârı en fazla {d.cap.toFixed(0)} SOL olan cüzdanlar (net varlığının 5 katı, en az 20 SOL). Daha büyük cüzdanları görmek için kapat.
           <div className="spacer" />
-          <button className="btn btn-sm" onClick={() => (setDraft({ ...f, sizeToWallet: false }), apply({ ...f, sizeToWallet: false }))}>Sınırı kaldır</button>
+          <button className="btn btn-sm" onClick={() => (setDraft({ ...f, sizeToWallet: false }), apply({ ...f, sizeToWallet: false }))}>Remove limit</button>
         </div>
       )}
 
       <section className="card card-pad sl-filters">
-        <label className="field small">Aktif
+        <label className="field small">Active
           <select value={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.value as F["active"] })}>
-            <option value="24h">Son 24 saat</option>
-            <option value="7d">Son 7 gün</option>
-            <option value="30d">Son 30 gün</option>
-            <option value="any">Her zaman</option>
+            <option value="24h">Last 24h</option>
+            <option value="7d">Last 7d</option>
+            <option value="30d">Last 30d</option>
+            <option value="any">Any time</option>
           </select>
         </label>
-        <label className="field small">Min kazanma oranı (%)<input type="number" value={draft.minWinRate} onChange={(e) => setDraft({ ...draft, minWinRate: e.target.value })} /></label>
-        <label className="field small">Min pozisyon<input type="number" value={draft.minPositions} onChange={(e) => setDraft({ ...draft, minPositions: e.target.value })} /></label>
+        <label className="field small">Min Win Rate (%)<input type="number" value={draft.minWinRate} onChange={(e) => setDraft({ ...draft, minWinRate: e.target.value })} /></label>
+        <label className="field small">Min Positions<input type="number" value={draft.minPositions} onChange={(e) => setDraft({ ...draft, minPositions: e.target.value })} /></label>
         {more && (
           <>
-            <label className="field small">Min kâr (SOL)<input type="number" value={draft.minProfit} onChange={(e) => setDraft({ ...draft, minProfit: e.target.value })} /></label>
-            <label className="field small">Min aylık kâr (SOL)<input type="number" value={draft.minMonthly} onChange={(e) => setDraft({ ...draft, minMonthly: e.target.value })} /></label>
+            <label className="field small">Min Profit (SOL)<input type="number" value={draft.minProfit} onChange={(e) => setDraft({ ...draft, minProfit: e.target.value })} /></label>
+            <label className="field small">Min Monthly Profit (SOL)<input type="number" value={draft.minMonthly} onChange={(e) => setDraft({ ...draft, minMonthly: e.target.value })} /></label>
             <label className="field small">Min EV (SOL)<input type="number" value={draft.minEv} onChange={(e) => setDraft({ ...draft, minEv: e.target.value })} /></label>
-            <label className="field small">Min fee (SOL)<input type="number" value={draft.minFees} onChange={(e) => setDraft({ ...draft, minFees: e.target.value })} /></label>
+            <label className="field small">Min Fees (SOL)<input type="number" value={draft.minFees} onChange={(e) => setDraft({ ...draft, minFees: e.target.value })} /></label>
           </>
         )}
-        <label className="toggle-label small">Cüzdanıma göre boyutla <button className={`switch ${draft.sizeToWallet ? "on" : ""}`} onClick={() => setDraft({ ...draft, sizeToWallet: !draft.sizeToWallet })} aria-pressed={draft.sizeToWallet} /></label>
+        <label className="toggle-label small">Size to my wallet <button className={`switch ${draft.sizeToWallet ? "on" : ""}`} onClick={() => setDraft({ ...draft, sizeToWallet: !draft.sizeToWallet })} aria-pressed={draft.sizeToWallet} /></label>
         <div className="sl-actions">
           <button className="btn btn-sm btn-ghost" onClick={() => setMore(!more)}>{more ? "Daha az filtre" : "Daha fazla filtre"}</button>
-          <button className="btn btn-sm" onClick={() => (setDraft(DEF), apply(DEF))}>Temizle</button>
-          <button className="btn btn-sm btn-primary" onClick={() => apply(draft)}>Filtrele</button>
+          <button className="btn btn-sm" onClick={() => (setDraft(DEF), apply(DEF))}>Clear</button>
+          <button className="btn btn-sm btn-primary" onClick={() => apply(draft)}>Apply</button>
         </div>
       </section>
 
       <div className="small muted" style={{ margin: "10px 0" }}>
         {d ? `${d.rows.length} cüzdan · indekste ${d.indexed} cüzdan · ${d.updatedAt ? `${ago(d.updatedAt)} güncellendi` : "indeks henüz oluşmadı (manager 30 dakikada bir yeniler)"}` : "Yükleniyor…"}
         {" · "}
-        <span title="LP fee'leri kârının %10'undan azsa kâr token fiyatından gelmiştir (genelde kendi çıkardığı token); bu cüzdanlar listelenmez.">Sadece fee kontrolünden geçenler ⓘ</span>
+        <span title="LP fee'leri kârının %10'undan azsa kâr token fiyatından gelmiştir (genelde kendi çıkardığı token); bu cüzdanlar listelenmez.">Fee-checked only ⓘ</span>
         {" · "}kazanma oranı ve ortalamalar havuz bazındadır (Meteora verisi)
       </div>
       {err && <div className="banner banner-neg">{err}</div>}
@@ -138,24 +138,24 @@ export default function SmartLpPage() {
           <table className="pf-table">
             <thead>
               <tr>
-                <th>Cüzdan</th>
-                {th("pnl_7d", "7G PnL")}
-                {th("win_rate", "Kazanma")}
-                {th("pnl_30d", "30G PnL")}
-                {th("pnl_all", "Tüm zamanlar")}
-                {th("positions", "Pozisyon")}
+                <th>Wallet</th>
+                {th("pnl_7d", "7D PnL")}
+                {th("win_rate", "Win Rate")}
+                {th("pnl_30d", "30D PnL")}
+                {th("pnl_all", "All time")}
+                {th("positions", "Positions")}
                 {th("ev", "EV")}
-                {th("invested", "Ort. yatırım")}
-                {th("monthly", "Aylık")}
-                {th("fees", "Fee")}
-                {th("last_active", "Son aktif")}
+                {th("invested", "Avg Invested")}
+                {th("monthly", "Monthly")}
+                {th("fees", "Fees")}
+                {th("last_active", "Last active")}
                 <th />
               </tr>
             </thead>
             <tbody>
               {d?.rows.map((r) => (
                 <tr key={r.address} className="clickable" onClick={() => router.push(`/wallet/${r.address}`)}>
-                  <td><span className="mono">{short(r.address, 5)}</span>{r.copied && <span className="src src-auto" style={{ marginLeft: 6 }}>kopyalanıyor</span>}</td>
+                  <td><span className="mono">{short(r.address, 5)}</span>{r.copied && <span className="src src-auto" style={{ marginLeft: 6 }}>copying</span>}</td>
                   <td className="num"><div className={tone(r.pnl7d)}><Amount sol={r.pnl7d} d={2} /></div><Spark daily={r.daily} /></td>
                   <td className={`num ${r.winRate === null ? "" : r.winRate >= 70 ? "pos" : r.winRate < 50 ? "neg" : ""}`}>{r.winRate === null ? "—" : `${r.winRate.toFixed(1)}%`}</td>
                   <td className={`num ${tone(r.pnl30d)}`}><Amount sol={r.pnl30d} d={2} /></td>
@@ -167,11 +167,11 @@ export default function SmartLpPage() {
                   <td className="num pos"><Amount sol={r.fees} d={2} /></td>
                   <td className="num muted">{ago(r.lastActiveAt)}</td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {r.copied ? <Link className="btn btn-sm" href="/copy">Ayarlar</Link> : <button className="btn btn-sm btn-primary" onClick={() => setCopy(r.address)}>Copy LP</button>}
+                    {r.copied ? <Link className="btn btn-sm" href="/copy">Settings</Link> : <button className="btn btn-sm btn-primary" onClick={() => setCopy(r.address)}>Copy LP</button>}
                   </td>
                 </tr>
               ))}
-              {d && !d.rows.length && <tr><td colSpan={12} className="empty">Filtrelere uyan cüzdan yok. Filtreleri gevşet ya da "Cüzdanıma göre boyutla"yı kapat.</td></tr>}
+              {d && !d.rows.length && <tr><td colSpan={12} className="empty">Filtrelere uyan cüzdan yok. Filtreleri gevşet ya da "Size to my wallet"ı kapat.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -182,12 +182,12 @@ export default function SmartLpPage() {
               <div className="pf-card-top"><span className="mono">{short(r.address, 6)}</span>{!r.copied && <button className="btn btn-sm btn-primary" onClick={(e) => (e.stopPropagation(), setCopy(r.address))}>Copy LP</button>}</div>
               <Spark daily={r.daily} wide />
               <div className="pf-card-grid">
-                <span className="muted">7G PnL</span><span className={tone(r.pnl7d)}><Amount sol={r.pnl7d} d={2} /></span>
-                <span className="muted">Kazanma</span><span>{r.winRate === null ? "—" : `${r.winRate.toFixed(1)}%`}</span>
-                <span className="muted">Tüm zamanlar</span><span className={tone(r.totalPnl)}><Amount sol={r.totalPnl} d={2} /></span>
-                <span className="muted">Pozisyon</span><span>{compact(r.positions, 0)}</span>
-                <span className="muted">Fee</span><span className="pos"><Amount sol={r.fees} d={2} /></span>
-                <span className="muted">Son aktif</span><span>{ago(r.lastActiveAt)}</span>
+                <span className="muted">7D PnL</span><span className={tone(r.pnl7d)}><Amount sol={r.pnl7d} d={2} /></span>
+                <span className="muted">Win Rate</span><span>{r.winRate === null ? "—" : `${r.winRate.toFixed(1)}%`}</span>
+                <span className="muted">All time</span><span className={tone(r.totalPnl)}><Amount sol={r.totalPnl} d={2} /></span>
+                <span className="muted">Positions</span><span>{compact(r.positions, 0)}</span>
+                <span className="muted">Fees</span><span className="pos"><Amount sol={r.fees} d={2} /></span>
+                <span className="muted">Last active</span><span>{ago(r.lastActiveAt)}</span>
               </div>
             </div>
           ))}

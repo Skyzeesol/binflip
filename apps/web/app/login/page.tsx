@@ -38,7 +38,7 @@ export default function LoginPage() {
         <div className="brand" style={{ justifyContent: "center" }}>
           <span className="brand-dot" /> Binflip
         </div>
-        <h1>Panele giriş</h1>
+        <h1>Sign in</h1>
         <p className="muted">Kayıtlı giriş cüzdanınızla bir mesaj imzalayın. Bu imza işlem yapmaz ve ücret ödemez.</p>
         {wallets.map((w) => (
           <button

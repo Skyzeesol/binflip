@@ -58,14 +58,14 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
 
   const s = d?.summary;
   return (
-    <main className="page page-wide">
+    <main className="page page-wide" lang="en">
       <div className="pf-head">
         <div className="pf-addr">
           <span className="mono">{address}</span>
           <button className="btn btn-sm btn-ghost" onClick={() => navigator.clipboard.writeText(address)} aria-label="Adresi kopyala">⧉</button>
           <span className="badge">◎ Solana</span>
           {d?.copy ? (
-            <Link className="badge badge-pos" href={`/copy?edit=${d.copy.id}`} title="Kopya ayarlarını düzenle">Kopyalanıyor: {d.copy.label} ({d.copy.status === "active" ? "aktif" : "duraklatıldı"})</Link>
+            <Link className="badge badge-pos" href={`/copy?edit=${d.copy.id}`} title="Kopya ayarlarını düzenle">Copying: {d.copy.label} ({d.copy.status === "active" ? "Active" : "Paused"})</Link>
           ) : (
             <button className="btn btn-sm btn-primary" onClick={() => setCopying(true)}>Copy LP</button>
           )}
@@ -83,20 +83,20 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
       <section className="card pf-top">
         <div className="pf-metrics">
           <div className="pf-networth">
-            <div className="kpi-label">TOPLAM NET VARLIK</div>
+            <div className="kpi-label">NET WORTH</div>
             <div className="kpi-big"><Amount sol={s?.netWorth ?? null} d={2} /></div>
             <div className="small muted">cüzdanda <Amount sol={s?.solBalance ?? null} d={2} /> · pozisyonlarda <Amount sol={s?.openValue ?? null} d={2} /></div>
           </div>
-          <K label="KAPANAN" v={s ? s.totalClosed.toLocaleString("tr-TR") : "—"} />
-          <K label="KAZANMA ORANI" v={s?.winRate == null ? "—" : `${s.winRate.toFixed(2)}%`} cls={s?.winRate == null ? "" : s.winRate >= 70 ? "pos" : s.winRate < 50 ? "neg" : ""} />
-          <K label="ORT. YATIRIM (havuz)" v={<Amount sol={s?.avgInvested ?? null} d={2} />} />
-          <K label="KAZANILAN FEE" v={<Amount sol={s?.feeEarned ?? null} d={2} />} cls="pos" />
-          <K label="TOPLAM KÂR (tüm zamanlar)" v={<Amount sol={s?.totalProfit ?? null} d={2} />} cls={tone(s?.totalProfit)} />
-          <K label="ORT. AYLIK KÂR" v={<Amount sol={s?.avgMonthlyProfit ?? null} d={2} />} cls={tone(s?.avgMonthlyProfit)} />
-          <K label="BEKLENEN DEĞER (EV)" v={<Amount sol={s?.expectedValue ?? null} d={2} />} cls={tone(s?.expectedValue)} />
+          <K label="CLOSED" v={s ? s.totalClosed.toLocaleString("tr-TR") : "—"} />
+          <K label="WIN RATE" v={s?.winRate == null ? "—" : `${s.winRate.toFixed(2)}%`} cls={s?.winRate == null ? "" : s.winRate >= 70 ? "pos" : s.winRate < 50 ? "neg" : ""} />
+          <K label="AVG INVESTED (pool)" v={<Amount sol={s?.avgInvested ?? null} d={2} />} />
+          <K label="FEE EARNED" v={<Amount sol={s?.feeEarned ?? null} d={2} />} cls="pos" />
+          <K label="TOTAL PROFIT (all time)" v={<Amount sol={s?.totalProfit ?? null} d={2} />} cls={tone(s?.totalProfit)} />
+          <K label="AVG MONTHLY PROFIT" v={<Amount sol={s?.avgMonthlyProfit ?? null} d={2} />} cls={tone(s?.avgMonthlyProfit)} />
+          <K label="EXPECTED VALUE (EV)" v={<Amount sol={s?.expectedValue ?? null} d={2} />} cls={tone(s?.expectedValue)} />
         </div>
         <div className="pf-chart">
-          <div className="kpi-label">{metric === "pnl" ? "KÂR GEÇMİŞİ" : "FEE GEÇMİŞİ"}</div>
+          <div className="kpi-label">{metric === "pnl" ? "PROFIT HISTORY" : "FEE HISTORY"}</div>
           {d && (
             <FeeHistory
               metric={metric} setMetric={setMetric} group={group} setGroup={setGroup} range={range} setRange={setRange} proto={proto} setProto={setProto}
@@ -109,17 +109,17 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
       <section className="card pf-section">
         <div className="pf-section-head">
           <div>
-            <h2>Açık pozisyonlar ({d?.open.reduce((n, o) => n + o.positions.length, 0) ?? 0})</h2>
+            <h2>Open Positions ({d?.open.reduce((n, o) => n + o.positions.length, 0) ?? 0})</h2>
             <div className="pf-totals">
-              <span>Toplam değer <b><Amount sol={s?.openValue ?? null} d={2} /></b></span>
-              <span>Toplam uPnL <b className={tone(s?.openPnl)}><Amount sol={s?.openPnl ?? null} d={2} /></b></span>
-              <span>Bekleyen fee <b className="pos"><Amount sol={s?.openUnclaimed ?? null} d={2} /></b></span>
+              <span>Total value <b><Amount sol={s?.openValue ?? null} d={2} /></b></span>
+              <span>Total uPnL <b className={tone(s?.openPnl)}><Amount sol={s?.openPnl ?? null} d={2} /></b></span>
+              <span>Unclaimed fees <b className="pos"><Amount sol={s?.openUnclaimed ?? null} d={2} /></b></span>
             </div>
           </div>
         </div>
         <div className="table-wrap">
           <table className="pf-table">
-            <thead><tr><th>Havuz</th><th className="num">Pozisyon</th><th className="num">Yatırılan</th><th className="num">Değer</th><th className="num">Bekleyen fee</th><th className="num">uPnL</th><th className="num">Fee/TVL 24s</th><th>Aralık</th></tr></thead>
+            <thead><tr><th>Pool</th><th className="num">Positions</th><th className="num">Invested</th><th className="num">Value</th><th className="num">Unclaimed fees</th><th className="num">uPnL</th><th className="num">Fee/TVL 24H</th><th>Range</th></tr></thead>
             <tbody>
               {d?.open.map((o) => (
                 <tr key={o.pool}>
@@ -130,7 +130,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
                   <td className="num pos"><Amount sol={o.unclaimedSol} /></td>
                   <td className="num"><div className={tone(o.pnlSol)}><Amount sol={o.pnlSol} /></div><div className={`small ${tone(o.pnlSol)}`}><Pct v={o.pnlPct} /></div></td>
                   <td className="num"><Pct v={o.feePerTvl24h} /></td>
-                  <td>{o.outOfRange ? <span className="badge badge-neg">Aralık dışı</span> : <span className="badge badge-pos">Aralıkta</span>}</td>
+                  <td>{o.outOfRange ? <span className="badge badge-neg">Out of range</span> : <span className="badge badge-pos">In range</span>}</td>
                 </tr>
               ))}
               {d && !d.open.length && <tr><td colSpan={8} className="empty">Açık pozisyon yok.</td></tr>}
@@ -141,11 +141,11 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
 
       <section className="card pf-section">
         <div className="pf-section-head">
-          <h2>Geçmiş pozisyonlar <span className="muted small">(havuz bazında, en yeni önce)</span></h2>
+          <h2>Historical Positions <span className="muted small">(havuz bazında, en yeni önce)</span></h2>
         </div>
         <div className="table-wrap">
           <table className="pf-table">
-            <thead><tr><th>Havuz</th><th className="num">Yatırılan</th><th className="num">Çekilen</th><th className="num">Toplam fee</th><th className="num">PnL</th><th className="num">Son kapanış</th></tr></thead>
+            <thead><tr><th>Pool</th><th className="num">Invested</th><th className="num">Withdrawn</th><th className="num">Total fee</th><th className="num">PnL</th><th className="num">Last closed</th></tr></thead>
             <tbody>
               {d?.closed.map((c) => (
                 <tr key={c.pool}>
@@ -162,7 +162,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
           </table>
         </div>
         {d && d.closed.length >= pages * 20 && pages < 10 && (
-          <div className="card-pad"><button className="btn btn-sm" onClick={() => setPages(pages + 3)}>Daha fazla yükle</button></div>
+          <div className="card-pad"><button className="btn btn-sm" onClick={() => setPages(pages + 3)}>Load more</button></div>
         )}
       </section>
 

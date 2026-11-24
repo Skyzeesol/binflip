@@ -26,6 +26,17 @@ export function safetyScore(t: { mintAuthority?: string | null; freezeAuthority?
   s += h >= 1000 ? 10 : h >= 100 ? 5 : 0;
   return Math.round(s);
 }
+/**
+ * Change of Fee/TVL against the window before it, in %. Meteora's ratios are
+ * fees over the window ÷ current TVL, so windows subtract: the 30 minutes before
+ * the last 30 = 1h − 30m, the hour before = 2h − 1h, the 4h before ≈ (12h − 4h) / 2.
+ */
+export function feeTvlChange(r: Record<string, unknown>, w: "30m" | "1h" | "4h"): number | null {
+  const n = (k: string) => num(r[k]);
+  const [cur, prev] = w === "30m" ? [n("30m"), n("1h") - n("30m")] : w === "1h" ? [n("1h"), n("2h") - n("1h")] : [n("4h"), (n("12h") - n("4h")) / 2];
+  return prev > 0 ? ((cur - prev) / prev) * 100 : null;
+}
+
 export const safetyLabel = (s: number | null) => (s === null ? null : s >= 75 ? "safe" : s >= 40 ? "caution" : "risky");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,7 +124,7 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
 
   // ── Discover ───────────────────────────────────────────────────────────
   const DiscoverQuery = z.object({
-    preset: z.enum(["trending", "new", "fee_tvl", "smart", "nopool"]).default("trending"),
+    preset: z.enum(["trending", "new", "graduated", "fee_tvl", "rising", "smart", "nopool"]).default("trending"),
     hideRisky: z.enum(["true", "false"]).default("false"),
     q: z.string().max(64).optional(),
     minMcap: z.coerce.number().optional(),
@@ -132,10 +143,23 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
       let floor: string | null = null;
       if (q.q?.trim()) list = await jup(`/search?query=${encodeURIComponent(q.q.trim())}`);
       else if (q.preset === "new") list = await jup(`/recent?limit=60`, 30_000);
-      else if (q.preset === "fee_tvl") {
-        const pools = await meteora.pools({ protocol: "dlmm", page: 1, pageSize: 100, sort: "fee_tvl_ratio_1h:desc", filter: `tvl>5000 && volume_1h>1000 && token_y=${SOL}` });
-        const mints = [...new Set(pools.data.map((p) => String((p.token_x as Json)?.address)))].slice(0, 50);
+      else if (q.preset === "graduated") {
+        // Launchpad tokens that left the bonding curve, newest graduation first.
+        const lists = await Promise.all(["/recent?limit=100", "/toptrending/1h?limit=100", "/toptraded/1h?limit=100", "/toporganicscore/1h?limit=100"].map((p) => jup(p, 60_000).catch(() => [] as Json[])));
+        const seen = new Map<string, Json>();
+        for (const t of lists.flat()) if (t.graduatedAt && !seen.has(String(t.id))) seen.set(String(t.id), t);
+        list = [...seen.values()].sort((a, b) => Date.parse(b.graduatedAt) - Date.parse(a.graduatedAt));
+      } else if (q.preset === "fee_tvl" || q.preset === "rising") {
+        const pools = await meteora.pools({ protocol: "dlmm", page: 1, pageSize: 100, sort: `fee_tvl_ratio_${q.preset === "rising" ? "30m" : "1h"}:desc`, filter: `tvl>5000 && volume_1h>1000 && token_y=${SOL}` });
+        let ranked = pools.data;
+        if (q.preset === "rising") {
+          // Fees rising: the last 30 minutes' Fee/TVL against the 30 minutes before.
+          ranked = ranked.map((p) => ({ p, c: feeTvlChange(p.fee_tvl_ratio ?? {}, "30m") })).filter((x) => x.c !== null && x.c > 0).sort((a, b) => b.c! - a.c!).map((x) => x.p);
+        }
+        const mints = [...new Set(ranked.map((p) => String((p.token_x as Json)?.address)))].slice(0, 50);
         list = await tokensByMint(mints);
+        const order = new Map(mints.map((m, i) => [m, i]));
+        list.sort((a, b) => (order.get(String(a.id)) ?? 99) - (order.get(String(b.id)) ?? 99));
       } else if (q.preset === "smart") {
         const rows = await db.execute(sql`select t as mint, count(*)::int as n from ${schema.smartWallets}, unnest(${schema.smartWallets.openTokens}) as t group by t order by n desc limit 50`);
         list = await tokensByMint((rows as unknown as Array<{ mint: string }>).map((r) => r.mint));
@@ -166,6 +190,10 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
       let rows = list.map((t) => {
         const ps = pools.get(String(t.id)) ?? [];
         const best = [...ps].sort((a, b) => num(b.fee_tvl_ratio?.["1h"]) - num(a.fee_tvl_ratio?.["1h"]))[0];
+        const ft = (p: Json) => ({ "30m": num(p.fee_tvl_ratio?.["30m"]), "1h": num(p.fee_tvl_ratio?.["1h"]), "4h": num(p.fee_tvl_ratio?.["4h"]), "24h": num(p.fee_tvl_ratio?.["24h"]) });
+        const ftc = (p: Json) => ({ "30m": feeTvlChange(p.fee_tvl_ratio ?? {}, "30m"), "1h": feeTvlChange(p.fee_tvl_ratio ?? {}, "1h"), "4h": feeTvlChange(p.fee_tvl_ratio ?? {}, "4h"), "24h": null });
+        const price = num(t.usdPrice);
+        const back = (c: unknown) => (c === undefined || c === null ? null : price / (1 + num(c) / 100));
         const score = safetyScore({ mintAuthority: t.mintAuthority ?? null, freezeAuthority: t.freezeAuthority ?? null, top10Pct: t.audit?.topHoldersPercentage ?? null, organicScore: t.organicScore ?? null, holders: t.holderCount ?? null });
         const created = t.firstPool?.createdAt ?? t.createdAt ?? null;
         return {
@@ -177,8 +205,13 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
           verified: Boolean(t.isVerified),
           createdAt: created,
           ageH: created ? (now - Date.parse(created)) / 3_600_000 : null,
-          price: num(t.usdPrice),
+          price,
           priceChange24h: num(t.stats24h?.priceChange),
+          // Sparkline from Jupiter's change windows: price 24h, 6h, 1h and 5m ago, then now.
+          spark: [back(t.stats24h?.priceChange), back(t.stats6h?.priceChange), back(t.stats1h?.priceChange), back(t.stats5m?.priceChange), price].filter((v): v is number => v !== null && Number.isFinite(v) && v > 0),
+          volume5m: num(t.stats5m?.buyVolume) + num(t.stats5m?.sellVolume),
+          volumeChange5m: t.stats5m?.volumeChange === undefined ? null : num(t.stats5m.volumeChange),
+          graduatedAt: (t.graduatedAt as string) ?? null,
           mcap: num(t.mcap),
           holders: num(t.holderCount),
           volume24h: num(t.stats24h?.buyVolume) + num(t.stats24h?.sellVolume),
@@ -194,8 +227,8 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
           smartLps: smart.get(String(t.id)) ?? 0,
           pools: ps.length,
           liquidity: ps.reduce((s, p) => s + num(p.tvl), 0),
-          bestPool: best ? { address: String(best.address), feeTvl: { "30m": num(best.fee_tvl_ratio?.["30m"]), "1h": num(best.fee_tvl_ratio?.["1h"]), "4h": num(best.fee_tvl_ratio?.["4h"]), "24h": num(best.fee_tvl_ratio?.["24h"]) }, binStep: num(best.pool_config?.bin_step), tvl: num(best.tvl) } : null,
-          poolList: ps.map((p) => ({ address: String(p.address), name: String(p.name), binStep: num(p.pool_config?.bin_step), baseFee: num(p.pool_config?.base_fee_pct), tvl: num(p.tvl), volume24h: num(p.volume?.["24h"]), fees24h: num(p.fees?.["24h"]), feeTvl: { "30m": num(p.fee_tvl_ratio?.["30m"]), "1h": num(p.fee_tvl_ratio?.["1h"]), "4h": num(p.fee_tvl_ratio?.["4h"]), "24h": num(p.fee_tvl_ratio?.["24h"]) } })),
+          bestPool: best ? { address: String(best.address), feeTvl: ft(best), feeTvlChange: ftc(best), binStep: num(best.pool_config?.bin_step), tvl: num(best.tvl) } : null,
+          poolList: ps.map((p) => ({ address: String(p.address), name: String(p.name), binStep: num(p.pool_config?.bin_step), baseFee: num(p.pool_config?.base_fee_pct), tvl: num(p.tvl), volume24h: num(p.volume?.["24h"]), fees24h: num(p.fees?.["24h"]), feeTvl: ft(p), feeTvlChange: ftc(p) })),
         };
       });
       if (q.preset === "nopool") rows = rows.filter((r) => r.pools === 0);

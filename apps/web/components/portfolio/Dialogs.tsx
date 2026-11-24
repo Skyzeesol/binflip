@@ -26,7 +26,7 @@ function Modal({ title, onClose, children, wide = false }: { title: React.ReactN
   );
 }
 
-const KIND_TR: Record<string, string> = { open: "Açılış", add: "Ekleme", remove: "Azaltma", close: "Kapanış", claim: "Fee claim", compound: "Compound", flip: "Flip", swap: "Swap", rebalance: "Rebalance", reshape: "Reshape", withdraw: "Çekme" };
+const KIND_TR: Record<string, string> = { open: "Open", add: "Add", remove: "Decrease", close: "Close", claim: "Claim fees", compound: "Compound", flip: "Flip", swap: "Swap", rebalance: "Rebalance", reshape: "Reshape", withdraw: "Withdraw" };
 const STATUS_TR: Record<string, string> = { planned: "planlandı", submitted: "gönderildi", confirmed: "onaylandı", failed: "başarısız", skipped: "atlandı", simulated: "simüle" };
 
 /** LP Agent "Position details": PnL, age, liquidity, fee, price-bin chart, history (CSV) and logs. */
@@ -44,9 +44,9 @@ export function PositionDrawer({ id, onClose }: { id: string; onClose: () => voi
       ) : (
         <div className="stack">
           <div className="detail-kpis">
-            <div><div className="kpi-label">Kâr / Zarar</div><div className={`kpi-value ${tone(p.pnl)}`}><Amount sol={p.pnl} /></div><div className={`small ${tone(p.pnl)}`}><Pct v={p.pnlPct} /></div></div>
-            <div><div className="kpi-label">Yaş</div><div className="kpi-value">{age(p.ageMs)}</div><div className="small muted">{p.closedAt ? `kapandı ${closedAt(p.closedAt)}` : "açık"}</div></div>
-            <div><div className="kpi-label">Likidite</div><div className="kpi-value"><Amount sol={p.value} /></div><div className="small muted">yatırılan <Amount sol={p.invested} /></div></div>
+            <div><div className="kpi-label">PnL</div><div className={`kpi-value ${tone(p.pnl)}`}><Amount sol={p.pnl} /></div><div className={`small ${tone(p.pnl)}`}><Pct v={p.pnlPct} /></div></div>
+            <div><div className="kpi-label">Age</div><div className="kpi-value">{age(p.ageMs)}</div><div className="small muted">{p.closedAt ? `kapandı ${closedAt(p.closedAt)}` : "açık"}</div></div>
+            <div><div className="kpi-label">Liquidity</div><div className="kpi-value"><Amount sol={p.value} /></div><div className="small muted">yatırılan <Amount sol={p.invested} /></div></div>
             <div><div className="kpi-label">Fee</div><div className="kpi-value pos"><Amount sol={p.totalFee} /></div><div className="small muted">claim <Amount sol={p.claimedFee} /> · bekleyen <Amount sol={p.unclaimedFee} /></div></div>
           </div>
           {p.protocol === "dlmm" && <BinChart bins={d.chart.bins} active={d.chart.active} />}
@@ -58,21 +58,21 @@ export function PositionDrawer({ id, onClose }: { id: string; onClose: () => voi
             </div>
           )}
           <div className="tabs" style={{ marginBottom: 0 }}>
-            <button className={`tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>Geçmiş</button>
-            <button className={`tab ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>Loglar</button>
+            <button className={`tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>History</button>
+            <button className={`tab ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>Logs</button>
             <div className="spacer" />
-            {tab === "history" && <button className="btn btn-sm" onClick={() => exportCsv(p, d.history)}>CSV indir</button>}
+            {tab === "history" && <button className="btn btn-sm" onClick={() => exportCsv(p, d.history)}>Export CSV</button>}
           </div>
           {tab === "history" ? (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Zaman (UTC)</th><th>İşlem</th><th>Durum</th><th className="num">SOL</th><th>Tx</th></tr></thead>
+                <thead><tr><th>Time (UTC)</th><th>Action</th><th>Status</th><th className="num">SOL</th><th>Tx</th></tr></thead>
                 <tbody>
                   {d.history.map((h, i) => (
                     <tr key={i}>
                       <td className="muted">{new Date(h.at).toISOString().replace("T", " ").slice(0, 19)}</td>
                       <td>{KIND_TR[h.kind] ?? h.kind}{h.reason ? <div className="small muted">{reasonTr(h.reason)}</div> : null}</td>
-                      <td>{STATUS_TR[h.status] ?? h.status}{h.dryRun ? <span className="src src-dry" style={{ marginLeft: 6 }}>deneme</span> : null}</td>
+                      <td>{STATUS_TR[h.status] ?? h.status}{h.dryRun ? <span className="src src-dry" style={{ marginLeft: 6 }}>dry run</span> : null}</td>
                       <td className={`num ${tone(h.solDelta === null ? null : -h.solDelta)}`}>{h.solDelta === null ? "—" : (-h.solDelta).toFixed(4)}</td>
                       <td>{h.signatures.length ? h.signatures.map((s) => <a key={s} className="mono" href={`https://solscan.io/tx/${s}`} target="_blank" rel="noreferrer">{short(s, 4)} </a>) : <span className="muted">—</span>}</td>
                     </tr>
@@ -114,7 +114,7 @@ function BinChart({ bins, active }: { bins: PfDetail["chart"]["bins"]; active: n
   const by = new Map(sorted.map((b) => [b.id, b]));
   return (
     <div>
-      <div className="kpi-label" style={{ marginBottom: 6 }}>Fiyat bin'leri <span className="muted small">(yeşil: SOL, mor: token, sarı: aktif bin)</span></div>
+      <div className="kpi-label" style={{ marginBottom: 6 }}>Price bins <span className="muted small">(yeşil: SOL, mor: token, sarı: aktif bin)</span></div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Bin grafiği" className="binchart">
         {Array.from({ length: n }, (_, i) => {
           const id = lower + i;
@@ -158,7 +158,7 @@ export function ActionDialog({ p, kind, onClose, onDone }: { p: PfPosition; kind
   const [swapToSol, setSwapToSol] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const title = kind === "close" ? "Kapat (SOL'e zap out)" : kind === "decrease" ? "Azalt" : kind === "claim" ? "Fee claim" : "Compound";
+  const title = kind === "close" ? "Zap out (to SOL)" : kind === "decrease" ? "Decrease" : kind === "claim" ? "Claim fees" : "Compound";
   const estPnl = p.pnl;
   const go = async () => {
     setBusy(true);
@@ -205,7 +205,7 @@ export function ActionDialog({ p, kind, onClose, onDone }: { p: PfPosition; kind
         <div className="pop-foot">
           <button className="btn" onClick={onClose}>Vazgeç</button>
           <button className={`btn ${kind === "close" || (kind === "decrease" && pct === 100) ? "btn-danger on" : "btn-primary"}`} onClick={go} disabled={busy}>
-            {busy ? "Gönderiliyor…" : kind === "close" ? "Kapat" : kind === "decrease" ? `%${pct} azalt` : kind === "claim" ? (swapToSol ? "Fee'leri SOL olarak al" : "Fee'leri al") : "Compound"}
+            {busy ? "Gönderiliyor…" : kind === "close" ? "Zap out" : kind === "decrease" ? `Decrease ${pct}%` : kind === "claim" ? (swapToSol ? "Claim as SOL" : "Claim fees") : "Compound"}
           </button>
         </div>
       </div>

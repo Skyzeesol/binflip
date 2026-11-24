@@ -126,10 +126,35 @@ export function poolRow(p: Json, window: string) {
     // Meteora's fee_tvl_ratio is already a percentage (fees / TVL × 100 over the window).
     feeTvl: w(p.fee_tvl_ratio),
     feeTvlAll: { "30m": num(p.fee_tvl_ratio?.["30m"]), "1h": num(p.fee_tvl_ratio?.["1h"]), "4h": num(p.fee_tvl_ratio?.["4h"]), "24h": num(p.fee_tvl_ratio?.["24h"]) },
+    dynamicFeePct: p.dynamic_fee_pct === undefined || p.dynamic_fee_pct === null ? null : num(p.dynamic_fee_pct),
     apr: num(p.apr),
     price: num(p.current_price),
     createdAt: p.created_at ? new Date(num(p.created_at)).toISOString() : null,
     launchpad: (p.launchpad as string) || null,
     blacklisted: Boolean(p.is_blacklisted),
   };
+}
+
+/**
+ * Jupiter token data (organic score, total liquidity across DEXes) for a list of
+ * mints, cached 2 minutes. Used to enrich pool rows; failures just leave gaps.
+ */
+const jupCache = new Map<string, { at: number; t: Json }>();
+export async function jupTokens(mints: string[]): Promise<Map<string, Json>> {
+  const out = new Map<string, Json>();
+  const need = [...new Set(mints)].filter((m) => {
+    const hit = jupCache.get(m);
+    if (hit && Date.now() - hit.at < 120_000) return out.set(m, hit.t), false;
+    return true;
+  });
+  for (let i = 0; i < need.length; i += 50) {
+    const res = await fetch(`https://lite-api.jup.ag/tokens/v2/search?query=${need.slice(i, i + 50).join(",")}`, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+    const list = res?.ok ? ((await res.json().catch(() => [])) as Json[]) : [];
+    for (const t of list) {
+      jupCache.set(String(t.id), { at: Date.now(), t });
+      out.set(String(t.id), t);
+    }
+  }
+  if (jupCache.size > 5000) jupCache.clear();
+  return out;
 }
