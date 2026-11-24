@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { schema } from "@binflip/db";
+import { reshapeBinsFrom } from "@binflip/core";
 
 /**
  * The copy dialog's 6 steps in UI units (%, SOL). The DB stores bps and
@@ -60,6 +61,7 @@ export const CopySettingsDto = z.object({
     .object({
       mode: z.enum(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"]),
       flipThresholdPct: pct.min(1).max(90),
+      reshapeBins: z.number().int().min(1).max(51),
       compoundMinutes: opt(z.number().int().min(5).max(7 * 24 * 60)),
       convertFeesToSol: z.boolean(),
     })
@@ -115,7 +117,13 @@ export function toRow(d: CopySettingsDto, currentParams: Record<string, unknown>
   const m = d.management;
   if (m) {
     if (m.mode) p.managementMode = m.mode;
-    if (m.flipThresholdPct !== undefined) p.managementParams = { ...currentParams, flipThresholdBps: toBps(m.flipThresholdPct) };
+    if (m.flipThresholdPct !== undefined || m.reshapeBins !== undefined) {
+      p.managementParams = {
+        ...currentParams,
+        ...(m.flipThresholdPct !== undefined ? { flipThresholdBps: toBps(m.flipThresholdPct) } : {}),
+        ...(m.reshapeBins !== undefined ? { reshapeBins: m.reshapeBins } : {}),
+      };
+    }
     if (has(m, "compoundMinutes")) p.compoundIntervalMinutes = m.compoundMinutes ?? null;
     if (m.convertFeesToSol !== undefined) p.convertFeesToSol = m.convertFeesToSol;
   }
@@ -123,7 +131,7 @@ export function toRow(d: CopySettingsDto, currentParams: Record<string, unknown>
 }
 
 export function fromRow(r: Row) {
-  const params = r.managementParams as { flipThresholdBps?: number };
+  const params = (r.managementParams ?? {}) as { flipThresholdBps?: number };
   return {
     sizing: {
       mode: r.sizingMode,
@@ -153,6 +161,7 @@ export function fromRow(r: Row) {
     management: {
       mode: r.managementMode,
       flipThresholdPct: (params.flipThresholdBps ?? 1000) / 100,
+      reshapeBins: reshapeBinsFrom(params),
       compoundMinutes: r.compoundIntervalMinutes,
       convertFeesToSol: r.convertFeesToSol,
     },

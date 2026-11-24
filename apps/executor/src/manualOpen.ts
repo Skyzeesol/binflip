@@ -120,7 +120,10 @@ export function startManualOpen(p: {
       origin: j.origin,
       feeMode: j.feeMode,
       compoundMinutes: j.feeMode === "hold" ? null : (j.compoundMinutes ?? 60),
-      managementParams: j.flipThresholdBps ? { flipThresholdBps: j.flipThresholdBps } : null,
+      managementParams:
+        j.flipThresholdBps || j.reshapeBins
+          ? { ...(j.flipThresholdBps ? { flipThresholdBps: j.flipThresholdBps } : {}), ...(j.reshapeBins ? { reshapeBins: j.reshapeBins } : {}) }
+          : null,
       takeProfitBps: j.takeProfitBps ?? null,
       stopLossBps: j.stopLossBps ?? null,
       trailingStopBps: j.trailingStopBps ?? null,

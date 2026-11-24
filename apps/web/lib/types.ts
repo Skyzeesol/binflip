@@ -14,7 +14,7 @@ export interface CopySettings {
     minTokenAgeHours: number | null;
     minMarketCapUsd: number | null;
   };
-  management: { mode: ManagementMode; flipThresholdPct: number; compoundMinutes: number | null; convertFeesToSol: boolean };
+  management: { mode: ManagementMode; flipThresholdPct: number; reshapeBins?: number; compoundMinutes: number | null; convertFeesToSol: boolean };
 }
 
 export interface Leader {

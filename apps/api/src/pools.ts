@@ -235,8 +235,9 @@ export function registerPools(app: FastifyInstance<any, any, any, any>, db: Db, 
     lowerPct: z.number().gt(-100).lt(1000).default(-50),
     upperPct: z.number().gt(-100).lt(1000).default(0),
     strategy: z.enum(["spot", "curve", "bid_ask"]).default("bid_ask"),
-    managementMode: z.enum(["mirror", "staged_flip", "bottom_flip"]).default("staged_flip"),
+    managementMode: z.enum(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"]).default("staged_flip"),
     flipThresholdPct: z.number().min(1).max(90).optional(),
+    reshapeBins: z.number().int().min(1).max(51).optional(),
     feeMode: z.enum(["compound", "sell", "hold"]).default("compound"),
     compoundMinutes: z.number().int().min(5).max(10_080).optional(),
     takeProfitPct: z.number().min(0.1).max(10_000).nullable().optional(),
@@ -263,8 +264,9 @@ export function toOpenJob(
     lowerPct: number;
     upperPct: number;
     strategy: "spot" | "curve" | "bid_ask";
-    managementMode: "mirror" | "staged_flip" | "bottom_flip";
+    managementMode: "mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid";
     flipThresholdPct?: number;
+    reshapeBins?: number;
     feeMode: "compound" | "sell" | "hold";
     compoundMinutes?: number;
     takeProfitPct?: number | null;
@@ -287,6 +289,7 @@ export function toOpenJob(
     strategy: b.strategy,
     managementMode: b.managementMode,
     ...(b.flipThresholdPct ? { flipThresholdBps: Math.round(b.flipThresholdPct * 100) } : {}),
+    ...(b.reshapeBins ? { reshapeBins: b.reshapeBins } : {}),
     feeMode: b.feeMode,
     ...(b.compoundMinutes ? { compoundMinutes: b.compoundMinutes } : {}),
     takeProfitBps: bps(b.takeProfitPct),

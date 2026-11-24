@@ -521,3 +521,12 @@ Menü LP Agent sırasıyla: **Discover (/)**, **Havuzlar (/pools)**, **Smart LP 
 - Fonlama: liderin rebalance ile yaptığı eklemeler (`removes` yok, sadece SOL) aynı talimatla bizim tutarımıza ölçeklenip gönderilir (SDK cüzdandan SOL'ü wrap'liyor); olmazsa SDK strateji eklemesine düşer.
 - `TxSender.fitComputeLimit`: SDK'nın koyduğu limit kaldırılır, 1,4M ile simüle edilip kullanılan +%15 limit konur (öncelik ücreti istenen CU başına ödendiği için ucuzlar).
 - Mainnet simülasyonu (Karınca'nın pozisyonu, imza kontrolü kapalı): 30 bin taşıma 288k CU, 70 bin 618k CU; 70 binlik fonlama parçası 0,3 SOL ile 388k CU. 348 binlik tek seferde taşıma 1,4M'yi aşıyor (Karınca da bunu yapmıyor).
+
+## 26. Precision Hybrid (24 Kasım 2026)
+
+- Mod artık açık: Copy LP diyaloğu, Create Position paneli, Telegram sihirbazı (`Precision Hybrid (12 bin)`) ve Ayarlar → kendi pozisyonlarım. Parametre `managementParams.reshapeBins` (1–51, varsayılan 12).
+- Karar (`decide`): fiyat aralığın içindeyken son şekillendirmeden (`lastFlipBinId`, yoksa giriş bin'i) `reshapeBins` kadar kayınca `reshape`. Aralık 160 bin'den genişse yapılmaz (`MAX_RESHAPE_BINS`, tek tx'e sığmaz).
+- Canlı: tek `rebalance_liquidity` — aralık sınırları açıkça verilerek hepsi çekilir (sınırsız verince program sadece aktif bin'i boşaltıyor), aynı aralığa SOL fiyatın altına, token üstüne `taban + adım·|d|` doğrusu ile geri eklenir (%50 spot + %50 bid-ask). Swap yok; artan token swapback kuyruğuna.
+- Birim: Y tarafı ham SOL; **X tarafı Y cinsinden değer** — program her bin'in fiyatına bölüyor. Bu yüzden token toplamı aktif fiyatla değere çevrilir (`hybridAdds(..., binStep)`); üstteki bin'ler daha pahalı olduğu için gereken token elimizdekini aşmaz.
+- Mainnet simülasyonu (38Xwb…, 70 bin): 527k CU, token %98,5 / SOL %99,5 geri yatırıldı, slippage %5, aktif bin kayması 5.
+- İlk açılış seçilen stratejiyle yapılır; hibrit şekil ilk reshape'te gelir. Deneme modu aynı şekli sanal bin'lerle uygular.

@@ -146,7 +146,8 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
   const [acc, setAcc] = useState<Account | null>(null);
   const [amount, setAmount] = useState("0.5");
   const [strategy, setStrategy] = useState<"spot" | "curve" | "bid_ask">("bid_ask");
-  const [mode, setMode] = useState<"mirror" | "staged_flip" | "bottom_flip">("staged_flip");
+  const [mode, setMode] = useState<"mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid">("staged_flip");
+  const [reshape, setReshape] = useState("12");
   const [flip, setFlip] = useState("10");
   const [feeMode, setFeeMode] = useState<"compound" | "sell" | "hold">("compound");
   const [interval, setInterval_] = useState("60");
@@ -208,6 +209,7 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
         strategy,
         managementMode: mode,
         flipThresholdPct: mode === "staged_flip" ? Number(flip) : undefined,
+        reshapeBins: mode === "precision_hybrid" ? Math.min(51, Math.max(1, Math.round(Number(reshape) || 12))) : undefined,
         feeMode,
         compoundMinutes: feeMode === "hold" ? undefined : Number(interval),
         takeProfitPct: num(tp),
@@ -270,11 +272,17 @@ function CreatePanel(p: { address: string; protocol: "dlmm" | "damm_v2"; pool: P
           <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
             <option value="staged_flip">Kademeli flip</option>
             <option value="bottom_flip">Dipte flip</option>
+            <option value="precision_hybrid">Precision Hybrid</option>
             <option value="mirror">Sadece tut (yönetme)</option>
           </select>
         </label>
       )}
       {dlmm && mode === "staged_flip" && <label className="field small">Flip eşiği (%)<input type="number" min={1} value={flip} onChange={(e) => setFlip(e.target.value)} /></label>}
+      {dlmm && mode === "precision_hybrid" && (
+        <label className="field small">Reshape aralığı (bin)<input type="number" min={1} max={51} value={reshape} onChange={(e) => setReshape(e.target.value)} />
+          <span className="hint">Fiyat bu kadar bin kayınca likidite yeni fiyatın etrafına %50 Spot + %50 Bid-Ask olarak tek işlemle yeniden dağıtılır. İlk açılış seçtiğin stratejiyle yapılır.</span>
+        </label>
+      )}
       <div className="field small">Fee'ler
         <div className="seg full">
           <button className={feeMode === "compound" ? "on" : ""} onClick={() => setFeeMode("compound")} disabled={!dlmm}>Auto-compound</button>

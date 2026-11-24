@@ -10,6 +10,7 @@ interface Manual {
   enabled: boolean;
   mode: ManagementMode;
   flipThresholdPct: number;
+  reshapeBins: number;
   takeProfitPct: number | null;
   stopLossPct: number | null;
   trailingStopPct: number | null;
@@ -164,8 +165,9 @@ export default function SettingsPage() {
             <p className="muted small" style={{ margin: 0 }}>Bot cüzdanını Phantom'a ekleyip kendin açtığın pozisyonlar ~5 dakikada bir bulunur ve bu kurallarla yönetilir. PnL, yönetime alındığı andaki değerden ölçülür.</p>
             <label className="check"><input type="checkbox" checked={manual.enabled} onChange={(e) => m("enabled", e.target.checked)} /><span>Kendi pozisyonlarımı yönet</span></label>
             <div className="row">
-              <label className="field">Yönetim modu<select value={manual.mode} onChange={(e) => m("mode", e.target.value)}>{(["mirror", "staged_flip", "bottom_flip"] as const).map((x) => <option key={x} value={x}>{MODE_TR[x]}</option>)}</select></label>
+              <label className="field">Yönetim modu<select value={manual.mode} onChange={(e) => m("mode", e.target.value)}>{(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"] as const).map((x) => <option key={x} value={x}>{MODE_TR[x]}</option>)}</select></label>
               <label className="field">Flip eşiği (%)<input type="number" min={1} max={90} step="0.5" value={manual.flipThresholdPct} onChange={(e) => m("flipThresholdPct", Number(e.target.value))} /></label>
+              {manual.mode === "precision_hybrid" && <label className="field">Reshape aralığı (bin)<input type="number" min={1} max={51} value={manual.reshapeBins ?? 12} onChange={(e) => m("reshapeBins", Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))))} /></label>}
               <label className="field">Take profit (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.takeProfitPct)} onChange={(e) => m("takeProfitPct", num(e.target.value))} /></label>
               <label className="field">Stop loss (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.stopLossPct)} onChange={(e) => m("stopLossPct", num(e.target.value))} /></label>
               <label className="field">Trailing stop (%)<input type="number" min={0} placeholder="kapalı" value={str(manual.trailingStopPct)} onChange={(e) => m("trailingStopPct", num(e.target.value))} /></label>

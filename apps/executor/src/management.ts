@@ -9,6 +9,7 @@ import {
   readLivePosition,
   shouldCompound,
   compoundRanges,
+  hybridAdds,
   type BuiltTxs,
   type Config,
   type DlmmTxBuilder,
@@ -112,7 +113,7 @@ export function startManagement(p: {
       ? [existing]
       : await db
           .insert(schema.txs)
-          .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: j.kind as "close" | "flip", status: "planned", reason: j.reason, dryRun: false, plan: progress as never })
+          .values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: j.kind as "close" | "flip" | "reshape", status: "planned", reason: j.reason, dryRun: false, plan: progress as never })
           .onConflictDoNothing()
           .returning();
     if (!t) return { skipped: "race" };
@@ -139,6 +140,26 @@ export function startManagement(p: {
       const pnl = d && d.do === "close" ? ` (PnL %${(d.pnlBps / 100).toFixed(2)})` : "";
       await notify(pos.userId, `[CANLI] ${label}: ${j.reason} ile kapatıldı${pnl}${received > 0n ? ", token SOL'e çevrilmek üzere kuyrukta" : ""}`);
       return { closed: true };
+    }
+
+    // ── Precision Hybrid / RL: one rebalance_liquidity, same range, 50% spot + 50% bid-ask around the price ──
+    if (j.kind === "reshape") {
+      // Explicit bounds: without them the program only empties the active bin (seen in mainnet simulation).
+      const removes = [{ minBinId: state.lowerBinId, maxBinId: state.upperBinId, bps: 10_000 }];
+      const held = { x: BigInt(Math.floor(state.bins.reduce((s, b) => s + b.x, 0))), y: BigInt(Math.floor(state.bins.reduce((s, b) => s + b.y, 0))) };
+      // Swapless: each side goes back on its own side, minus a hair so the deposit never exceeds what came out.
+      const keep = (v: bigint) => (v * 995n) / 1000n;
+      const adds = hybridAdds(state.lowerBinId, state.upperBinId, activeId, { x: keep(held.x), y: keep(held.y) }, binStep);
+      const built = await builder.rebalanceOne({ pool: pos.pool, position: pos.ourPosition, removes, adds, favorX: false, claimFee: false, maxActiveBinSlippage: 5, slippagePct: 5 });
+      const before = await builder.tokenBalance(tokenMint);
+      await sendAll(built);
+      const left = (await builder.tokenBalance(tokenMint)) - before;
+      if (left > 0n) await p.swapback.enqueue({ userId: pos.userId, key: t.id, leaderEventId: null, positionId: pos.id, mint: tokenMint, pool: pos.pool, amount: left.toString(), label });
+      await save({ status: "confirmed", plan: { signatures: progress.signatures, activeId, adds: adds.length } as never });
+      const chain = await builder.positionBins(pos.pool, pos.ourPosition);
+      await db.update(schema.positions).set({ lastFlipBinId: activeId, lowerBinId: chain.lower, upperBinId: chain.upper }).where(eq(schema.positions.id, pos.id));
+      await notify(pos.userId, `[CANLI] ${label}: Precision Hybrid reshape yapıldı (fiyat ${d && d.do === "reshape" ? d.movedBins : "?"} bin kaydı), likidite yeni fiyatın etrafında %50 spot + %50 bid-ask.`);
+      return { reshaped: true };
     }
 
     // ── flip ──

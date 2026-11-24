@@ -37,8 +37,9 @@ interface State {
   lowerPct?: number;
   strategy?: "spot" | "curve" | "bid_ask";
   feeMode?: "compound" | "sell";
-  managementMode?: "mirror" | "staged_flip" | "bottom_flip";
+  managementMode?: "mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid";
   flipPct?: number;
+  reshapeBins?: number;
   at: number;
 }
 
@@ -46,7 +47,7 @@ const ADDR = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
 const kb = (rows: Array<Array<[string, string]>>): Keyboard => ({ inline_keyboard: rows.map((r) => r.map(([text, data]) => ({ text, callback_data: data }))) });
 const money = (v: number) => (v >= 1e6 ? `$${(v / 1e6).toFixed(2)}m` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}k` : `$${v.toFixed(0)}`);
 const STRAT: Record<string, string> = { spot: "Spot", curve: "Curve", bid_ask: "Bid-Ask" };
-const MODE: Record<string, string> = { staged_flip: "Kademeli flip", bottom_flip: "Dipte flip", mirror: "Sadece tut" };
+const MODE: Record<string, string> = { staged_flip: "Kademeli flip", bottom_flip: "Dipte flip", precision_hybrid: "Precision Hybrid", mirror: "Sadece tut" };
 
 export class OpenWizard {
   private states = new Map<string, State>();
@@ -136,12 +137,13 @@ export class OpenWizard {
       s.step = "manage";
       return {
         text: `5) Nasıl yönetelim? (kademeli flip eşiğini sayı olarak da yazabilirsin, ör. 14)`,
-        keyboard: kb([[["Kademeli flip %10", "mng:staged_flip:10"], ["Kademeli flip %14", "mng:staged_flip:14"]], [["Dipte flip", "mng:bottom_flip"], ["Sadece tut", "mng:mirror"]], [["İptal", "x"]]]),
+        keyboard: kb([[["Kademeli flip %10", "mng:staged_flip:10"], ["Kademeli flip %14", "mng:staged_flip:14"]], [["Dipte flip", "mng:bottom_flip"], ["Sadece tut", "mng:mirror"]], [["Precision Hybrid (12 bin)", "mng:precision_hybrid:12"]], [["İptal", "x"]]]),
       };
     }
     if (k === "mng") {
       s.managementMode = a as State["managementMode"];
       s.flipPct = a === "staged_flip" ? Number(b ?? 10) : undefined;
+      s.reshapeBins = a === "precision_hybrid" ? Math.min(51, Math.max(1, Number(b ?? 12))) : undefined;
       s.step = "confirm";
       return this.summary(s);
     }
@@ -160,6 +162,7 @@ export class OpenWizard {
         strategy: s.strategy ?? "bid_ask",
         managementMode: s.managementMode ?? "staged_flip",
         ...(s.flipPct ? { flipThresholdBps: Math.round(s.flipPct * 100) } : {}),
+        ...(s.reshapeBins ? { reshapeBins: s.reshapeBins } : {}),
         feeMode: s.feeMode ?? "compound",
         compoundMinutes: 60,
         chatId,
@@ -186,7 +189,7 @@ export class OpenWizard {
       dlmm ? `• Aralık: fiyattan %${-(s.lowerPct ?? -50)} aşağıya kadar (sadece SOL)` : "• DAMM V2: SOL'ün yarısı token'a çevrilip eklenir",
       dlmm ? `• Strateji: ${STRAT[s.strategy ?? "bid_ask"]}` : null,
       `• Fee'ler: ${s.feeMode === "sell" ? "sürekli SOL'e satılır" : "auto-compound"} (60 dk'da bir, eşik aşılınca)`,
-      dlmm ? `• Yönetim: ${MODE[s.managementMode ?? "staged_flip"]}${s.flipPct ? ` (eşik %${s.flipPct})` : ""}` : null,
+      dlmm ? `• Yönetim: ${MODE[s.managementMode ?? "staged_flip"]}${s.flipPct ? ` (eşik %${s.flipPct})` : ""}${s.reshapeBins ? ` (${s.reshapeBins} bin'de reshape)` : ""}` : null,
       "",
       "Bot cüzdanından açılır. Onaylıyor musun?",
     ].filter((l) => l !== null);

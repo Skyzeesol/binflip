@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { Queue } from "bullmq";
-import { QUEUES, type Config } from "@binflip/core";
+import { DEFAULT_RESHAPE_BINS, QUEUES, reshapeBinsFrom, type Config } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
 import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
@@ -412,6 +412,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
       enabled: m?.enabled ?? true,
       mode: m?.managementMode ?? "staged_flip",
       flipThresholdPct: ((m?.managementParams as { flipThresholdBps?: number } | undefined)?.flipThresholdBps ?? 1000) / 100,
+      reshapeBins: reshapeBinsFrom(m?.managementParams as Record<string, unknown> | undefined),
       takeProfitPct: m?.takeProfitBps != null ? m.takeProfitBps / 100 : null,
       stopLossPct: m?.stopLossBps != null ? m.stopLossBps / 100 : null,
       trailingStopPct: m?.trailingStopBps != null ? m.trailingStopBps / 100 : null,
@@ -425,6 +426,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
         enabled: z.boolean(),
         mode: z.enum(["mirror", "staged_flip", "bottom_flip", "precision_hybrid"]),
         flipThresholdPct: z.number().min(1).max(90),
+        reshapeBins: z.number().int().min(1).max(51).default(DEFAULT_RESHAPE_BINS),
         takeProfitPct: z.number().min(0).nullable(),
         stopLossPct: z.number().min(0).nullable(),
         trailingStopPct: z.number().min(0).nullable(),
@@ -436,7 +438,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
       userId: req.userId!,
       enabled: d.enabled,
       managementMode: d.mode,
-      managementParams: { flipThresholdBps: Math.round(d.flipThresholdPct * 100) },
+      managementParams: { flipThresholdBps: Math.round(d.flipThresholdPct * 100), reshapeBins: d.reshapeBins },
       takeProfitBps: bps(d.takeProfitPct),
       stopLossBps: bps(d.stopLossPct),
       trailingStopBps: bps(d.trailingStopPct),

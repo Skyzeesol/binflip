@@ -141,3 +141,21 @@ describe("exits", () => {
     expect(decide(s, "mirror", rules)).toMatchObject({ do: "close", reason: "take_profit" });
   });
 });
+
+import { hybridBins } from "./hybrid.js";
+
+describe("precision hybrid decisions", () => {
+  const base = { binStep: 100, depositedY: 1e9, claimedFeesY: 0, peakY: 1e9, lowerBinId: -60, upperBinId: 10, lastFlipActiveId: null };
+  it("reshapes after the configured bins inside the range, holds before", () => {
+    const bins = hybridBins(-60, 10, 0, { x: 0, y: 1e9 }, 100);
+    const moved = decide({ ...base, bins, activeId: -12, entryActiveId: 0 }, "precision_hybrid", { takeProfitBps: null, stopLossBps: null, trailingStopBps: null });
+    expect(moved).toMatchObject({ do: "reshape", activeId: -12, movedBins: -12 });
+    const little = decide({ ...base, bins, activeId: -11, entryActiveId: 0 }, "precision_hybrid", { takeProfitBps: null, stopLossBps: null, trailingStopBps: null });
+    expect(little.do).toBe("hold");
+  });
+  it("exits still win over reshaping", () => {
+    const bins = hybridBins(-60, 10, 0, { x: 0, y: 5e8 }, 100);
+    const d = decide({ ...base, bins, activeId: -20, entryActiveId: 0 }, "precision_hybrid", { takeProfitBps: null, stopLossBps: 1000, trailingStopBps: null });
+    expect(d.do).toBe("close");
+  });
+});

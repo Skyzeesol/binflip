@@ -53,7 +53,7 @@ export const SWAPBACK_MAX_ATTEMPTS = 1000;
 /** manager → executor: act on a management decision. The executor re-checks it on chain first. */
 export interface ManagementJob {
   positionId: string;
-  kind: "close" | "flip" | "compound" | "close_empty" | "decrease" | "claim";
+  kind: "close" | "flip" | "compound" | "close_empty" | "decrease" | "claim" | "reshape";
   reason: string;
   /** Requested from the panel: run it as asked, without re-deciding (only state checks). */
   manual?: boolean;
@@ -88,8 +88,10 @@ export interface OpenJob {
   lowerPct: number;
   upperPct: number;
   strategy: "spot" | "curve" | "bid_ask";
-  managementMode: "mirror" | "staged_flip" | "bottom_flip";
+  managementMode: "mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid";
   flipThresholdBps?: number;
+  /** Precision Hybrid: bins the price may move before a reshape (1–51). */
+  reshapeBins?: number;
   /** compound = claim and add back; sell = claim and sell to SOL; hold = leave fees in the position. */
   feeMode: "compound" | "sell" | "hold";
   compoundMinutes?: number;

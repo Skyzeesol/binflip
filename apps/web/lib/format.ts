@@ -55,6 +55,7 @@ export const REASONS: Record<string, string> = {
   trailing_stop: "Trailing stop",
   staged_flip: "Kademeli flip",
   bottom_flip: "Dipte flip",
+  rl_reshape: "Precision Hybrid reshape",
   auto_compound: "Auto-compound",
 };
 export const reasonTr = (r: string | null) => (r ? (REASONS[r] ?? r) : "—");

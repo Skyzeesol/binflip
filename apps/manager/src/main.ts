@@ -30,6 +30,9 @@ import {
   type NotificationJob,
   type PoolInfo,
   type Shape,
+  hybridBins,
+  totalX,
+  totalY,
 } from "@binflip/core";
 import { createDb, schema, type Db } from "@binflip/db";
 
@@ -199,6 +202,13 @@ async function manageAll(
       log.info({ position: pos.id, kind: d.kind, dropBps: d.dropBps }, "flip (dry-run)");
     }
 
+    if (d.do === "reshape" && !tripped.has(pos.userId)) {
+      // Precision Hybrid / RL: same range, liquidity redistributed 50% spot + 50% bid-ask around the new price.
+      sim = { ...sim, bins: hybridBins(sim.lowerBinId, sim.upperBinId, info.activeBinId, { x: totalX(sim.bins), y: totalY(sim.bins) }, info.binStep), lastFlipActiveId: info.activeBinId };
+      await record(db, pos, `reshape_${pos.id}_${info.activeBinId}`, "reshape", d);
+      await notify(pos.userId, `[DENEME] ${label}: Precision Hybrid reshape ${pos.pool.slice(0, 6)}… → fiyat ${d.movedBins} bin kaydı; likidite aynı aralıkta yeni fiyatın etrafına %50 spot + %50 bid-ask olarak yeniden dağıtılırdı.`);
+    }
+
     if (d.do === "close") {
       await db
         .update(schema.positions)
@@ -252,7 +262,7 @@ function initSim(pos: typeof schema.positions.$inferSelect, info: PoolInfo): Sim
   };
 }
 
-async function record(db: Db, pos: typeof schema.positions.$inferSelect, key: string, kind: "flip" | "close", d: Decision) {
+async function record(db: Db, pos: typeof schema.positions.$inferSelect, key: string, kind: "flip" | "close" | "reshape", d: Decision) {
   await db
     .insert(schema.txs)
     .values({
@@ -262,7 +272,7 @@ async function record(db: Db, pos: typeof schema.positions.$inferSelect, key: st
       kind,
       status: "planned",
       dryRun: pos.dryRun,
-      reason: d.do === "close" ? d.reason : d.do === "flip" ? `${d.kind}_flip` : null,
+      reason: d.do === "close" ? d.reason : d.do === "flip" ? `${d.kind}_flip` : d.do === "reshape" ? "rl_reshape" : null,
       plan: JSON.parse(JSON.stringify(d)),
     })
     .onConflictDoNothing();
@@ -325,7 +335,7 @@ async function manageLive(
     return;
   }
   const kind = d.do;
-  const reason = d.do === "close" ? d.reason : `${d.kind}_flip`;
+  const reason = d.do === "close" ? d.reason : d.do === "reshape" ? "rl_reshape" : `${d.kind}_flip`;
   await management.add(
     "manage",
     { positionId: pos.id, kind, reason, activeId },
@@ -396,6 +406,7 @@ async function discoverManual(db: Db, builder: DlmmTxBuilder, log: Logger, notif
           state: "ACTIVE",
           dryRun: false,
           managementMode: m?.managementMode ?? "staged_flip",
+          managementParams: (m?.managementParams as Record<string, unknown> | null | undefined) ?? null,
           lowerBinId: p.lower,
           upperBinId: p.upper,
           entryActiveBinId: info.activeBinId,

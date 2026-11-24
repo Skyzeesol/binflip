@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS: CopySettings = {
   exit: { withLeader: true, followExitsWhilePaused: false, takeProfitPct: 10, stopLossPct: 10, trailingStopPct: null, currency: "sol" },
   copy: { dlmmStrategies: ["spot", "curve", "bid_ask", "custom"], dammV2: true },
   protection: { memeProtection: true, smartTokenRetention: false, strHoldSeconds: 60, strSellOnDropPct: 5, strSellOnLeaderSell: true, minTokenAgeHours: null, minMarketCapUsd: null },
-  management: { mode: "staged_flip", flipThresholdPct: 10, compoundMinutes: null, convertFeesToSol: false },
+  management: { mode: "staged_flip", flipThresholdPct: 10, reshapeBins: 12, compoundMinutes: null, convertFeesToSol: false },
 };
 
 const STRATS: Array<{ id: Strategy; label: string; hint: string }> = [
@@ -25,7 +25,7 @@ const MODES: Array<{ id: ManagementMode; hint: string }> = [
   { id: "mirror", hint: "Liderin yaptığını aynen yap, kendi kuralımız yok (TP/SL hariç)." },
   { id: "staged_flip", hint: "Fiyat eşik kadar düşünce token'a dönmüş bin'leri fiyatın üstüne taşı. Aşağıdaki SOL'e dokunma." },
   { id: "bottom_flip", hint: "Aralığın altına çıkınca (hepsi token) tamamını fiyatın üstüne bid-ask olarak koy." },
-  { id: "precision_hybrid", hint: "%50 Spot + %50 Bid-Ask, reshape ile (6. aşama, henüz uygulanmıyor)." },
+  { id: "precision_hybrid", hint: "Fiyat aralığın içinde kaldıkça likiditeyi yeni fiyatın etrafına %50 Spot + %50 Bid-Ask olarak yeniden dağıtır (tek işlem, aralık aynı kalır, swap yok). Fiyat aşağıdaki bin sayısı kadar kayınca tetiklenir." },
 ];
 
 const num = (v: string) => (v.trim() === "" ? null : Number(v));
@@ -61,7 +61,7 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
     .join(" · ") || "Sadece liderle çık";
   const copySum = `DLMM: ${s.copy.dlmmStrategies.length === 4 ? "hepsi" : s.copy.dlmmStrategies.join(", ") || "hiçbiri"}${s.copy.dammV2 ? " · DAMM V2" : ""}`;
   const protSum = [s.protection.memeProtection ? "Meme koruması" : null, s.protection.smartTokenRetention ? `Token tutma ${s.protection.strHoldSeconds} sn` : null].filter(Boolean).join(" · ") || "Kapalı";
-  const mgmtSum = `${MODE_TR[s.management.mode]}${s.management.mode === "staged_flip" ? ` %${s.management.flipThresholdPct}` : ""}${s.management.compoundMinutes ? ` · compound ${s.management.compoundMinutes} dk` : ""}`;
+  const mgmtSum = `${MODE_TR[s.management.mode]}${s.management.mode === "staged_flip" ? ` %${s.management.flipThresholdPct}` : s.management.mode === "precision_hybrid" ? ` ${s.management.reshapeBins ?? 12} bin` : ""}${s.management.compoundMinutes ? ` · compound ${s.management.compoundMinutes} dk` : ""}`;
 
   const steps = [
     { title: "Boyut", sum: sizeSum },
@@ -190,12 +190,15 @@ export function CopyDialog({ leader, onClose, onSaved, initialAddress = "" }: { 
                 <div><h3>Pozisyon yönetimi</h3><p className="muted">Bizim farkımız: kopyalanan pozisyonu kendi kurallarımızla yönetmek.</p></div>
                 {MODES.map((m) => (
                   <label key={m.id} className="check">
-                    <input type="radio" checked={s.management.mode === m.id} onChange={() => set("management", { mode: m.id })} disabled={m.id === "precision_hybrid"} />
+                    <input type="radio" checked={s.management.mode === m.id} onChange={() => set("management", { mode: m.id })} />
                     <span>{MODE_TR[m.id]}<div className="hint">{m.hint}</div></span>
                   </label>
                 ))}
                 {s.management.mode === "staged_flip" && (
                   <label className="field">Flip eşiği (%)<input type="number" min={1} max={90} step="0.5" value={s.management.flipThresholdPct} onChange={(e) => set("management", { flipThresholdPct: Number(e.target.value) })} /><span className="hint">Varsayılan %10. Bin step 100'de %10 ≈ 11 bin, bin step 20'de ≈ 53 bin.</span></label>
+                )}
+                {s.management.mode === "precision_hybrid" && (
+                  <label className="field">Reshape aralığı (bin)<input type="number" min={1} max={51} step={1} value={s.management.reshapeBins ?? 12} onChange={(e) => set("management", { reshapeBins: Math.min(51, Math.max(1, Math.round(Number(e.target.value) || 12))) })} /><span className="hint">1–51, varsayılan 12. Küçük değer fiyatı daha sıkı takip eder ama daha çok işlem ücreti demek. Aralık 160 bin'den genişse reshape yapılmaz (tek işleme sığmaz).</span></label>
                 )}
                 <label className="field">Auto-compound (dakika)<input type="number" min={5} placeholder="kapalı" value={str(s.management.compoundMinutes)} onChange={(e) => set("management", { compoundMinutes: num(e.target.value) })} /><span className="hint">Bu aralıkla, fee'ler en az 0,02 SOL ettiğinde claim edilip pozisyona geri eklenir.</span></label>
               </div>

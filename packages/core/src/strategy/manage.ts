@@ -1,4 +1,5 @@
 import { binsForDrop, distribute, mergeBins, totalX, valueInY, type Bin, type Shape } from "./bins.js";
+import { DEFAULT_RESHAPE_BINS, reshapeBinsFrom, shouldReshape } from "./hybrid.js";
 
 /**
  * Position management decisions (HANDOFF §3). Pure: state in, decision out.
@@ -24,9 +25,11 @@ export interface FlipParams {
   askBins: number | null;
   /** Shape of the re-added token. Default bid-ask (concentrated away from price). */
   askShape: Shape;
+  /** Precision Hybrid / RL: bins the price may move before reshaping (1–51, default 12). */
+  reshapeBins: number;
 }
 
-export const DEFAULT_FLIP: FlipParams = { thresholdBps: 1000, askBins: null, askShape: "bid_ask" };
+export const DEFAULT_FLIP: FlipParams = { thresholdBps: 1000, askBins: null, askShape: "bid_ask", reshapeBins: DEFAULT_RESHAPE_BINS };
 
 /** Read flip params from copy_settings.management_params, falling back to defaults. */
 export function flipParamsFrom(p: Record<string, unknown> | null | undefined): FlipParams {
@@ -36,6 +39,7 @@ export function flipParamsFrom(p: Record<string, unknown> | null | undefined): F
     thresholdBps: n(p?.flipThresholdBps) ?? DEFAULT_FLIP.thresholdBps,
     askBins: n(p?.askBins) ?? DEFAULT_FLIP.askBins,
     askShape: shape === "spot" || shape === "curve" || shape === "bid_ask" ? shape : DEFAULT_FLIP.askShape,
+    reshapeBins: reshapeBinsFrom(p),
   };
 }
 
@@ -58,6 +62,8 @@ export interface ManagedPosition {
 
 export type Decision =
   | { do: "hold"; pnlBps: number; valueY: number }
+  /** Precision Hybrid: redistribute as 50% spot + 50% bid-ask around `activeId` (range unchanged). */
+  | { do: "reshape"; activeId: number; movedBins: number; pnlBps: number; valueY: number }
   | { do: "close"; reason: "take_profit" | "stop_loss" | "trailing_stop"; pnlBps: number; valueY: number }
   | {
       do: "flip";
@@ -107,6 +113,13 @@ export function decide(s: ManagedPosition, mode: ManagementMode, exits: ExitRule
     // Out of range below: everything is token. Withdraw all, re-add above with 0 spread.
     const tokenBins = s.bins.filter((b) => b.x > 0);
     if (tokenBins.length && totalX(s.bins) > 0) return flipDecision("bottom", s, tokenBins, flip, s.lastFlipActiveId ?? s.entryActiveId, pnl, valueY);
+  }
+
+  if (mode === "precision_hybrid") {
+    const ref = s.lastFlipActiveId ?? s.entryActiveId;
+    if (shouldReshape(s.activeId, ref, s.lowerBinId, s.upperBinId, flip.reshapeBins)) {
+      return { do: "reshape", activeId: s.activeId, movedBins: s.activeId - ref, pnlBps: pnl, valueY };
+    }
   }
 
   return { do: "hold", pnlBps: pnl, valueY };
