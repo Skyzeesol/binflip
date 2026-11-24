@@ -128,6 +128,8 @@ await runService("executor", async ({ config, log }) => {
 });
 
 async function setupLive(db: Db, config: Config, log: Logger): Promise<Live> {
+  // Only the executor holds the key; the other services run "live" without it (they only read and queue).
+  if (!config.KEYSTORE_PATH || !config.KEYSTORE_PASSPHRASE_FILE) throw new Error("Live executor requires KEYSTORE_PATH and KEYSTORE_PASSPHRASE_FILE");
   const signer = KeystoreSigner.fromFile(config.KEYSTORE_PATH!, readPassphraseFile(config.KEYSTORE_PASSPHRASE_FILE!));
   const [wallet] = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.publicKey, signer.publicKey));
   if (!wallet) throw new Error(`agent wallet ${signer.publicKey} is not registered (run wallet:create)`);
@@ -183,7 +185,9 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
         await db
           .select()
           .from(schema.positions)
-          .where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, ev.leaderPosition)))
+          // Only copies made in the current mode: after going live, positions mirrored during dry-run
+          // were never opened on chain and must not be removed/closed live (they count as not copied).
+          .where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, ev.leaderPosition), eq(schema.positions.dryRun, config.mode !== "live")))
       )[0] ?? null)
     : null;
 
@@ -336,7 +340,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
     }
     if (plan.do === "open" && plan.empty) {
       // LP Agent: if the leader's funding add never comes, close the empty copy after ~1 min and get the rent back.
-      const [p] = await db.select({ id: schema.positions.id }).from(schema.positions).where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, action.position)));
+      const [p] = await db.select({ id: schema.positions.id }).from(schema.positions).where(and(eq(schema.positions.userId, ev.userId), eq(schema.positions.leaderPosition, action.position), eq(schema.positions.dryRun, false)));
       if (p) await l.managementQueue!.add("manage", { positionId: p.id, kind: "close_empty", reason: "unfunded_empty", activeId: 0 }, { jobId: `mgmt_${p.id}_close_empty`, delay: 60_000, attempts: 3, backoff: { type: "exponential", delay: 10_000 } });
     }
     // Like LP Agent: whatever token this exit produced is sold back to SOL (retried until sold).

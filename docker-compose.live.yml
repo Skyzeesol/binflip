@@ -5,6 +5,20 @@
 #   3. Cüzdana KÜÇÜK miktarda SOL gönder.
 #   4. docker compose -f docker-compose.yml -f docker-compose.live.yml up -d
 services:
+  # manager / api / telegram run live too (manage and show live positions, queue actions);
+  # only the executor gets the keystore and signs.
+  manager:
+    environment:
+      DRY_RUN: "0"
+      LIVE_CONFIRMED: "1"
+  api:
+    environment:
+      DRY_RUN: "0"
+      LIVE_CONFIRMED: "1"
+  telegram:
+    environment:
+      DRY_RUN: "0"
+      LIVE_CONFIRMED: "1"
   migrate:
     volumes:
       - ./keystore:/keystore

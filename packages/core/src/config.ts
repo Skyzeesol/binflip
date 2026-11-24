@@ -88,8 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const mode: ExecutionMode = !DRY_RUN && LIVE_CONFIRMED ? "live" : "dry_run";
-  if (mode === "live" && (!rest.KEYSTORE_PATH || !rest.KEYSTORE_PASSPHRASE_FILE)) {
-    throw new ConfigError("Live mode requires KEYSTORE_PATH and KEYSTORE_PASSPHRASE_FILE.");
-  }
+  // The keystore is required by the executor only (it alone signs); manager, api and telegram
+  // run in live mode to manage and show live positions, without ever seeing the key.
   return { ...rest, mode };
 }
