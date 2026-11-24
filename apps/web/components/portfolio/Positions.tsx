@@ -49,8 +49,8 @@ export function RangeBar({ p, mode }: { p: PfPosition; mode: "pct" | "bins" }) {
   return (
     <div className={`rangebar ${r.inRange ? "" : "out"}`} title={r.inRange ? "Aralık içinde" : "Aralık dışında"}>
       <div className="rangebar-labels">
-        <span>{mode === "pct" ? `${r.lowerPct.toFixed(1)}%` : lower}</span>
-        <span>{mode === "pct" ? `+${r.upperPct.toFixed(1)}%` : upper}</span>
+        <span>{mode === "pct" ? `${r.lowerPct > 0 ? "+" : ""}${r.lowerPct.toFixed(1)}%` : lower}</span>
+        <span>{mode === "pct" ? `${r.upperPct > 0 ? "+" : ""}${r.upperPct.toFixed(1)}%` : upper}</span>
       </div>
       <div className="rangebar-track">
         <span className="rangebar-dot" style={{ left: "8%" }} />

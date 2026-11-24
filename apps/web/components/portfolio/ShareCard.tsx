@@ -25,7 +25,7 @@ export function ShareCard({ p, onClose }: { p: PfPosition; onClose: () => void }
     g.fillStyle = bg;
     g.fillRect(0, 0, W, H);
     // Brand
-    g.fillStyle = "#22c55e";
+    g.fillStyle = "#8d84ff";
     g.save();
     g.translate(78, 78);
     g.rotate(Math.PI / 4);
