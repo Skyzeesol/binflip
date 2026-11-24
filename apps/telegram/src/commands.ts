@@ -16,7 +16,7 @@ const HELP = [
   "/durum: botun durumu, açık pozisyonlar, son 24 saat",
   "/stop: ACİL DURDUR (yeni açma/ekleme durur, çıkışlar liderle devam eder)",
   "/devam: acil durdurmayı kaldır",
-  "/ac <havuz>: havuza pozisyon aç (havuz adresini ya da Meteora linkini direkt göndermen de yeter)",
+  "Token CA gönder: havuzlarını listeler, seçtiğin havuzda pozisyon açar (havuz adresi ya da Meteora linki de olur; /ac <adres> da çalışır)",
   "/iptal: açma sihirbazını iptal et",
   "/yardim: bu liste",
 ].join("\n");
