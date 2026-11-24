@@ -227,7 +227,7 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       killSwitch: risk.killSwitch,
       fundProtectionTripped: risk.fundProtectionTrippedAt !== null,
       maxSolPerTx: risk.maxSolPerTx,
-      dailyRoom: risk.maxSolPerDay - (await solSpentToday(db, ev.userId)),
+      dailyRoom: risk.maxSolPerDay - (await solSpentToday(db, ev.userId, config.mode !== "live")),
     },
     ours && {
       id: ours.id,
@@ -320,11 +320,12 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "submitted", signature: sig, attempts: sql`${schema.txs.attempts} + 1`, plan: sql`jsonb_set(${schema.txs.plan}, '{signatures}', ${JSON.stringify(signatures)}::jsonb)` })
       .where(eq(schema.txs.id, t.id));
   };
+  const progress: { position: string | null } = { position: null };
   try {
     const tokenMint = action.mintY === WSOL_MINT ? action.mintX : action.mintX === WSOL_MINT ? action.mintY : null;
     const exits = plan.do === "remove" || plan.do === "close";
     const before = exits && tokenMint ? await l.builder.tokenBalance(tokenMint) : 0n;
-    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log, ev.userId);
+    const { position: ourPosition, leftoverToken } = await executeLive(l, plan, action, ours, saveSig, config, log, ev.userId, progress);
     const fees = await totalFees(l, signatures);
     await db
       .update(schema.txs)
@@ -386,6 +387,14 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       .set({ status: "failed", error: msg.slice(0, 2000), reason: signatures.length ? "partial_needs_review" : "send_failed" })
       .where(eq(schema.txs.id, t.id));
     log.error({ err: msg, signatures }, "live execution failed");
+    // An open that failed after its position was created on chain (e.g. the funding add failed):
+    // record the copy anyway, so it is managed and still follows the leader's exit instead of
+    // sitting untracked in the wallet. Never re-sent automatically.
+    if (plan.do === "open" && progress.position && !ours) {
+      await applyToPositions(db, plan, action, ev, cs.managementMode, null, false, t.id, progress.position, l.agentWalletId, exitRulesOf(cs)).catch((e) =>
+        log.error({ err: (e as Error).message }, "could not record the partially opened position"),
+      );
+    }
     return {
       ...base,
       outcome: "failed",
@@ -404,8 +413,9 @@ async function executeLive(
   config: Config,
   log: Logger,
   userId: string,
+  progress: { position: string | null } = { position: null },
 ): Promise<{ position: string | null; leftoverToken?: bigint }> {
-  const res = await executeLiveInner(l, plan, a, ours, onSignature, config, log, userId);
+  const res = await executeLiveInner(l, plan, a, ours, onSignature, config, log, userId, progress);
   return typeof res === "object" && res !== null ? res : { position: res };
 }
 
@@ -418,12 +428,15 @@ async function executeLiveInner(
   config: Config,
   log: Logger,
   userId: string,
+  progress: { position: string | null } = { position: null },
 ): Promise<string | null | { position: string | null; leftoverToken?: bigint }> {
   const opts = { priorityMicroLamports: config.PRIORITY_FEE_MICROLAMPORTS, onSignature };
   const sendAll = async (built: BuiltTxs) => {
     for (const [i, tx] of built.txs.entries()) {
       const r = await l.sender.send(tx, built.extraSigners.get(i) ?? [], opts);
       log.info({ sig: r.signature, step: `${i + 1}/${built.txs.length}`, fee: r.feeLamports }, "confirmed");
+      // The first confirmed tx of an open creates the position account: remember it (see the catch above).
+      if (i === 0 && built.position) progress.position ??= built.position;
     }
     return built.position;
   };
@@ -628,7 +641,7 @@ async function getRisk(db: Db, userId: string) {
   return (await db.select().from(schema.userRiskSettings).where(eq(schema.userRiskSettings.userId, userId)))[0]!;
 }
 
-async function solSpentToday(db: Db, userId: string): Promise<bigint> {
+async function solSpentToday(db: Db, userId: string, dryRun: boolean): Promise<bigint> {
   const start = new Date();
   start.setUTCHours(0, 0, 0, 0);
   const [r] = await db
@@ -638,6 +651,8 @@ async function solSpentToday(db: Db, userId: string): Promise<bigint> {
       and(
         eq(schema.txs.userId, userId),
         gte(schema.txs.createdAt, start),
+        // Only this mode's spending: dry-run "would do" amounts must not use up the live day's limit.
+        eq(schema.txs.dryRun, dryRun),
         inArray(schema.txs.kind, ["open", "add"]),
         inArray(schema.txs.status, ["planned", "simulated", "submitted", "confirmed"]),
       ),

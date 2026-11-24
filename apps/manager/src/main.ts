@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { SmartLpIndexer } from "./smartLp.js";
 import { Redis } from "ioredis";
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { PublicKey } from "@solana/web3.js";
 import {
   DlmmTxBuilder,
@@ -343,8 +343,28 @@ async function manageLive(
 async function discoverManual(db: Db, builder: DlmmTxBuilder, log: Logger, notify: (userId: string, text: string) => Promise<void>) {
   const wallets = await db.select().from(schema.agentWallets);
   for (const w of wallets) {
+    // While the executor is opening, rebalancing or closing something, the chain and our rows briefly
+    // disagree (position created, row not written yet). Scanning then would adopt our own copy as a
+    // "manual" position or mark a moving one closed: wait for the next round instead.
+    const [busy] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(schema.txs)
+      .where(
+        and(
+          eq(schema.txs.userId, w.userId),
+          eq(schema.txs.dryRun, false),
+          inArray(schema.txs.kind, ["open", "add", "remove", "close", "rebalance", "flip", "compound"]),
+          inArray(schema.txs.status, ["planned", "submitted"]),
+          gte(schema.txs.createdAt, new Date(Date.now() - 15 * 60_000)),
+        ),
+      );
+    if ((busy?.n ?? 0) > 0) {
+      log.debug({ wallet: w.publicKey }, "discovery deferred: transactions in flight");
+      continue;
+    }
     const onChain = await builder.listPositions(new PublicKey(w.publicKey));
-    const known = await db.select().from(schema.positions).where(and(eq(schema.positions.userId, w.userId), eq(schema.positions.dryRun, false)));
+    // listPositions reads DLMM only: DAMM V2 rows must not be judged against it.
+    const known = await db.select().from(schema.positions).where(and(eq(schema.positions.userId, w.userId), eq(schema.positions.dryRun, false), eq(schema.positions.protocol, "dlmm")));
     const byAddress = new Map(known.filter((k) => k.ourPosition).map((k) => [k.ourPosition!, k]));
     const live = new Set(onChain.map((p) => p.position));
 
