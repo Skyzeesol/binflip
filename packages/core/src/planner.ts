@@ -76,7 +76,8 @@ export type Plan =
   | { do: "close" }
   | { do: "claim" }
   /** Repeat the leader's full move: same withdrawals, same new range and shape, scaled to us. */
-  | { do: "rebalance" };
+  /** full = the whole old range moved (close-and-reopen is a valid fallback); otherwise only the exact instruction fits. */
+  | { do: "rebalance"; full: boolean };
 
 const EXITS: ReadonlySet<ActionKind> = new Set(["remove", "close", "claim"]);
 
@@ -107,8 +108,13 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
     if (a.kind === "close") return { do: "close" };
     if (a.kind === "claim") return { do: "claim" };
     if (a.kind === "rebalance") {
+      // Like the leader: every rebalance_liquidity is repeated as the same instruction, scaled to us
+      // (partial moves and moves that take profit too). A move that tops up needs extra SOL from the
+      // wallet beyond what came out, so it stays skipped (LP Agent skips it as well).
       const c = classifyRebalance(a);
-      return c.ok ? { do: "rebalance" } : skip(c.reason);
+      if (c.ok) return { do: "rebalance", full: true };
+      if (c.reason === "rebalance_partial" || c.reason === "rebalance_take_profit") return { do: "rebalance", full: false };
+      return skip(c.reason);
     }
     const full = a.removeRanges.some((r) => r.bps >= 10_000 && r.minBinId === null);
     const bps = full ? 10_000 : Math.max(0, ...a.removeRanges.map((r) => r.bps));

@@ -53,3 +53,28 @@ describe("classifyRebalance (LP Agent rules)", () => {
     expect(classifyRebalance(rb({ removeRanges: [{ minBinId: null, maxBinId: null, bps: 10_000 }] }))).toEqual({ ok: true });
   });
 });
+
+import { scaleAdds, signedAdds } from "./rebalance.js";
+
+describe("single-transaction rebalance scaling", () => {
+  it("applies bit_flag signs (1 x0, 2 y0, 4 Δx, 8 Δy)", () => {
+    const [a] = signedAdds([{ min_delta_id: -10, max_delta_id: -1, x0: 5n, y0: 7n, delta_x: 2n, delta_y: 3n, bit_flag: 1 | 8 }]);
+    expect(a).toEqual({ minDeltaId: -10, maxDeltaId: -1, x0: -5n, y0: 7n, deltaX: 2n, deltaY: -3n });
+  });
+
+  it("scales each side by our withdrawn / leader withdrawn, with a haircut", () => {
+    const adds = [{ minDeltaId: -5, maxDeltaId: 0, x0: 0n, y0: 1_000_000n, deltaX: 0n, deltaY: 200_000n }];
+    // We hold 1% of the leader's SOL side; no token side.
+    const [a] = scaleAdds(adds, { x: 0n, y: 10_000_000n }, { x: 0n, y: 1_000_000_000n }, 50);
+    expect(a!.y0).toBe((1_000_000n * 10_000_000n * 9950n) / (1_000_000_000n * 10_000n));
+    expect(a!.deltaY).toBe((200_000n * 10_000_000n * 9950n) / (1_000_000_000n * 10_000n));
+    expect(a!.x0).toBe(0n);
+    expect(a!.minDeltaId).toBe(-5);
+  });
+
+  it("a side the leader did not withdraw is not deposited", () => {
+    const [a] = scaleAdds([{ minDeltaId: 1, maxDeltaId: 9, x0: 100n, y0: 0n, deltaX: 10n, deltaY: 0n }], { x: 50n, y: 0n }, { x: 0n, y: 0n });
+    expect(a!.x0).toBe(0n);
+    expect(a!.deltaX).toBe(0n);
+  });
+});

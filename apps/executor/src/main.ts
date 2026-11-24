@@ -19,6 +19,8 @@ import {
   TokenInfoClient,
   checkTokenFilters,
   compoundRanges,
+  scaleAdds,
+  signedAdds,
   type BuiltTxs,
   type Config,
   type ExecutionJob,
@@ -493,6 +495,21 @@ async function executeLiveInner(
           }),
         );
       }
+      if (a.rebalance?.adds.length && a.removeRanges.length === 0 && a.added.x === 0n && a.added.y > 0n && plan.amountSol > 0n) {
+        // The leader funds with rebalance_liquidity in ~70-bin chunks (Karınca): repeat the same
+        // instruction, scaled to our amount, so the shape is the leader's exactly. If it can't be built
+        // or fails simulation (nothing signed), fall back to the SDK's strategy add below.
+        let signed = false;
+        try {
+          const adds = scaleAdds(signedAdds(a.rebalance.adds), { x: 0n, y: plan.amountSol }, { x: 0n, y: a.added.y }, 0);
+          const built = await l.builder.rebalanceOne({ pool, position: ours!.ourPosition!, removes: [], adds, favorX: a.rebalance.favorX, claimFee: false, maxActiveBinSlippage: 30, slippagePct });
+          for (const tx of built.txs) await l.sender.send(tx, [], { ...opts, onSignature: async (sig) => ((signed = true), await onSignature(sig)) });
+          return ours!.ourPosition!;
+        } catch (err) {
+          if (signed) throw err;
+          log.warn({ err: (err as Error).message.slice(0, 300) }, "leader-shaped add unavailable, using the strategy add");
+        }
+      }
       return sendAll(
         await l.builder.add({
           pool,
@@ -511,24 +528,46 @@ async function executeLiveInner(
     case "claim":
       return sendAll(await l.builder.claim({ pool, position: ours!.ourPosition! }));
     case "rebalance": {
-      // Mirror a full move (see core/meteora/rebalance.ts): read what we hold, close, reopen on the new range.
+      // Like the leader: the same rebalance_liquidity instruction, scaled to our position, in one
+      // transaction (core/meteora/rebalance.ts). The token a move takes out (e.g. with profit) is sold.
       const r = a.rebalance!;
-      const before = await l.builder.positionBins(pool, ours!.ourPosition!);
+      const position = ours!.ourPosition!;
+      const info = await l.builder.poolInfo(pool);
+      const tokenMint = info.solIsY ? info.mintX : info.mintY;
+      const removes = a.removeRanges;
+      let signed = false;
+      try {
+        const ourOut = await l.builder.simulateWithdraw(pool, position, removes);
+        const adds = scaleAdds(signedAdds(r.adds), ourOut, { x: a.removed.x, y: a.removed.y });
+        const built = await l.builder.rebalanceOne({ pool, position, removes, adds, favorX: r.favorX, claimFee: true, maxActiveBinSlippage: 30, slippagePct });
+        const before = await l.builder.tokenBalance(tokenMint);
+        for (const tx of built.txs) {
+          await l.sender.send(tx, [], { ...opts, onSignature: async (sig) => ((signed = true), await onSignature(sig)) });
+        }
+        const leftover = (await l.builder.tokenBalance(tokenMint)) - before;
+        return { position, leftoverToken: leftover > 0n ? leftover : 0n };
+      } catch (err) {
+        // Nothing signed (failed while building or simulating): a full move may fall back to
+        // close-and-reopen. Once something was signed, or for a partial move, it is reported, never re-sent.
+        if (!plan.full || signed) throw err;
+        log.warn({ err: (err as Error).message.slice(0, 300) }, "single-transaction rebalance unavailable, falling back to close-and-reopen");
+      }
+      const before = await l.builder.positionBins(pool, position);
       const ourY = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.y, 0)));
       const ourX = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.x, 0)));
-      await sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: 10_000, close: true }));
+      await sendAll(await l.builder.remove({ pool, position, bps: 10_000, close: true }));
       const opened = await l.builder.open({ pool, lowerBinId: r.newMin, upperBinId: r.newMax, amountSol: ourY, strategy: a.strategy, slippagePct });
-      const position = (await sendAll(opened))!;
-      if (ourY > 0n && !(await hasLiquidity(l, pool, position))) {
-        await sendAll(await l.builder.add({ pool, position, lowerBinId: r.newMin, upperBinId: r.newMax, amountSol: ourY, strategy: a.strategy, slippagePct }));
+      const reopened = (await sendAll(opened))!;
+      if (ourY > 0n && !(await hasLiquidity(l, pool, reopened))) {
+        await sendAll(await l.builder.add({ pool, position: reopened, lowerBinId: r.newMin, upperBinId: r.newMax, amountSol: ourY, strategy: a.strategy, slippagePct }));
       }
-      const info = await l.builder.poolInfo(pool);
-      const above = compoundRanges(r.newMin, r.newMax, info.activeBinId).token;
+      const now = await l.builder.poolInfo(pool);
+      const above = compoundRanges(r.newMin, r.newMax, now.activeBinId).token;
       if (ourX > 0n && above) {
-        await sendAll(await l.builder.addToken({ pool, position, fromBinId: above.from, toBinId: above.to, amount: ourX, strategy: a.strategy, slippagePct }));
-        return { position };
+        await sendAll(await l.builder.addToken({ pool, position: reopened, fromBinId: above.from, toBinId: above.to, amount: ourX, strategy: a.strategy, slippagePct }));
+        return { position: reopened };
       }
-      return { position, leftoverToken: ourX };
+      return { position: reopened, leftoverToken: ourX };
     }
     case "skip":
       return null;

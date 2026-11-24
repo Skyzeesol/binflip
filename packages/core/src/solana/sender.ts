@@ -69,6 +69,23 @@ export class TxSender {
     return lastValidBlockHeight;
   }
 
+  /**
+   * Without a compute-limit instruction a transaction gets 200k CU per instruction,
+   * which big DLMM moves exceed (Karınca's rebalances use 0.3–0.7M with a raised
+   * limit). Simulate with the maximum, then set the limit to what it used + a
+   * margin: it fits, and the priority fee (paid per requested CU) stays low.
+   */
+  async fitComputeLimit(tx: Transaction): Promise<void> {
+    // Drop any limit the SDK set (it falls back to the maximum when its own estimate fails) and measure ours.
+    tx.instructions = tx.instructions.filter((ix) => !(ix.programId.toBase58() === COMPUTE_BUDGET && ix.data[0] === 2));
+    const probe = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+    tx.instructions.unshift(probe);
+    const { unitsConsumed } = await this.simulate(tx);
+    tx.instructions.shift();
+    const units = Math.min(1_400_000, Math.ceil((unitsConsumed ?? 1_200_000) * 1.15) + 20_000);
+    tx.instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units }));
+  }
+
   /** Simulate without signatures (sigVerify off). Throws SimulationError with program logs. */
   async simulate(tx: Transaction): Promise<{ unitsConsumed: number | null; logs: string[] }> {
     // Config (sigVerify/replaceRecentBlockhash) is only accepted for versioned transactions.
@@ -94,7 +111,7 @@ export class TxSender {
 
   async send(tx: Transaction, extra: Keypair[] = [], opts: SendOptions = {}): Promise<SendResult> {
     const lastValid = await this.prepare(tx, opts);
-    await this.simulate(tx);
+    await this.fitComputeLimit(tx);
     const signature = await this.sign(tx, extra);
     await opts.onSignature?.(signature);
     return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);

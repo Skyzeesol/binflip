@@ -124,7 +124,7 @@ describe("planCopy", () => {
     expect(next).toMatchObject({ do: "add", amountSol: 323_795_501n, firstFunding: false });
   });
 
-  it("rebalance: full move is mirrored, partial / top-up are skipped", () => {
+  it("rebalance: full and partial moves are mirrored like the leader, top-up is skipped", () => {
     const rebalance = {
       oldMin: -599,
       oldMax: -512,
@@ -134,8 +134,9 @@ describe("planCopy", () => {
       favorX: false,
     };
     const full = action({ kind: "rebalance", added: { x: 0n, y: SOL }, removed: { x: 0n, y: SOL }, removeRanges: [{ minBinId: -599, maxBinId: -512, bps: 10_000 }], rebalance });
-    expect(planCopy(full, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "rebalance" });
-    expect(planCopy({ ...full, removeRanges: [{ minBinId: -599, maxBinId: -512, bps: 3_000 }] }, settings(), ours({ state: "ACTIVE" }))).toMatchObject({ reason: "rebalance_partial" });
+    expect(planCopy(full, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "rebalance", full: true });
+    expect(planCopy({ ...full, removeRanges: [{ minBinId: -599, maxBinId: -512, bps: 3_000 }] }, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "rebalance", full: false });
+    expect(planCopy({ ...full, added: { x: 0n, y: SOL / 2n } }, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "rebalance", full: false });
     expect(planCopy({ ...full, added: { x: 0n, y: 2n * SOL } }, settings(), ours({ state: "ACTIVE" }))).toMatchObject({ reason: "rebalance_topup" });
     expect(planCopy(full, settings(), null)).toMatchObject({ reason: "position_not_copied" });
   });

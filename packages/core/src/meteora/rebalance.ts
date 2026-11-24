@@ -39,11 +39,42 @@ export function classifyRebalance(a: LeaderAction): RebalanceClass {
 }
 
 /**
- * How we repeat a mirrored move. A single rebalance_liquidity over a wide
- * position (Karınca: 348 bins) exceeds the compute budget and the SDK does not
- * chunk it, so we move in proven steps instead: remove 100% and close the old
- * position (chunked), open a new one on the leader's new range with the SOL in
- * the leader's shape, and put the token above price in the new range (sold
- * back to SOL when the new range has no bins above price).
+ * How we repeat a mirrored move: the leader's own rebalance_liquidity, scaled to
+ * our size, in one transaction (as the leader does, with a raised compute limit:
+ * Karınca's moves use 0.3–0.7M CU). If that can't be built or fails simulation
+ * (nothing sent), the executor falls back to close-and-reopen.
  */
-export const REBALANCE_METHOD = "close_and_reopen" as const;
+export const REBALANCE_METHOD = "single_rebalance" as const;
+
+import type { RebalanceAdd } from "./strategy.js";
+
+/** A leader "add" segment with signs applied (bit_flag: 1 = x0, 2 = y0, 4 = Δx, 8 = Δy negative). */
+export interface SignedAdd {
+  minDeltaId: number;
+  maxDeltaId: number;
+  x0: bigint;
+  y0: bigint;
+  deltaX: bigint;
+  deltaY: bigint;
+}
+
+export function signedAdds(adds: RebalanceAdd[]): SignedAdd[] {
+  return adds.map((a) => {
+    const f = Number(a.bit_flag);
+    const s = (v: bigint, bit: number) => ((f & bit) !== 0 ? -BigInt(v) : BigInt(v));
+    return { minDeltaId: Number(a.min_delta_id), maxDeltaId: Number(a.max_delta_id), x0: s(a.x0, 1), y0: s(a.y0, 2), deltaX: s(a.delta_x, 4), deltaY: s(a.delta_y, 8) };
+  });
+}
+
+/**
+ * Scale the leader's add segments to our position. Amounts per bin are linear in
+ * (base, delta), so scaling both scales the deposit. Each side is scaled by what
+ * we actually withdraw over what the leader withdrew on that side (the move is
+ * swapless), minus a small haircut so our deposit never exceeds what came out.
+ */
+export function scaleAdds(adds: SignedAdd[], ours: { x: bigint; y: bigint }, leader: { x: bigint; y: bigint }, haircutBps = 50): SignedAdd[] {
+  const keep = BigInt(10_000 - haircutBps);
+  const sx = (v: bigint) => (leader.x > 0n ? (v * ours.x * keep) / (leader.x * 10_000n) : 0n);
+  const sy = (v: bigint) => (leader.y > 0n ? (v * ours.y * keep) / (leader.y * 10_000n) : 0n);
+  return adds.map((a) => ({ ...a, x0: sx(a.x0), deltaX: sx(a.deltaX), y0: sy(a.y0), deltaY: sy(a.deltaY) }));
+}

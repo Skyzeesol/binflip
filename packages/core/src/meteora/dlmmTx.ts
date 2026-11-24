@@ -119,6 +119,63 @@ export class DlmmTxBuilder {
     return { txs: [tx], extraSigners, position: kp.publicKey.toBase58() };
   }
 
+  /**
+   * The leader's rebalance_liquidity, repeated on our position in ONE transaction:
+   * the same removes (bin ranges + bps) and the same add segments (relative to the
+   * active bin), already scaled to our size by the caller. The SDK simulates it to
+   * build the params (incl. resizing the position) and the instructions (bin
+   * arrays to initialize + the rebalance). The sender sets the compute limit.
+   */
+  async rebalanceOne(p: {
+    pool: string;
+    position: string;
+    removes: Array<{ minBinId: number | null; maxBinId: number | null; bps: number }>;
+    adds: Array<{ minDeltaId: number; maxDeltaId: number; x0: bigint; y0: bigint; deltaX: bigint; deltaY: bigint }>;
+    favorX: boolean;
+    claimFee: boolean;
+    maxActiveBinSlippage: number;
+    slippagePct: number;
+  }): Promise<BuiltTxs & { withdrawn: { x: bigint; y: bigint }; deposited: { x: bigint; y: bigint } }> {
+    const d = await this.pool(p.pool);
+    const posKey = new PublicKey(p.position);
+    const pos = await d.getPosition(posKey);
+    const bn = (v: bigint) => new BN(v.toString());
+    const sim = await d.simulateRebalancePosition(
+      posKey,
+      pos.positionData,
+      p.claimFee,
+      false,
+      p.adds.map((a) => ({ minDeltaId: new BN(a.minDeltaId), maxDeltaId: new BN(a.maxDeltaId), x0: bn(a.x0), y0: bn(a.y0), deltaX: bn(a.deltaX), deltaY: bn(a.deltaY), favorXInActiveBin: p.favorX })),
+      p.removes.map((r) => ({ minBinId: r.minBinId === null ? null : new BN(r.minBinId), maxBinId: r.maxBinId === null ? null : new BN(r.maxBinId), bps: new BN(r.bps) })),
+    );
+    const { initBinArrayInstructions, rebalancePositionInstruction } = await d.rebalancePosition(sim, new BN(p.maxActiveBinSlippage), this.owner, p.slippagePct);
+    const tx = new Transaction().add(...initBinArrayInstructions, ...rebalancePositionInstruction);
+    const r = sim.simulationResult;
+    return {
+      txs: [tx],
+      extraSigners: new Map(),
+      position: p.position,
+      withdrawn: { x: BigInt(r.actualAmountXWithdrawn.toString()), y: BigInt(r.actualAmountYWithdrawn.toString()) },
+      deposited: { x: BigInt(r.actualAmountXDeposited.toString()), y: BigInt(r.actualAmountYDeposited.toString()) },
+    };
+  }
+
+  /** What our position would release for these removes (SDK simulation, nothing sent). */
+  async simulateWithdraw(pool: string, position: string, removes: Array<{ minBinId: number | null; maxBinId: number | null; bps: number }>): Promise<{ x: bigint; y: bigint }> {
+    const d = await this.pool(pool);
+    const posKey = new PublicKey(position);
+    const pos = await d.getPosition(posKey);
+    const sim = await d.simulateRebalancePosition(
+      posKey,
+      pos.positionData,
+      false,
+      false,
+      [],
+      removes.map((r) => ({ minBinId: r.minBinId === null ? null : new BN(r.minBinId), maxBinId: r.maxBinId === null ? null : new BN(r.maxBinId), bps: new BN(r.bps) })),
+    );
+    return { x: BigInt(sim.simulationResult.actualAmountXWithdrawn.toString()), y: BigInt(sim.simulationResult.actualAmountYWithdrawn.toString()) };
+  }
+
   /** Add single-sided SOL to an existing position, chunked for wide ranges. */
   async add(p: {
     pool: string;

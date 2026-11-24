@@ -508,3 +508,16 @@ Menü LP Agent sırasıyla: **Discover (/)**, **Havuzlar (/pools)**, **Smart LP 
 - Migration 0011–0014. Ortam izin listesine Meteora datapi, GeckoTerminal, DexScreener, datapi.jup.ag eklendi.
 
 **Doğrulanmadı / sonraki:** canlı modda panelden açma, azaltma, claim, Claim SOL ve ana cüzdana çekme hiç gönderilmedi (sadece deneme modu + derleme). Smart LP "ortalama tutma süresi" ve pozisyon bazlı kazanma oranı için kendi indeksleyicimiz gerekir. Discover'daki "Smart LP +N son 1 saatte" değişimi yok.
+
+---
+
+## 25. Canlı öncesi inceleme + rebalance birebir (24 Kasım 2026)
+
+**İnceleme düzeltmeleri:** canlı override'da manager/api/telegram da canlı (keystore sadece executor'da; config artık keystore istemiyor, executor `setupLive` istiyor); executor kopyaları moda göre eşliyor (deneme aynaları canlıda dokunulmaz); günlük limit sadece aynı moddaki harcamayı sayıyor; manuel pozisyon taraması sadece DLMM satırlarına bakıyor ve executor'da açık işlem varken (15 dk, pozisyon türleri) erteleniyor; yarıda kalan açılış kaydediliyor. bootstrap: SSH ayarı `00-binflip.conf` (50-cloud-init'in `PasswordAuthentication yes`'i bizimkini eziyordu).
+
+**Rebalance (kullanıcı: "aynı yapalım"):** Karınca pozisyonlarını `rebalance_liquidity` ile ~70 binlik parçalar halinde, her parça ayrı işlemde fonluyor/taşıyor (fixture'lar: 315k / 676k CU, compute limit ile). Biz de artık liderin talimatını ölçekleyip **aynı tek talimatı** gönderiyoruz (`DlmmTxBuilder.rebalanceOne`, SDK `simulateRebalancePosition` + `rebalancePosition`):
+- Ekleme segmentleri bit_flag işaretleriyle (`signedAdds`) ve taraf bazında `bizim çektiğimiz / liderin çektiği` oranıyla (%0,5 pay) ölçeklenir (`scaleAdds`); bin başına miktar = taban + adım × |delta| (simülasyonda program olayıyla doğrulandı).
+- Taşımalar: tam, kısmi ve kâr almalı taşımalar aynalanır; sadece topup (dışarıdan ekleme) atlanır. Tam taşıma imzalanmadan başarısız olursa eski kapat-yeniden aç yoluna düşer.
+- Fonlama: liderin rebalance ile yaptığı eklemeler (`removes` yok, sadece SOL) aynı talimatla bizim tutarımıza ölçeklenip gönderilir (SDK cüzdandan SOL'ü wrap'liyor); olmazsa SDK strateji eklemesine düşer.
+- `TxSender.fitComputeLimit`: SDK'nın koyduğu limit kaldırılır, 1,4M ile simüle edilip kullanılan +%15 limit konur (öncelik ücreti istenen CU başına ödendiği için ucuzlar).
+- Mainnet simülasyonu (Karınca'nın pozisyonu, imza kontrolü kapalı): 30 bin taşıma 288k CU, 70 bin 618k CU; 70 binlik fonlama parçası 0,3 SOL ile 388k CU. 348 binlik tek seferde taşıma 1,4M'yi aşıyor (Karınca da bunu yapmıyor).
