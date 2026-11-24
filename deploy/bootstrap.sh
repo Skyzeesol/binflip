@@ -89,7 +89,10 @@ systemctl restart fail2ban
 
 log "SSH hardening"
 if [ -s "/home/$APP_USER/.ssh/authorized_keys" ]; then
-  cat > /etc/ssh/sshd_config.d/99-binflip.conf <<CONF
+  # sshd keeps the FIRST value it reads and includes sshd_config.d/*.conf in name order:
+  # 00- beats cloud images' 50-cloud-init.conf (which may say PasswordAuthentication yes).
+  rm -f /etc/ssh/sshd_config.d/99-binflip.conf
+  cat > /etc/ssh/sshd_config.d/00-binflip.conf <<CONF
 Port ${SSH_PORT}
 PermitRootLogin no
 PasswordAuthentication no
