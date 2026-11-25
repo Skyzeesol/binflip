@@ -135,9 +135,10 @@ async function setupLive(db: Db, config: Config, log: Logger): Promise<Live> {
   const signer = KeystoreSigner.fromFile(config.KEYSTORE_PATH!, readPassphraseFile(config.KEYSTORE_PASSPHRASE_FILE!));
   const [wallet] = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.publicKey, signer.publicKey));
   if (!wallet) throw new Error(`agent wallet ${signer.publicKey} is not registered (run wallet:create)`);
+  await signer.selfTest();
   const conn = createConnection(config.SOLANA_RPC_URL, config.SOLANA_WS_URL);
   const balance = await conn.getBalance(new PublicKey(signer.publicKey));
-  log.warn({ agent: signer.publicKey, balanceSol: balance / 1e9 }, "LIVE: agent wallet loaded");
+  log.warn({ agent: signer.publicKey, balanceSol: balance / 1e9 }, "LIVE: agent wallet loaded, signing self-test OK");
   return {
     builder: new DlmmTxBuilder(conn, new PublicKey(signer.publicKey)),
     damm: new DammTxBuilder(conn, new PublicKey(signer.publicKey)),

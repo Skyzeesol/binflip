@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:
 import { readFileSync } from "node:fs";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
+// Default import: tweetnacl is CommonJS, so in Node ESM it has no named exports (`{ sign }` is undefined).
+import nacl from "tweetnacl";
 import type { Signer } from "./signer.js";
 
 /**
@@ -92,8 +94,14 @@ export class KeystoreSigner implements Signer {
   }
 
   async signMessage(message: Uint8Array): Promise<Uint8Array> {
-    const { sign } = await import("tweetnacl");
-    return sign.detached(message, this.#kp.secretKey);
+    return nacl.sign.detached(message, this.#kp.secretKey);
+  }
+
+  /** Sign and verify a random message: proves the key and the signing code work before any real transaction. */
+  async selfTest(): Promise<void> {
+    const msg = randomBytes(64);
+    const sig = await this.signMessage(msg);
+    if (!nacl.sign.detached.verify(msg, sig, this.#kp.publicKey.toBytes())) throw new Error("agent wallet self-test signature did not verify");
   }
 
   /** Avoid leaking the key through util.inspect / JSON. */

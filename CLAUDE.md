@@ -543,3 +543,9 @@ Menü LP Agent sırasıyla: **Discover (/)**, **Havuzlar (/pools)**, **Smart LP 
 ## 28. Telegram: token CA ile açma (24 Kasım 2026)
 
 Kullanıcı: "meteora pool yerine ca atam, havuzu sorsun, kaç sol, % kaç aşağı, strateji ve gereken başka bir şey". Akış: CA (ya da havuz adresi / herhangi bir link içindeki adres, `/ac <adres>`) → adres havuz değilse token sayılır, Meteora DLMM (SOL = Y) ve DAMM V2'deki SOL havuzları TVL'ye göre listelenir (< $500 olanlar başka havuz varsa gizlenir, ⭐ = TVL ≥ $1k olanlar içinde en yüksek Fee/TVL 24s) → havuz seçimi (buton ya da numara) → SOL → fiyatın % kaç altı → strateji → fee'ler → yönetim → **TP / SL** (Ayarlar'daki varsayılan / hazır / kapalı / "15/10" yaz) → özet → onay → `manual-open` kuyruğu. Havuz adresi gelirse havuz sorusu atlanır. Testler: `apps/telegram/src/wizard.test.ts`.
+
+## 29. Canlıya geçiş (25 Kasım 2026)
+
+- Bot cüzdanı: `F6NEBc2qQx8Qmohkvs3aE7NKLWPE6PwVTf7mNQKpBgTK` (1 SOL ile fonlandı). Keystore + parola kullanıcıda yedekli. Lider: Karınca duraklatıldı, test için kullanıcının kendi cüzdanı kopyalanıyor.
+- **İlk canlı hata:** `Cannot read properties of undefined (reading 'detached')`. `KeystoreSigner.signMessage` `const { sign } = await import("tweetnacl")` kullanıyordu; tweetnacl CommonJS olduğu için Node ESM'de isimli dışa aktarımı yok (vitest interop'u bunu gizliyordu, mainnet simülasyonları da imzasızdı). Hiçbir işlem imzalanmadı/gönderilmedi. Düzeltme: `import nacl from "tweetnacl"`. Executor artık açılışta `signer.selfTest()` ile rastgele bir mesajı imzalayıp doğruluyor; başarısızsa başlamıyor.
+- Aynı açılışın (havuz 5UTPF…, 70 bin Bid-Ask, 0,1 SOL) bot cüzdanı adına mainnet simülasyonu: OK, 287k CU.
