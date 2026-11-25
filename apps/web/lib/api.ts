@@ -14,7 +14,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: "same-origin",
-    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    // Only label a body as JSON when there is one: Fastify rejects an empty JSON body (a bare DELETE got 400).
+    headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...(init.headers ?? {}) },
   });
   const body = await res.json().catch(() => ({}));
   if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/v1/auth")) {

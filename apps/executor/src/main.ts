@@ -101,7 +101,7 @@ await runService("executor", async ({ config, log }) => {
       log.info({ leader: r.leaderLabel, kind: r.kind, outcome: r.outcome }, r.text);
       const kind =
         r.outcome === "skipped" ? "copy_skip" : r.outcome === "failed" || r.outcome === "needs_review" ? "copy_fail" : r.kind === "open" || r.kind === "add" ? "copy_open" : r.kind === "remove" || r.kind === "close" ? "copy_close" : "manage";
-      await notifications.add("notify", { userId: r.userId, text: r.text, kind }, { removeOnComplete: 1000 });
+      if (!("silent" in r && r.silent)) await notifications.add("notify", { userId: r.userId, text: r.text, kind }, { removeOnComplete: 1000 });
       return { outcome: r.outcome };
     },
     // Serial: positions, balances and daily limits must not race.
@@ -304,7 +304,8 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   if (plan.do === "skip") {
     const paused = plan.reason === "low_balance" ? await autoPauseIfDry(db, ev.userId) : 0;
     const extra = paused ? `\n⏸ Bot cüzdanı fonsuz: kopyalar art arda açılamadı, ${paused} cüzdan otomatik duraklatıldı. Bakiye yükleyip panelden tekrar açın.` : "";
-    return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) + extra };
+    // A paused wallet is the user's choice: log it in Copy Logs, but don't ping Telegram for every leader move.
+    return { ...base, outcome: "skipped", text: describe(leader.label, action, plan, dryRun) + extra, silent: plan.reason === "leader_paused" };
   }
 
   if (dryRun) {

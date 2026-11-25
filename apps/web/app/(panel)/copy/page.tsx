@@ -74,7 +74,11 @@ function Wallets({ leaders, reload, onEdit }: { leaders: Leader[]; reload: () =>
   };
   const remove = async (l: Leader) => {
     if (!confirm(`${l.label} listeden çıkarılsın mı? Açık kopyalar siz kapatana kadar açık kalır.`)) return;
-    await del(`/v1/leaders/${l.id}`);
+    try {
+      await del(`/v1/leaders/${l.id}`);
+    } catch (e) {
+      alert(`Silinemedi: ${(e as Error).message}`);
+    }
     await reload();
   };
   const active = leaders.filter((l) => l.status === "active");
