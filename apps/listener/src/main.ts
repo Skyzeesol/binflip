@@ -16,6 +16,7 @@ import {
   WSOL_MINT,
   leaderSoldKey,
 } from "@binflip/core";
+import { eq } from "drizzle-orm";
 import { createDb, schema } from "@binflip/db";
 import { LogsWatcher } from "./logsWatcher.js";
 
@@ -68,10 +69,14 @@ await runService("listener", async ({ config, log }) => {
   );
 
   async function refreshLeaders() {
-    // Every address someone follows; paused leaders stay watched so their exits can be followed.
-    const rows = await db
-      .select({ address: schema.leaders.address, userId: schema.leaders.userId, leaderId: schema.leaders.id })
-      .from(schema.leaders);
+    // Active leaders, plus paused ones only if the user chose to keep following their exits.
+    // A paused wallet is otherwise not watched at all: nothing to copy, nothing to log.
+    const rows = (
+      await db
+        .select({ address: schema.leaders.address, userId: schema.leaders.userId, leaderId: schema.leaders.id, status: schema.leaders.status, followExits: schema.copySettings.followExitsWhilePaused })
+        .from(schema.leaders)
+        .leftJoin(schema.copySettings, eq(schema.copySettings.leaderId, schema.leaders.id))
+    ).filter((r) => r.status === "active" || r.followExits === true);
     const next = new Map<string, Array<{ userId: string; leaderId: string }>>();
     for (const r of rows) {
       const list = next.get(r.address) ?? [];

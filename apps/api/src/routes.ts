@@ -214,6 +214,8 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
         and(
           eq(schema.txs.userId, req.userId!),
           gte(schema.txs.createdAt, since),
+          // Moves of a wallet the user paused are not copy activity (older rows from before this rule).
+          sql`${schema.txs.reason} is distinct from 'leader_paused'`,
           q.leaderId ? eq(schema.leaders.id, q.leaderId) : undefined,
           q.tab === "not_opened" ? eq(schema.txs.status, "skipped") : undefined,
           q.tab === "failed" ? eq(schema.txs.status, "failed") : undefined,

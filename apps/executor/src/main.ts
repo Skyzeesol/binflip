@@ -281,6 +281,11 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   }
 
   const dryRun = config.mode === "dry_run";
+  // Not following this wallet: no Copy Logs row, no notification (the listener normally doesn't even send these).
+  if (plan.do === "skip" && plan.reason === "leader_paused") {
+    await db.update(schema.leaderEvents).set({ processedAt: new Date() }).where(eq(schema.leaderEvents.id, ev.id));
+    return null;
+  }
   const [t] = await db
     .insert(schema.txs)
     .values({
