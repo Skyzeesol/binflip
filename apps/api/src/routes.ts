@@ -2,9 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { Queue } from "bullmq";
-import { DEFAULT_RESHAPE_BINS, QUEUES, reshapeBinsFrom, type Config } from "@binflip/core";
+import { DEFAULT_RESHAPE_BINS, QUEUES, reshapeBinsFrom, verifyPassword, type Config, type NotificationJob } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
-import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
+import { LoginGuard, NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 import { CopySettingsDto, fromRow, toRow } from "./settings.js";
 import { Insights } from "./insights.js";
 import { registerPortfolio } from "./portfolio.js";
@@ -54,13 +54,50 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     }
     const [user] = await db.select().from(schema.users).where(eq(schema.users.loginWallet, wallet));
     if (!user) return reply.code(403).send({ error: "bu cüzdan panele kayıtlı değil" });
-    reply.setCookie(COOKIE, signSession(user.id, secret), {
+    setSession(reply, user.id, user.sessionVersion);
+    return { ok: true };
+  });
+
+  function setSession(reply: FastifyReply, userId: string, version: number) {
+    reply.setCookie(COOKIE, signSession(userId, secret, version), {
       httpOnly: true,
       sameSite: "strict",
       secure: config.NODE_ENV === "production",
       path: "/",
       maxAge: SESSION_TTL_MS / 1000,
     });
+  }
+
+  // ── Username + password (public panel behind Caddy/HTTPS) ──────────────
+  const guard = new LoginGuard();
+  const notifications = new Queue<NotificationJob>(QUEUES.NOTIFICATIONS, { connection: { url: config.REDIS_URL } as never });
+  const alert = async (text: string) => {
+    const [owner] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.role, "owner"));
+    if (owner) await notifications.add("notify", { userId: owner.id, text, kind: "system" }, { removeOnComplete: 1000 }).catch(() => undefined);
+  };
+  // Caddy sets X-Forwarded-For to the real client (it ignores what the client sends); the API itself is not reachable from outside.
+  const clientIp = (req: FastifyRequest) => String(req.headers["x-forwarded-for"] ?? "").split(",")[0]!.trim() || req.ip;
+
+  app.post("/v1/auth/login", async (req, reply) => {
+    const ip = clientIp(req);
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigin(origin, origins)) return reply.code(403).send({ error: `bu adres panele izinli değil (${origin}); sunucuda PANEL_ORIGINS'e ekleyin` });
+    const wait = guard.blockedFor(ip);
+    if (wait > 0) return reply.code(429).send({ error: `Çok fazla hatalı deneme. ${Math.ceil(wait / 60_000)} dakika sonra tekrar dene.` });
+    const { username, password } = z.object({ username: z.string().min(1).max(64), password: z.string().min(1).max(256) }).parse(req.body);
+    const [user] = await db.select().from(schema.users).where(eq(schema.users.username, username.trim().toLowerCase()));
+    const ok = await verifyPassword(password, user?.passwordHash ?? null);
+    if (!ok || !user) {
+      const locked = guard.fail(ip);
+      req.log.warn({ ip, username: username.slice(0, 32) }, "password sign-in failed");
+      if (locked === "ip") void alert(`🔐 Panel: ${ip} adresinden 5 hatalı şifre denemesi. Bu adres 15 dakika engellendi.`);
+      if (locked === "global") void alert(`🚨 Panel: son 1 saatte 20 hatalı şifre denemesi. Şifreyle giriş 1 saat kapatıldı (cüzdanla giriş açık). Şifreni değiştirmeyi düşün.`);
+      return reply.code(401).send({ error: "Kullanıcı adı ya da şifre yanlış." });
+    }
+    guard.success(ip);
+    setSession(reply, user.id, user.sessionVersion);
+    const ua = String(req.headers["user-agent"] ?? "").replace(/[^\w ./();,-]/g, "").slice(0, 80);
+    void alert(`🔓 Panele şifreyle giriş yapıldı: ${ip}${ua ? ` · ${ua}` : ""}. Sen değilsen hemen /stop yaz ve şifreni değiştir.`);
     return { ok: true };
   });
 
@@ -69,12 +106,23 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     return { ok: true };
   });
 
+  // Current session version per user, cached briefly (a password change logs everyone out within 15 s).
+  const versions = new Map<string, { v: number | null; at: number }>();
+  async function sessionVersion(userId: string): Promise<number | null> {
+    const hit = versions.get(userId);
+    if (hit && Date.now() - hit.at < 15_000) return hit.v;
+    const [u] = await db.select({ v: schema.users.sessionVersion }).from(schema.users).where(eq(schema.users.id, userId));
+    const v = u ? u.v : null;
+    versions.set(userId, { v, at: Date.now() });
+    return v;
+  }
+
   // Everything below needs a session.
   app.addHook("preHandler", async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.url.startsWith("/v1/") || req.url.startsWith("/v1/auth/") || req.url === "/v1/status") return;
-    const userId = verifySession(req.cookies[COOKIE], secret);
-    if (!userId) return reply.code(401).send({ error: "giriş gerekli" });
-    req.userId = userId;
+    const s = verifySession(req.cookies[COOKIE], secret);
+    if (!s || (await sessionVersion(s.userId)) !== s.version) return reply.code(401).send({ error: "giriş gerekli" });
+    req.userId = s.userId;
   });
 
   // ── Me / status ────────────────────────────────────────────────────────
@@ -82,7 +130,7 @@ export function registerRoutes(app: FastifyInstance<any, any, any, any>, db: Db,
     const [user] = await db.select().from(schema.users).where(eq(schema.users.id, req.userId!));
     const wallets = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.userId, req.userId!));
     return {
-      user: { id: user!.id, loginWallet: user!.loginWallet, role: user!.role },
+      user: { id: user!.id, loginWallet: user!.loginWallet, username: user!.username, role: user!.role },
       mode: config.mode,
       agentWallets: wallets.map((w) => ({ id: w.id, label: w.label, publicKey: w.publicKey })),
     };

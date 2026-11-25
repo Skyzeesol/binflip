@@ -102,7 +102,7 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
           <div className="acct-foot">
             <Link className="btn btn-sm btn-ghost" href="/settings" onClick={() => setOpen(false)}>Settings</Link>
             <div className="spacer" />
-            <button className="btn btn-sm btn-ghost" onClick={onLogout} title={me.user.loginWallet}>Log out ({short(me.user.loginWallet, 4)})</button>
+            <button className="btn btn-sm btn-ghost" onClick={onLogout} title={me.user.loginWallet}>Log out ({me.user.username ?? short(me.user.loginWallet, 4)})</button>
           </div>
         </div>
       )}

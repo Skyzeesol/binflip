@@ -80,23 +80,69 @@ export function verifySignature(message: string, signatureB58: string, walletB58
   }
 }
 
-export function signSession(userId: string, secret: string, now = Date.now()): string {
+/**
+ * Session token `userId.version.exp.hmac`. `version` is users.session_version at sign-in;
+ * bumping it in the DB (password change, "log out everywhere") invalidates every older token.
+ */
+export function signSession(userId: string, secret: string, version = 0, now = Date.now()): string {
   const exp = now + SESSION_TTL_MS;
-  const body = `${userId}.${exp}`;
+  const body = `${userId}.${version}.${exp}`;
   return `${body}.${hmac(body, secret)}`;
 }
 
-export function verifySession(token: string | undefined, secret: string, now = Date.now()): string | null {
+export function verifySession(token: string | undefined, secret: string, now = Date.now()): { userId: string; version: number } | null {
   if (!token) return null;
   const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [userId, exp, sig] = parts as [string, string, string];
-  const expected = hmac(`${userId}.${exp}`, secret);
+  if (parts.length !== 4) return null;
+  const [userId, version, exp, sig] = parts as [string, string, string, string];
+  const expected = hmac(`${userId}.${version}.${exp}`, secret);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   if (Number(exp) < now) return null;
-  return userId;
+  return { userId, version: Number(version) };
+}
+
+/**
+ * Brute-force guard for the password sign-in. Per IP: 5 failures in 15 min → that IP waits 15 min.
+ * Overall: 20 failures in an hour → password sign-in closed for an hour for everyone (wallet sign-in stays open).
+ */
+export class LoginGuard {
+  private byIp = new Map<string, number[]>();
+  private all: number[] = [];
+  private globalUntil = 0;
+  constructor(
+    private readonly ipMax = 5,
+    private readonly ipWindowMs = 15 * 60_000,
+    private readonly globalMax = 20,
+    private readonly globalWindowMs = 60 * 60_000,
+  ) {}
+
+  /** Milliseconds this IP still has to wait (0 = may try). */
+  blockedFor(ip: string, now = Date.now()): number {
+    if (this.globalUntil > now) return this.globalUntil - now;
+    const recent = (this.byIp.get(ip) ?? []).filter((t) => now - t < this.ipWindowMs);
+    if (recent.length >= this.ipMax) return recent[0]! + this.ipWindowMs - now;
+    return 0;
+  }
+
+  /** Records a failure; returns "ip" or "global" when this failure triggered a lock. */
+  fail(ip: string, now = Date.now()): "ip" | "global" | null {
+    const recent = [...(this.byIp.get(ip) ?? []).filter((t) => now - t < this.ipWindowMs), now];
+    this.byIp.set(ip, recent);
+    this.all = [...this.all.filter((t) => now - t < this.globalWindowMs), now];
+    if (this.byIp.size > 10_000) this.byIp.clear();
+    if (this.all.length >= this.globalMax) {
+      this.globalUntil = now + this.globalWindowMs;
+      this.all = [];
+      return "global";
+    }
+    return recent.length === this.ipMax ? "ip" : null;
+  }
+
+  success(ip: string) {
+    this.byIp.delete(ip);
+  }
 }
 
 function hmac(body: string, secret: string): string {

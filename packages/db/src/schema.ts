@@ -83,6 +83,11 @@ export const users = pgTable("users", {
   displayName: text("display_name"),
   role: userRole("role").notNull().default("member"),
   telegramChatId: text("telegram_chat_id"),
+  /** Panel sign-in with username + password (public panel). The hash is scrypt; the password itself is never stored. */
+  username: text("username").unique(),
+  passwordHash: text("password_hash"),
+  /** Part of every session token; bumping it (password change, "log out everywhere") ends all sessions. */
+  sessionVersion: integer("session_version").notNull().default(0),
   /** Panel preferences: muted notification kinds, Auto TP/SL for positions opened from the panel. */
   prefs: jsonb("prefs").$type<{ notify?: Record<string, boolean>; autoTpSl?: { enabled: boolean; takeProfitPct: number; stopLossPct: number } }>().notNull().default({}),
   createdAt: createdAt(),

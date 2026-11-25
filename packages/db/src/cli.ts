@@ -3,8 +3,8 @@ import { basename, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { Keypair } from "@solana/web3.js";
-import { eq } from "drizzle-orm";
-import { encryptKeypair, readPassphraseFile } from "@binflip/core";
+import { eq, sql } from "drizzle-orm";
+import { MIN_PASSWORD_LENGTH, encryptKeypair, hashPassword, readPassphraseFile } from "@binflip/core";
 import { createDb } from "./client.js";
 import * as schema from "./schema.js";
 
@@ -12,6 +12,9 @@ import * as schema from "./schema.js";
  * Leader management until the panel exists (stage 5).
  *
  *   node packages/db/dist/cli.js user:init --wallet <login wallet>
+ *   node packages/db/dist/cli.js user:password --username skyzee
+ *     Sets the panel username + password (asked twice on the terminal, never echoed). Ends every open session.
+ *   node packages/db/dist/cli.js user:logout-all      Ends every open panel session.
  *   node packages/db/dist/cli.js leader:add --address <addr> --label <name> [--pct 50] [--max-per-tx 2]
  *        [--max-per-position 10] [--tp 5] [--sl 5] [--trailing 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
  *        [--mode mirror|staged_flip|bottom_flip|precision_hybrid] [--flip-threshold 10]   (flip threshold in %, default 10)
@@ -36,6 +39,7 @@ const { values: o } = parseArgs({
   args: rest,
   options: {
     wallet: { type: "string" },
+    username: { type: "string" },
     address: { type: "string" },
     label: { type: "string" },
     pct: { type: "string" },
@@ -78,6 +82,27 @@ async function leaderByAddress(address: string | undefined) {
 
 try {
   switch (cmd) {
+    case "user:password": {
+      const u = await owner();
+      const username = (o.username ?? u.username ?? "").trim().toLowerCase();
+      if (!/^[a-z0-9._-]{3,32}$/.test(username)) throw new Error("--username is required: 3-32 chars, letters, digits, . _ -");
+      const password = await promptSecret(`New panel password for "${username}" (min ${MIN_PASSWORD_LENGTH} chars): `);
+      if (password.length < MIN_PASSWORD_LENGTH) throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      if ((await promptSecret("Repeat: ")) !== password) throw new Error("passwords do not match");
+      const passwordHash = await hashPassword(password);
+      await db
+        .update(schema.users)
+        .set({ username, passwordHash, sessionVersion: sql`${schema.users.sessionVersion} + 1` })
+        .where(eq(schema.users.id, u.id));
+      console.log(`panel login set: username "${username}". All open sessions were ended; sign in again.`);
+      break;
+    }
+    case "user:logout-all": {
+      const u = await owner();
+      await db.update(schema.users).set({ sessionVersion: sql`${schema.users.sessionVersion} + 1` }).where(eq(schema.users.id, u.id));
+      console.log("all panel sessions ended");
+      break;
+    }
     case "user:init": {
       if (!o.wallet) throw new Error("--wallet is required");
       const [u] = await db
@@ -244,8 +269,16 @@ try {
 
 /** Read a passphrase twice from the TTY without echoing it. */
 async function promptPassphrase(): Promise<string> {
-  if (!process.stdin.isTTY) throw new Error("no TTY: use --passphrase-file");
-  const ask = (q: string) =>
+  const a = await promptSecret("Keystore passphrase (min 12 chars): ");
+  const b = await promptSecret("Repeat: ");
+  if (a !== b) throw new Error("passphrases do not match");
+  return a;
+}
+
+/** One line from the TTY, not echoed. */
+function promptSecret(q: string): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error("no TTY: run with `docker compose run --rm -it ...`");
+  return (
     new Promise<string>((resolve) => {
       const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
       const out = rl as unknown as { _writeToOutput: (s: string) => void; output: NodeJS.WriteStream };
@@ -261,11 +294,8 @@ async function promptPassphrase(): Promise<string> {
         process.stdout.write("\n");
         resolve(a);
       });
-    });
-  const a = await ask("Keystore passphrase (min 12 chars): ");
-  const b = await ask("Repeat: ");
-  if (a !== b) throw new Error("passphrases do not match");
-  return a;
+    })
+  );
 }
 
 function parseMode(m: string): "mirror" | "staged_flip" | "bottom_flip" | "precision_hybrid" {

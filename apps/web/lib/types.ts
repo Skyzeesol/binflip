@@ -91,7 +91,7 @@ export interface Risk {
 }
 
 export interface Me {
-  user: { id: string; loginWallet: string; role: string };
+  user: { id: string; loginWallet: string; username?: string | null; role: string };
   mode: "dry_run" | "live";
   agentWallets: Array<{ id: string; label: string; publicKey: string }>;
 }

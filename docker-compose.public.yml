@@ -1,0 +1,33 @@
+# PUBLIC PANEL: https://<PUBLIC_HOST> (e.g. the server IP) with username + password sign-in.
+# ./deploy/update.sh adds this file automatically when PUBLIC_HOST is set in .env.
+# Opens ports 80 and 443 to the internet; only Caddy listens there and it only forwards to the web panel.
+services:
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST in .env (the server IP, e.g. 5.222.2.209)}
+    # Bound to the public IP only, so Tailscale's own :443 (on the tailnet IP) keeps working.
+    ports:
+      - "${PUBLIC_HOST}:80:80"
+      - "${PUBLIC_HOST}:443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+volumes:
+  caddy_data:
+  caddy_config:

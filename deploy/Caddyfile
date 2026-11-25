@@ -1,0 +1,37 @@
+# Public panel over HTTPS on the server's IP address (no domain).
+# Caddy gets a Let's Encrypt certificate for the IP itself ("shortlived" profile, ~6 days)
+# and renews it on its own. Only the web panel is exposed; the API, database and Redis stay internal.
+{
+	# Browsers send no SNI when you open https://<IP>, so pick the IP certificate by default.
+	default_sni {$PUBLIC_HOST}
+	# The admin API stays inside the container.
+	admin localhost:2019
+}
+
+https://{$PUBLIC_HOST} {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy web:3000
+}
+
+http://{$PUBLIC_HOST} {
+	redir https://{host}{uri} 308
+}

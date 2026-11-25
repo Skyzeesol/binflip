@@ -187,6 +187,33 @@ echo "PANEL_ORIGINS=http://localhost:3000,https://binflip.xxxx.ts.net" >> .env &
 
 Telefonda adresi Jupiter (ya da Phantom) uygulamasının içindeki tarayıcıdan aç.
 
+## 8b. Herkese açık panel (https://SUNUCU_IP, kullanıcı adı + şifre)
+
+Panel, Caddy üzerinden sadece HTTPS ile açılır. Sertifika IP adresi için Let's Encrypt'ten alınır ve ~6 günde bir kendiliğinden yenilenir.
+API, veritabanı ve Redis dışarıya kapalı kalır.
+
+`.env`'e ekle (`PANEL_ORIGINS` satırının sonuna `,https://SUNUCU_IP` ekle):
+
+```
+PUBLIC_HOST=SUNUCU_IP
+PANEL_ORIGINS=http://localhost:3000,...,https://SUNUCU_IP
+```
+
+```bash
+./deploy/update.sh --live
+```
+
+Şifreyi belirle (iki kez sorar, ekranda görünmez; en az 12 karakter; tüm açık oturumları kapatır):
+
+```bash
+docker compose run --rm -it migrate node packages/db/dist/cli.js user:password --username skyzee
+```
+
+Korumalar: scrypt ile hash'lenmiş şifre; aynı IP'den 5 hatalı denemede 15 dk kilit; toplam 20 hatalı denemede şifreyle giriş 1 saat kapanır
+(cüzdanla giriş açık kalır); her başarılı giriş ve kilit Telegram'a bildirilir; çerez httpOnly + Secure + SameSite=strict.
+Şüphelenirsen tüm oturumları kapat: `docker compose run --rm migrate node packages/db/dist/cli.js user:logout-all`.
+Kapatmak için `.env`'den `PUBLIC_HOST` satırını sil, `docker compose -f docker-compose.yml -f docker-compose.public.yml rm -sf caddy`, sonra `./deploy/update.sh --live`.
+
 ## 9. Küçük canlı test (senin adımın)
 
 1. Bot cüzdanına **küçük** miktar SOL gönder (ör. 0.5–1 SOL).

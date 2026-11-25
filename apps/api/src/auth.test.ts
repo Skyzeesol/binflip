@@ -2,7 +2,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import { describe, expect, it } from "vitest";
-import { NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
+import { LoginGuard, NonceStore, SESSION_TTL_MS, allowedOrigin, loginMessage, signSession, verifySession, verifySignature } from "./auth.js";
 
 const SECRET = "test-secret-at-least-32-characters-long";
 
@@ -60,10 +60,34 @@ describe("sign-in with Solana", () => {
   });
 
   it("sessions verify, expire and cannot be forged", () => {
-    const t = signSession("user-1", SECRET, 1_000);
-    expect(verifySession(t, SECRET, 2_000)).toBe("user-1");
+    const t = signSession("user-1", SECRET, 3, 1_000);
+    expect(verifySession(t, SECRET, 2_000)).toEqual({ userId: "user-1", version: 3 });
     expect(verifySession(t, SECRET, 1_000 + SESSION_TTL_MS + 1)).toBeNull();
     expect(verifySession(t, "other-secret-other-secret-other-secret", 2_000)).toBeNull();
     expect(verifySession(t.replace("user-1", "user-2"), SECRET, 2_000)).toBeNull();
+  });
+});
+
+describe("login guard", () => {
+  it("locks an IP after 5 failures for 15 minutes", () => {
+    const g = new LoginGuard();
+    for (let i = 0; i < 4; i++) expect(g.fail("1.1.1.1", 1000 + i)).toBeNull();
+    expect(g.fail("1.1.1.1", 1005)).toBe("ip");
+    expect(g.blockedFor("1.1.1.1", 2000)).toBeGreaterThan(14 * 60_000);
+    expect(g.blockedFor("2.2.2.2", 2000)).toBe(0);
+    expect(g.blockedFor("1.1.1.1", 1000 + 15 * 60_000 + 1)).toBe(0);
+  });
+  it("closes password sign-in for everyone after 20 failures in an hour", () => {
+    const g = new LoginGuard();
+    let r: string | null = null;
+    for (let i = 0; i < 20; i++) r = g.fail(`10.0.0.${i}`, 1000 + i);
+    expect(r).toBe("global");
+    expect(g.blockedFor("9.9.9.9", 5000)).toBeGreaterThan(59 * 60_000);
+  });
+  it("success clears the IP's failures", () => {
+    const g = new LoginGuard();
+    for (let i = 0; i < 4; i++) g.fail("1.1.1.1", 1000 + i);
+    g.success("1.1.1.1");
+    expect(g.fail("1.1.1.1", 1010)).toBeNull();
   });
 });

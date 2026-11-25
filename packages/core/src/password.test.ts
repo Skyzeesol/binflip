@@ -1,0 +1,17 @@
+import { describe, expect, it } from "vitest";
+import { hashPassword, verifyPassword } from "./password.js";
+
+describe("panel password", () => {
+  it("hashes with a random salt and verifies only the right password", async () => {
+    const a = await hashPassword("correct horse battery");
+    const b = await hashPassword("correct horse battery");
+    expect(a).not.toBe(b);
+    expect(a.startsWith("scrypt$17$8$1$")).toBe(true);
+    expect(await verifyPassword("correct horse battery", a)).toBe(true);
+    expect(await verifyPassword("correct horse batterY", a)).toBe(false);
+    expect(await verifyPassword("anything at all", null)).toBe(false);
+  });
+  it("refuses short passwords", async () => {
+    await expect(hashPassword("short")).rejects.toThrow(/12/);
+  });
+});
