@@ -3,7 +3,7 @@ import { basename, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { Keypair } from "@solana/web3.js";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { MIN_PASSWORD_LENGTH, encryptKeypair, hashPassword, readPassphraseFile } from "@binflip/core";
 import { createDb } from "./client.js";
 import * as schema from "./schema.js";
@@ -15,6 +15,8 @@ import * as schema from "./schema.js";
  *   node packages/db/dist/cli.js user:password --username skyzee
  *     Sets the panel username + password (asked twice on the terminal, never echoed). Ends every open session.
  *   node packages/db/dist/cli.js user:logout-all      Ends every open panel session.
+ *   node packages/db/dist/cli.js data:purge-dry-run [--yes]
+ *     Deletes dry-run (simulated) positions, their PnL snapshots and dry-run Copy Logs rows. Live data is not touched.
  *   node packages/db/dist/cli.js leader:add --address <addr> --label <name> [--pct 50] [--max-per-tx 2]
  *        [--max-per-position 10] [--tp 5] [--sl 5] [--trailing 5] [--no-damm] [--no-meme] [--strategies spot,curve,bid_ask,custom]
  *        [--mode mirror|staged_flip|bottom_flip|precision_hybrid] [--flip-threshold 10]   (flip threshold in %, default 10)
@@ -40,6 +42,7 @@ const { values: o } = parseArgs({
   options: {
     wallet: { type: "string" },
     username: { type: "string" },
+    yes: { type: "boolean", default: false },
     address: { type: "string" },
     label: { type: "string" },
     pct: { type: "string" },
@@ -95,6 +98,32 @@ try {
         .set({ username, passwordHash, sessionVersion: sql`${schema.users.sessionVersion} + 1` })
         .where(eq(schema.users.id, u.id));
       console.log(`panel login set: username "${username}". All open sessions were ended; sign in again.`);
+      break;
+    }
+    case "data:purge-dry-run": {
+      const u = await owner();
+      const [p] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.positions).where(and(eq(schema.positions.userId, u.id), eq(schema.positions.dryRun, true)));
+      const [t] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.txs).where(and(eq(schema.txs.userId, u.id), eq(schema.txs.dryRun, true)));
+      const [lp] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.positions).where(and(eq(schema.positions.userId, u.id), eq(schema.positions.dryRun, false)));
+      const [lt] = await db.select({ n: sql<number>`count(*)::int` }).from(schema.txs).where(and(eq(schema.txs.userId, u.id), eq(schema.txs.dryRun, false)));
+      console.log(`dry-run: ${p!.n} positions (+ their PnL snapshots), ${t!.n} log rows will be DELETED`);
+      console.log(`live:    ${lp!.n} positions, ${lt!.n} log rows stay`);
+      if (!p!.n && !t!.n) {
+        console.log("nothing to delete");
+        break;
+      }
+      if (!o.yes) {
+        const answer = await promptLine('Type DELETE to confirm: ');
+        if (answer.trim() !== "DELETE") {
+          console.log("cancelled, nothing deleted");
+          break;
+        }
+      }
+      await db.transaction(async (tx) => {
+        await tx.delete(schema.txs).where(and(eq(schema.txs.userId, u.id), eq(schema.txs.dryRun, true)));
+        await tx.delete(schema.positions).where(and(eq(schema.positions.userId, u.id), eq(schema.positions.dryRun, true)));
+      });
+      console.log("dry-run history deleted");
       break;
     }
     case "user:logout-all": {
@@ -273,6 +302,15 @@ async function promptPassphrase(): Promise<string> {
   const b = await promptSecret("Repeat: ");
   if (a !== b) throw new Error("passphrases do not match");
   return a;
+}
+
+/** One visible line from the TTY. */
+function promptLine(q: string): Promise<string> {
+  if (!process.stdin.isTTY) throw new Error("no TTY: run with `docker compose run --rm -it ...` or pass --yes");
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl.question(q, (a) => (rl.close(), resolve(a)));
+  });
 }
 
 /** One line from the TTY, not echoed. */

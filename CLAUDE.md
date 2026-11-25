@@ -560,3 +560,7 @@ Kullanıcı: "dashboard'u public erişime aç, sadece ben, mobil + web, kullanı
 - **Oturum belirteci** artık `userId.version.exp.hmac`; her istekte `session_version` DB'den (15 sn önbellek) kontrol edilir; eski 3 parçalı belirteçler geçersiz (bir kez yeniden giriş).
 - **Arayüz:** `/login` kullanıcı adı + şifre formu, "Cüzdanla giriş" katlanır seçenek olarak duruyor.
 - Doğrulama (yerel): yanlış şifre 401, yabancı Origin 403, 6. denemede 429, doğru şifre → oturum, `user:logout-all` sonrası 15 sn içinde 401, CLI şifreyi ekrana basmıyor; Caddyfile `caddy validate` + adapt (IP için acme/shortlived, default_sni) ve container sağlık kontrolü OK. Let's Encrypt'ten gerçek IP sertifikası sadece sunucuda alınabilir.
+
+## 31. Deneme geçmişini silme (25 Kasım 2026)
+
+Kullanıcı: "dry run geçmişini silelim, artık live kalacak sadece". CLI `data:purge-dry-run [--yes]`: `positions.dry_run = true` (PnL snapshot'ları cascade ile) ve `txs.dry_run = true` satırlarını tek transaction'da siler; önce silinecek/kalacak sayıları gösterir, "DELETE" yazılmadan silmez. Canlı veriye dokunmaz. Sunucuda önce `deploy/backup.sh` ile yedek alınır.
