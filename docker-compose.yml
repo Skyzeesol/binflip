@@ -81,6 +81,20 @@ services:
     <<: *app
     command: ["node", "apps/telegram/dist/main.js"]
 
+  # İlginç market-making engine: shadow mode only (follows the leader, sends nothing).
+  # Not started by default: docker compose --profile mm up -d mm
+  mm:
+    <<: *app
+    profiles: ["mm"]
+    command: ["node", "apps/mm/dist/main.js"]
+    environment:
+      <<: *app-env
+      DRY_RUN: "1"
+      LIVE_CONFIRMED: "0"
+      MM_OUT_DIR: /data/mm
+    volumes:
+      - ./mm-data:/data/mm
+
   api:
     <<: *app
     command: ["node", "apps/api/dist/main.js"]

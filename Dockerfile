@@ -17,6 +17,7 @@ COPY packages/db/package.json packages/db/
 COPY apps/listener/package.json apps/listener/
 COPY apps/executor/package.json apps/executor/
 COPY apps/manager/package.json apps/manager/
+COPY apps/mm/package.json apps/mm/
 COPY apps/api/package.json apps/api/
 COPY apps/telegram/package.json apps/telegram/
 COPY apps/web/package.json apps/web/
@@ -52,6 +53,7 @@ COPY --from=build --chown=node:node /app/packages/db/drizzle packages/db/drizzle
 COPY --from=build --chown=node:node /app/apps/listener/dist apps/listener/dist
 COPY --from=build --chown=node:node /app/apps/executor/dist apps/executor/dist
 COPY --from=build --chown=node:node /app/apps/manager/dist apps/manager/dist
+COPY --from=build --chown=node:node /app/apps/mm/dist apps/mm/dist
 COPY --from=build --chown=node:node /app/apps/api/dist apps/api/dist
 COPY --from=build --chown=node:node /app/apps/telegram/dist apps/telegram/dist
 # Panel: Next.js standalone server (self-contained, has its own node_modules) + static assets.
