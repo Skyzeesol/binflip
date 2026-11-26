@@ -4,10 +4,10 @@
 //   tx.<hour>.jsonl.gz     every BviQ transaction (same shape as txs.mjs: {signature, ...getTransaction})
 //   pool.<hour>.jsonl.gz   {t, slot, pools:{addr:[activeId, volatilityAccumulator, idReference, lastUpdate]}}
 //                          for every pool the wallet touched recently, every POOL_MS
-//   universe.<hour>.jsonl.gz  Meteora top pools snapshot every UNIVERSE_MS (to compare picks vs. skips)
+//   universe.<hour>.jsonl.gz  Meteora pool snapshot every UNIVERSE_MS: top by 1h volume + top by 30m/1h fee/TVL, merged
 //
 // Each record is its own gzip member, so a crash never corrupts a shard.
-// Env: RPC_URL, WALLETS (comma list), OUT, POOL_MS (2000), UNIVERSE_MS (300000), TX_POLL_MS (3000)
+// Env: RPC_URL, WALLETS (comma list), OUT, POOL_MS (2000), UNIVERSE_MS (120000), TX_POLL_MS (3000)
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -22,7 +22,9 @@ const coder = new BorshCoder(require("@meteora-ag/dlmm").IDL);
 const WALLETS = (process.env.WALLETS || "BviQcBvnWv5HHxHcouTwRFhrAMPNKuMLzEaSuxCuv6eU").split(",");
 const OUT = process.env.OUT || "live";
 const POOL_MS = +(process.env.POOL_MS || 2000);
-const UNIVERSE_MS = +(process.env.UNIVERSE_MS || 300000);
+const UNIVERSE_MS = +(process.env.UNIVERSE_MS || 120000);
+// [sort_by, pages of 100]
+const UNIVERSE_SORTS = [["volume_1h:desc", 5], ["fee_tvl_ratio_30m:desc", 3], ["fee_tvl_ratio_1h:desc", 2]];
 const TX_POLL_MS = +(process.env.TX_POLL_MS || 3000);
 const POOL_TTL_MS = 3 * 3600 * 1000; // keep sampling a pool 3h after the wallet last touched it
 fs.mkdirSync(OUT, { recursive: true });
@@ -119,18 +121,27 @@ async function universeLoop() {
   for (;;) {
     const t0 = Date.now();
     try {
+      // Several rankings, merged: the busiest pools AND the best fee/TVL ones (small new
+      // pools with high fees rarely make the top of a volume list, but BviQ enters them).
       const out = [];
-      for (let page = 1; page <= 5; page++) {
-        const r = await fetch(`https://dlmm.datapi.meteora.ag/pools?page=${page}&page_size=100&sort_by=volume_1h:desc`, { signal: AbortSignal.timeout(30000) });
-        if (!r.ok) throw new Error(`universe http ${r.status}`);
-        const j = await r.json();
-        const rows = j.data ?? j.pools ?? j;
-        if (!Array.isArray(rows) || !rows.length) break;
-        for (const p of rows) out.push({
-          a: p.address, n: p.name, x: p.token_x?.address, y: p.token_y?.address, bs: p.pool_config?.bin_step, bf: p.pool_config?.base_fee_pct,
-          df: p.dynamic_fee_pct, tvl: p.tvl, mc: p.token_x?.market_cap, h: p.token_x?.holders, c: p.created_at,
-          v: p.volume, f: p.fees, ftr: p.fee_tvl_ratio, px: p.current_price, lp: p.launchpad, tg: p.tags,
-        });
+      const have = new Set();
+      for (const [sort, pages] of UNIVERSE_SORTS) {
+        for (let page = 1; page <= pages; page++) {
+          const r = await fetch(`https://dlmm.datapi.meteora.ag/pools?page=${page}&page_size=100&sort_by=${sort}`, { signal: AbortSignal.timeout(30000) });
+          if (!r.ok) throw new Error(`universe http ${r.status} (${sort})`);
+          const j = await r.json();
+          const rows = j.data ?? j.pools ?? j;
+          if (!Array.isArray(rows) || !rows.length) break;
+          for (const p of rows) {
+            if (have.has(p.address)) continue;
+            have.add(p.address);
+            out.push({
+              a: p.address, n: p.name, x: p.token_x?.address, y: p.token_y?.address, bs: p.pool_config?.bin_step, bf: p.pool_config?.base_fee_pct,
+              df: p.dynamic_fee_pct, tvl: p.tvl, mc: p.token_x?.market_cap, h: p.token_x?.holders, c: p.created_at,
+              v: p.volume, f: p.fees, ftr: p.fee_tvl_ratio, px: p.current_price, lp: p.launchpad, tg: p.tags, s: sort,
+            });
+          }
+        }
       }
       write("universe", { t: t0, pools: out });
       stats.universe++;
