@@ -16,6 +16,8 @@ for (const f of fs.readdirSync("data").filter((f) => f.includes(".tx.") && f.end
     const base = { sig: tx.signature, slot: tx.slot, t: tx.blockTime, err: tx.meta.err ? JSON.stringify(tx.meta.err) : null, fee: tx.meta.fee, cu: tx.meta.computeUnitsConsumed, ver: tx.version };
     const wi = keys.indexOf(WALLET);
     base.solDelta = wi >= 0 ? tx.meta.postBalances[wi] - tx.meta.preBalances[wi] : null;
+    base.solPre = wi >= 0 ? tx.meta.preBalances[wi] : null;
+    base.signer = keys[0];
     const tok = {}; for (const b of tx.meta.preTokenBalances ?? []) if (b.owner === WALLET) tok[b.mint] = -BigInt(b.uiTokenAmount.amount);
     for (const b of tx.meta.postTokenBalances ?? []) if (b.owner === WALLET) tok[b.mint] = (tok[b.mint] ?? 0n) + BigInt(b.uiTokenAmount.amount);
     base.tokDelta = Object.fromEntries(Object.entries(tok).filter(([, v]) => v !== 0n).map(([k, v]) => [k, v.toString()]));
@@ -24,7 +26,8 @@ for (const f of fs.readdirSync("data").filter((f) => f.includes(".tx.") && f.end
     const ixs = dec.filter((d) => d.kind === "ix"), evs = dec.filter((d) => d.kind === "event");
     if (!ixs.length) {
       const kind = progs.has(JUP) ? "jup_swap" : [...progs].every((p) => p === "11111111111111111111111111111111" || p.startsWith("ComputeBudget")) ? "transfer" : "other";
-      out.write(JSON.stringify({ ...base, kind, progs: [...progs].map((p) => p.slice(0, 6)) }) + "\n"); n++; continue;
+      const cps = kind === "transfer" ? keys.map((k, j) => [k, tx.meta.postBalances[j] - tx.meta.preBalances[j]]).filter(([k, d]) => k !== WALLET && d !== 0) : undefined;
+      out.write(JSON.stringify({ ...base, kind, progs: [...progs].map((p) => p.slice(0, 6)), cps }) + "\n"); n++; continue;
     }
     const row = { ...base, kind: ixs.filter((d) => d.innerIndex === null).map((d) => d.name).join("+") || ixs.map((d) => d.name).join("+") };
     const first = ixs.find((d) => d.accounts.lb_pair || d.accounts.lbPair);
