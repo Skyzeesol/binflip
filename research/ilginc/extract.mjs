@@ -1,6 +1,7 @@
 // Flatten every downloaded tx into one row per Meteora action (+ swaps / transfers).
 // Output: data/rows.jsonl. Amounts as strings (raw units).
-import fs from "node:fs"; import zlib from "node:zlib";
+import fs from "node:fs";
+import { gzLines } from "./gzlines.mjs";
 import { decodeMeteoraTx } from "../../packages/core/dist/meteora/decode.js";
 const WALLET = process.argv[2];
 const S = (v) => (v == null ? null : typeof v === "bigint" ? v.toString() : v.constructor?.name === "BN" ? v.toString() : v.toBase58 ? v.toBase58() : v);
@@ -9,9 +10,8 @@ const JUP = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const WSOL = "So11111111111111111111111111111111111111112";
 let n = 0;
 for (const f of fs.readdirSync("data").filter((f) => f.includes(".tx.") && f.endsWith(".gz")).sort()) {
-  let text; try { text = zlib.gunzipSync(fs.readFileSync("data/" + f), { finishFlush: zlib.constants.Z_SYNC_FLUSH }).toString(); } catch (e) { console.error("skip", f, e.message); continue; }
-  for (const line of text.split("\n")) {
-    if (!line) continue; let tx; try { tx = JSON.parse(line); } catch { continue; }
+  for await (const line of gzLines("data/" + f)) {
+    let tx; try { tx = JSON.parse(line); } catch { continue; }
     const keys = [...tx.transaction.message.accountKeys, ...(tx.meta.loadedAddresses?.writable ?? []), ...(tx.meta.loadedAddresses?.readonly ?? [])];
     const base = { sig: tx.signature, slot: tx.slot, t: tx.blockTime, err: tx.meta.err ? JSON.stringify(tx.meta.err) : null, fee: tx.meta.fee, cu: tx.meta.computeUnitsConsumed, ver: tx.version };
     const wi = keys.indexOf(WALLET);

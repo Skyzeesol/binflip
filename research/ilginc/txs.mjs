@@ -3,13 +3,13 @@
 // and "done" is rebuilt from what is actually on disk.
 // Usage: node txs.mjs <wallet> [concurrency]
 import fs from "node:fs"; import zlib from "node:zlib";
+import { gzLines } from "./gzlines.mjs";
 import { rpc, sleep } from "./rpc.mjs";
 const [wallet, conc = "5"] = process.argv.slice(2);
 const sigs = fs.readFileSync(`data/${wallet}.sigs.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 const done = new Set();
 for (const f of fs.readdirSync("data").filter((f) => f.startsWith(wallet + ".tx.") && f.endsWith(".gz"))) {
-  const text = zlib.gunzipSync(fs.readFileSync("data/" + f), { finishFlush: zlib.constants.Z_SYNC_FLUSH }).toString();
-  for (const line of text.split("\n")) { if (!line) continue; try { done.add(JSON.parse(line).signature); } catch {} }
+  for await (const line of gzLines("data/" + f)) { const m = line.match(/"signature":"([^"]+)"/); if (m) done.add(m[1]); }
 }
 const todo = sigs.filter((s) => !done.has(s.signature));
 console.log("have", done.size, "todo", todo.length);
