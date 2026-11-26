@@ -32,7 +32,8 @@ export function startHealthServer(
     res.writeHead(ok ? 200 : 503, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: ok ? "ok" : "degraded", checks: results, ...meta }));
   });
-  server.listen(port);
+  // HEALTH_HOST=127.0.0.1 keeps the endpoint off public interfaces when a service runs outside Docker.
+  server.listen(port, process.env.HEALTH_HOST || undefined);
   return server;
 }
 
