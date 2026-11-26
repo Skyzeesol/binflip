@@ -83,8 +83,17 @@ describe("ShadowBook", () => {
     expect(b.open[0]!.range).toEqual({ lower: -570, upper: -570, side: "sol" });
   });
 
-  it("leader moved before we decided → missed", () => {
+  it("leader moved before we ever read the trigger → not_seen (speed, not rules)", () => {
     const b = open();
+    b.onTick("L", -571, 3); // distance 1: hold
+    const c = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 5, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
+    expect(c.outcome).toBe("not_seen");
+  });
+
+  it("we read the trigger distance but did not move → missed (rule gap)", () => {
+    const b = new ShadowBook(3); // a stricter engine than the leader
+    b.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
+    b.onTick("L", -570, 3); // distance 2: our trigger is 3, hold
     const c = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 5, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
     expect(c.outcome).toBe("missed");
   });

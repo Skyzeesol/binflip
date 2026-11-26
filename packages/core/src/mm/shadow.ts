@@ -1,4 +1,4 @@
-import { mmDecide, sameRange, type MmRange } from "./engine.js";
+import { MM_TRIGGER_BINS, mmDecide, mmDistance, sameRange, type MmRange } from "./engine.js";
 
 /**
  * Shadow book: mirrors a leader's (BviQ's) open positions, runs our engine on the
@@ -22,7 +22,8 @@ export type ShadowOutcome =
   | "match" //            we moved to exactly the leader's range
   | "match_other_bin" //  same side and width, but the price had moved: different bins
   | "wrong_side" //       we moved to the other side
-  | "missed" //           the leader moved, we had not decided to
+  | "missed" //           we saw the trigger distance but did not decide (a rule gap)
+  | "not_seen" //         the leader moved before our last pool read showed the trigger (speed, not rules)
   | "adopted"; //         first time we see this position (started mid-life), no score
 
 export interface ShadowComparison {
@@ -44,6 +45,7 @@ export interface ShadowStats {
   matchOtherBin: number;
   wrongSide: number;
   missed: number;
+  notSeen: number;
   adopted: number;
   extra: number;
   closedWithPending: number;
@@ -52,7 +54,9 @@ export interface ShadowStats {
 
 export class ShadowBook {
   private readonly positions = new Map<string, ShadowPosition>();
-  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [] };
+  /** Last active bin we read per pool, to tell a rule gap from a speed gap. */
+  private readonly lastSeen = new Map<string, { t: number; active: number }>();
+  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [] };
 
   constructor(private readonly trigger?: number) {}
 
@@ -88,6 +92,7 @@ export class ShadowBook {
   /** A fresh active bin for a pool: run the engine on every shadow position there. */
   onTick(pool: string, active: number, t: number): Array<{ position: string; next: MmRange; distance: number }> {
     const out: Array<{ position: string; next: MmRange; distance: number }> = [];
+    this.lastSeen.set(pool, { t, active });
     for (const p of this.positions.values()) {
       if (p.pool !== pool) continue;
       const d = mmDecide(p.range, active, p.binStep, this.trigger);
@@ -122,7 +127,11 @@ export class ShadowBook {
     const ours = p.pending[0];
     const extra = Math.max(0, p.pending.length - 1);
     let outcome: ShadowOutcome;
-    if (!ours) outcome = "missed";
+    if (!ours) {
+      const seen = this.lastSeen.get(e.pool);
+      const sawTrigger = seen !== undefined && seen.t <= e.t && Math.abs(mmDistance(p.range, seen.active)) >= MM_TRIGGER_BINS; // the leader's trigger
+      outcome = sawTrigger ? "missed" : "not_seen";
+    }
     else if (ours.next.side !== e.next.side) outcome = "wrong_side";
     else if (sameRange(ours.next, e.next)) outcome = "match";
     else outcome = "match_other_bin";
@@ -132,7 +141,8 @@ export class ShadowBook {
     if (outcome === "match") this.stats.match++;
     else if (outcome === "match_other_bin") this.stats.matchOtherBin++;
     else if (outcome === "wrong_side") this.stats.wrongSide++;
-    else this.stats.missed++;
+    else if (outcome === "missed") this.stats.missed++;
+    else this.stats.notSeen++;
     const lagSec = ours ? ours.t - e.t : undefined;
     if (lagSec !== undefined) this.stats.lagSec.push(lagSec);
     if (this.stats.lagSec.length > 20_000) this.stats.lagSec.splice(0, 10_000);
@@ -155,6 +165,7 @@ export class ShadowBook {
       sameSidePct: pct(s.match + s.matchOtherBin),
       wrongSidePct: pct(s.wrongSide),
       missedPct: pct(s.missed),
+      notSeenPct: pct(s.notSeen),
       extra: s.extra,
       adopted: s.adopted,
       lagP10: q(0.1),

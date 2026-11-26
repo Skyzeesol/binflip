@@ -111,17 +111,26 @@ await runService("mm", async ({ config, log }) => {
     }
   }
 
+  /**
+   * Leader transactions, oldest first. `cursor` only moves past a signature once that
+   * transaction is fully handled, so an RPC failure mid-batch is retried next poll
+   * instead of silently dropping the rest of the batch.
+   */
   async function pollLeader(): Promise<void> {
     const sigs = await rpc.getSignaturesForAddress(LEADER, { limit: 200, ...(cursor ? { until: cursor } : {}) });
     if (!sigs.length) return;
-    const first = !cursor;
-    cursor = sigs[0]!.signature;
-    if (first) return; // start from "now"; positions opened earlier are adopted on their next rebalance
+    if (!cursor) {
+      cursor = sigs[0]!.signature; // start from "now"; earlier positions are adopted on their next rebalance
+      return;
+    }
     for (const s of sigs.reverse()) {
-      if (seen.has(s.signature) || s.err) continue;
-      seen.add(s.signature);
-      const tx = await rpc.getTransaction(s.signature);
-      if (tx) await handleTx(tx);
+      if (!seen.has(s.signature) && !s.err) {
+        const tx = await rpc.getTransaction(s.signature); // throws → cursor stays, batch retried
+        if (!tx) return; // not yet visible at this commitment: retry from here next poll
+        await handleTx(tx);
+        seen.add(s.signature);
+      }
+      cursor = s.signature;
     }
     if (seen.size > 50_000) seen.clear();
   }
