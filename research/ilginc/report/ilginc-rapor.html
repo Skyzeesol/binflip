@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>İlginç Botu Dosyası</title>
+<style>
+:root{
+  --bg:#f4f6f7; --surface:#fff; --ink:#14202a; --muted:#5a6a77; --line:#d7dee3; --chip:#e8edf0;
+  --sol:#0e7c74; --sol-soft:#d5ece9; --tok:#b7791f; --tok-soft:#f6e7cc; --gain:#1f8a4c; --loss:#c2410c; --warn:#9a3412; --warn-soft:#fde7dc;
+  --f-body:"Inter",system-ui,sans-serif; --f-mono:"JetBrains Mono","DejaVu Sans Mono",monospace;
+}
+@page{size:A4;margin:14mm 13mm}
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:13.5px;line-height:1.55}
+.wrap{max-width:900px;margin:0 auto;padding:28px 16px 40px;display:grid;gap:34px}
+h1,h2,h3{margin:0;line-height:1.2;letter-spacing:-.01em}
+h1{font-size:32px;font-weight:700}
+h2{font-size:20px;font-weight:650}
+h3{font-size:14px;font-weight:650}
+p{margin:0;max-width:72ch}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--chip);padding:1px 5px;border-radius:4px}
+.eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+section{display:grid;gap:14px;break-inside:auto}
+.lede{font-size:15px;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:2px}
+.stat b{font-family:var(--f-mono);font-size:24px;font-weight:500}
+.stat span{font-size:12px;color:var(--muted)}
+.chip{display:inline-block;font-family:var(--f-mono);font-size:10px;letter-spacing:.04em;padding:1px 7px;border-radius:99px;vertical-align:1px;white-space:nowrap}
+.c-ok{background:color-mix(in srgb,var(--gain) 16%,transparent);color:var(--gain)}
+.c-likely{background:var(--tok-soft);color:var(--tok)}
+.c-open{background:var(--chip);color:var(--muted)}
+.c-diff{background:var(--warn-soft);color:var(--warn)}
+.figure{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:grid;gap:10px;break-inside:avoid}
+.figure svg{width:100%;height:auto;display:block}
+.cap{font-size:12px;color:var(--muted)}
+svg text{font-family:var(--f-mono);fill:var(--ink)}
+svg .m{fill:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--f-mono);font-weight:500;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+tr{break-inside:avoid}
+.rule{display:grid;grid-template-columns:120px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.rule:last-child{border-bottom:0}
+.rule dt{font-family:var(--f-mono);font-size:12px;color:var(--muted);padding-top:1px}
+.rule dd{margin:0}
+dl{margin:0}
+ul{margin:0;padding-left:18px;display:grid;gap:5px}
+.diff td:first-child{font-weight:600}
+.card{break-inside:avoid;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:5px;align-content:start}
+.card p{font-size:12.5px;color:var(--muted)}
+.next{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+footer{font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px}
+.pb{break-before:page}
+@media print{body{background:#fff}.wrap{padding:0}}
+h2{break-after:avoid}.eyebrow{break-after:avoid}
+@media (max-width:640px){.stats,.cols,.next{grid-template-columns:1fr 1fr}.rule{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header style="display:grid;gap:18px">
+  <div class="eyebrow">Meteora DLMM · Solana · BviQ…v6eU · 2026-11-08 → 2026-11-25</div>
+  <h1>İlginç botu: 91 bin işlemden çıkarılan kurallar</h1>
+  <p class="lede">Operatörün aktif cüzdanı <code>BviQcBvnWv5HHxHcouTwRFhrAMPNKuMLzEaSuxCuv6eU</code>'nun 17 günlük geçmişinin tamamını (başarısızlar dahil) indirdik ve Meteora DLMM program event'leriyle tek tek çözdük. Bu dosya botun <b>nasıl</b> çalıştığını parametre parametre anlatıyor ve arkadaşının raporuyla karşılaştırıyor.</p>
+  <div class="stats">
+    <div class="stat"><b>91.004</b><span>işlem, eksiksiz (17 gün)</span></div>
+    <div class="stat"><b>68.274</b><span>başarılı rebalance, hepsi aynı kurala uyuyor</span></div>
+    <div class="stat"><b>~21</b><span>aynı anda açık havuz (en fazla 33)</span></div>
+    <div class="stat"><b>1.660</b><span>pozisyon açılışı, 323 farklı havuz</span></div>
+  </div>
+  <p class="mono" style="font-size:11.5px;color:var(--muted)">Etiketler: <span class="chip c-ok">kesin</span> istisnasız ya da ~%100 · <span class="chip c-likely">güçlü</span> büyük çoğunluk · <span class="chip c-open">açık</span> henüz bilinmiyor · <span class="chip c-diff">farklı</span> diğer raporla çelişiyor</p>
+</header>
+
+<section>
+  <div class="eyebrow">1 · Tek cümlede</div>
+  <h2>Fiyatın bir adım yanında duran, 2 bin kaçınca taşınan tek taraflı pozisyon</h2>
+  <p>Bot her havuzda aktif binin hemen yanına, <code>w = round(100 / bin_step)</code> binlik tek taraflı bir pozisyon koyar. Aktif bin pozisyondan 2 bin uzaklaşınca tek bir <code>rebalance_liquidity</code> işlemiyle pozisyonu yeniden aktif binin yanına taşır ve fee'yi toplar. Bunu aynı anda ~20 havuzda yapar, bir pozisyonu ortalama ~40 dakika tutar, kapanışta kalan token'ı aynı saniyede satar ve çoğunlukla aynı havuza geri döner.</p>
+  <div class="figure">
+    <div class="cols" style="grid-template-columns:repeat(3,1fr)">
+      <svg viewBox="0 0 300 190" role="img" aria-label="SOL tarafı: aktif binin altında">
+        <text x="0" y="16" font-size="13">1 · SOL tarafı</text>
+        <g><rect x="6" y="110" width="28" height="12" fill="var(--chip)"/><rect x="38" y="110" width="28" height="12" fill="var(--chip)"/>
+        <rect x="70" y="60" width="28" height="62" fill="var(--sol)"/><rect x="102" y="60" width="28" height="62" fill="var(--sol)"/>
+        <rect x="134" y="110" width="28" height="12" fill="var(--chip)" stroke="var(--ink)"/><rect x="166" y="110" width="28" height="12" fill="var(--chip)"/>
+        <rect x="198" y="110" width="28" height="12" fill="var(--chip)"/><rect x="230" y="110" width="28" height="12" fill="var(--chip)"/><rect x="262" y="110" width="28" height="12" fill="var(--chip)"/></g>
+        <line x1="148" y1="34" x2="148" y2="126" stroke="var(--ink)" stroke-width="2"/><text x="148" y="30" text-anchor="middle" font-size="11">aktif</text>
+        <text x="100" y="148" text-anchor="middle" font-size="11" fill="var(--sol)">[aktif−w, aktif−1]</text>
+        <text x="0" y="176" font-size="11" class="m">sadece SOL, düz (spot) dağılım</text>
+      </svg>
+      <svg viewBox="0 0 300 190" role="img" aria-label="Tetik: aktif bin 2 bin uzaklaşınca">
+        <text x="0" y="16" font-size="13">2 · Tetik: 2 bin</text>
+        <g><rect x="6" y="110" width="28" height="12" fill="var(--chip)"/><rect x="38" y="110" width="28" height="12" fill="var(--chip)"/>
+        <rect x="70" y="60" width="28" height="62" fill="none" stroke="var(--muted)" stroke-dasharray="3 3"/><rect x="102" y="60" width="28" height="62" fill="none" stroke="var(--muted)" stroke-dasharray="3 3"/>
+        <rect x="134" y="110" width="28" height="12" fill="var(--chip)"/><rect x="166" y="60" width="28" height="62" fill="var(--sol)"/>
+        <rect x="198" y="60" width="28" height="62" fill="var(--sol)"/><rect x="230" y="110" width="28" height="12" fill="var(--chip)" stroke="var(--ink)"/><rect x="262" y="110" width="28" height="12" fill="var(--chip)"/></g>
+        <line x1="244" y1="34" x2="244" y2="126" stroke="var(--ink)" stroke-width="2"/><text x="244" y="30" text-anchor="middle" font-size="11">aktif</text>
+        <text x="196" y="148" text-anchor="middle" font-size="11" fill="var(--sol)">yeniden [aktif−w, aktif−1]</text>
+        <text x="0" y="176" font-size="11" class="m">1 bin uzakta hiç taşımıyor</text>
+      </svg>
+      <svg viewBox="0 0 300 190" role="img" aria-label="Fiyat düşünce token tarafı aktif binin üstünde">
+        <text x="0" y="16" font-size="13">3 · Token tarafı</text>
+        <g><rect x="6" y="110" width="28" height="12" fill="var(--chip)"/><rect x="38" y="110" width="28" height="12" fill="var(--chip)" stroke="var(--ink)"/>
+        <rect x="70" y="60" width="28" height="62" fill="var(--tok)"/><rect x="102" y="60" width="28" height="62" fill="var(--tok)"/>
+        <rect x="134" y="60" width="28" height="62" fill="none" stroke="var(--muted)" stroke-dasharray="3 3"/><rect x="166" y="60" width="28" height="62" fill="none" stroke="var(--muted)" stroke-dasharray="3 3"/>
+        <rect x="198" y="110" width="28" height="12" fill="var(--chip)"/><rect x="230" y="110" width="28" height="12" fill="var(--chip)"/><rect x="262" y="110" width="28" height="12" fill="var(--chip)"/></g>
+        <line x1="52" y1="34" x2="52" y2="126" stroke="var(--ink)" stroke-width="2"/><text x="52" y="30" text-anchor="middle" font-size="11">aktif</text>
+        <text x="100" y="148" text-anchor="middle" font-size="11" fill="var(--tok)">[aktif+1, aktif+w]</text>
+        <text x="0" y="176" font-size="11" class="m">fiyat bin'i geçince SOL → token</text>
+      </svg>
+    </div>
+    <div class="cap">Kesikli kutular eski yer. Taraf değişimi botun kararı değil: fiyat pozisyonun içinden geçince SOL token'a (ya da token SOL'e) kendiliğinden dönüşür. Bot sadece elindekini, aynı taraf olarak yeni yere taşır. 68.274 rebalance'ın 68.273'ü bu yerleşime birebir uyuyor.</div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">2 · Parametreler</div>
+  <h2>Kuralların tam listesi</h2>
+  <dl class="figure" style="break-inside:auto">
+    <div class="rule"><dt>Genişlik</dt><dd><code>w = max(1, round(100 / bin_step))</code>: bs 10 → 10 bin, 15 → 7, 20 → 5, 25 → 4, 50 → 2, ≥80 → 1. Hep fiyatın yaklaşık %1'i. <span class="chip c-ok">kesin · 68.274/68.274</span></dd></div>
+    <div class="rule"><dt>Yerleşim</dt><dd>SOL <code>[aktif−w, aktif−1]</code>, token <code>[aktif+1, aktif+w]</code>. Aktif bine hiç likidite koymuyor. Şekil düz (delta 0). <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Tetik</dt><dd>Aktif bin pozisyonun <b>≥ 2 bin</b> dışına çıkınca. 1 bin uzaklıkta tek bir rebalance bile yok. Yukarı ve aşağı simetrik. <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Rebalance</dt><dd>Tek <code>rebalance_liquidity</code>: aralığın %100'ü çekilir, tek segment eklenir, <code>max_active_bin_slippage = 0</code>, <code>should_claim_fee = true</code>. Aynı pozisyon hesabı taşınır, yenisi açılmaz. <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Fee</dt><dd>Her rebalance'ta claim. SOL fee cüzdanda kalır; token fee'leri küçük swap'larla (DLMM <code>swap/swap2</code>, Jupiter) SOL'e çevrilir. <span class="chip c-ok">kesin</span> <span class="chip c-likely">satış: güçlü</span></dd></div>
+    <div class="rule"><dt>SOL yatırma</dt><dd>%73: çekilen ana para aynen geri (fee hariç). %20: cüzdandan ek SOL, çoğunlukla lota tamamlamak için. Bileşik yatırım kuralı değil. <span class="chip c-likely">güçlü</span> <span class="chip c-open">ek kısmın formülü açık</span></dd></div>
+    <div class="rule"><dt>Açılış lotu</dt><dd>Üç kademe: <b>1 SOL (%43), 2 SOL (%26), 7 SOL (%18)</b>, kalanı ara değerler. Bakiyenin %2–16'sı, bakiyeyle orantılı değil. <span class="chip c-ok">kademeler kesin</span> <span class="chip c-open">hangi havuza hangisi: açık</span></dd></div>
+    <div class="rule"><dt>Açılış</dt><dd><code>initialize_position + add_liquidity_by_strategy2</code>, <code>SpotImBalanced</code>, %99 sadece SOL, kayma 0. Açılışların %17'si aynı kayma hatasıyla başarısız. <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Ölçek</dt><dd>Aynı anda medyan 21 pozisyon (q10–q90: 9–25, en fazla 33). Günde 57–170 açılış. <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Süre</dt><dd>Pozisyon ömrü medyan 37 dk (q25 9 dk, q75 112 dk). Pozisyon başına medyan 13 rebalance. <span class="chip c-ok">kesin</span></dd></div>
+    <div class="rule"><dt>Kapanış</dt><dd><code>remove_liquidity_by_range2 + claim_fee2 + close_position_if_empty</code>. Kapanış anında pozisyon %60 oranında normal yerinde (1 bin uzakta), yani çıkış ayrı bir karar. Kalan token 0–1 sn içinde satılıyor. <span class="chip c-ok">kesin</span> <span class="chip c-open">çıkış kuralı açık</span></dd></div>
+    <div class="rule"><dt>Yeniden giriş</dt><dd>Kapanışların %82'sinden sonra aynı havuza dönüş. Bekleme q10 4 sn, q25 4 dk, medyan 50 dk. <span class="chip c-ok">kesin</span> <span class="chip c-open">koşul açık</span></dd></div>
+    <div class="rule"><dt>Altyapı</dt><dd>Rebalance'lar v1 işlem formatında, compute ayarı mesajın içinde, 6.000 lamport. Açılış 11.000, swap 15.000. Jito ya da bahşiş yok. <span class="chip c-ok">kesin</span></dd></div>
+  </dl>
+</section>
+
+<section>
+  <div style="break-inside:avoid;display:grid;gap:14px">
+  <div class="eyebrow">3 · Tetik</div>
+  <h2>Rebalance anında aktif bin pozisyondan kaç bin uzakta?</h2>
+  <div class="figure">
+    <svg viewBox="0 0 860 260" role="img" aria-label="Uzaklık dağılımı: en çok ±2, 1 ve 0'da hiç yok">
+      <!-- scale: 23055 -> 180px ; baseline y=210 ; bars for -8..8 -->
+      <line x1="30" y1="210" x2="840" y2="210" stroke="var(--line)"/>
+      <g font-size="11" text-anchor="middle">
+        <rect x="40"  y="207" width="34" height="3"   fill="var(--muted)"/><text x="57"  y="228" class="m">−8</text>
+        <rect x="86"  y="206" width="34" height="4"   fill="var(--muted)"/><text x="103" y="228" class="m">−7</text>
+        <rect x="132" y="204" width="34" height="6"   fill="var(--muted)"/><text x="149" y="228" class="m">−6</text>
+        <rect x="178" y="200" width="34" height="10"  fill="var(--muted)"/><text x="195" y="228" class="m">−5</text>
+        <rect x="224" y="191" width="34" height="19"  fill="var(--muted)"/><text x="241" y="228" class="m">−4</text>
+        <rect x="270" y="170" width="34" height="40"  fill="var(--muted)"/><text x="287" y="228" class="m">−3</text>
+        <rect x="316" y="37"  width="34" height="173" fill="var(--sol)"/><text x="333" y="228">−2</text><text x="333" y="31">22.103</text>
+        <rect x="362" y="209" width="34" height="1"   fill="var(--loss)"/><text x="379" y="228" fill="var(--loss)">−1</text><text x="379" y="202" fill="var(--loss)">0</text>
+        <rect x="408" y="209" width="34" height="1"   fill="var(--loss)"/><text x="425" y="228" fill="var(--loss)">0</text><text x="425" y="202" fill="var(--loss)">0</text>
+        <rect x="454" y="209" width="34" height="1"   fill="var(--loss)"/><text x="471" y="228" fill="var(--loss)">+1</text><text x="471" y="202" fill="var(--loss)">0</text>
+        <rect x="500" y="30"  width="34" height="180" fill="var(--sol)"/><text x="517" y="228">+2</text><text x="517" y="24">23.055</text>
+        <rect x="546" y="170" width="34" height="40"  fill="var(--muted)"/><text x="563" y="228" class="m">+3</text>
+        <rect x="592" y="193" width="34" height="17"  fill="var(--muted)"/><text x="609" y="228" class="m">+4</text>
+        <rect x="638" y="200" width="34" height="10"  fill="var(--muted)"/><text x="655" y="228" class="m">+5</text>
+        <rect x="684" y="204" width="34" height="6"   fill="var(--muted)"/><text x="701" y="228" class="m">+6</text>
+        <rect x="730" y="206" width="34" height="4"   fill="var(--muted)"/><text x="747" y="228" class="m">+7</text>
+        <rect x="776" y="207" width="34" height="3"   fill="var(--muted)"/><text x="793" y="228" class="m">+8</text>
+      </g>
+      <text x="430" y="252" text-anchor="middle" font-size="11" class="m">aktif bin − pozisyon kenarı (bin) · eksi = fiyat aşağıda, artı = yukarıda</text>
+    </svg>
+    <div class="cap">±2: %66, ±3: %15, ±4: %7, geri kalan kuyruk. 3 ve üstü uzaklıklar, fiyatın iki kontrol arasında birden fazla bin atlamasından ya da başarısız işlemin tekrarından geliyor. Eşik her bin_step'te aynı. 12.803 rebalance (%15,8) <code>Custom 6004</code> (bin kayma toleransı) hatasıyla başarısız; bot tekrar deniyor.</div>
+  </div>
+
+  </div>
+  <div class="cols">
+    <div class="figure">
+      <h3>Açılış lotu (1.660 açılış)</h3>
+      <svg viewBox="0 0 400 200" role="img" aria-label="Lot dağılımı: 1 SOL yüzde 43, 2 SOL yüzde 26, 7 SOL yüzde 18">
+        <g font-size="12">
+          <text x="0" y="34">1 SOL</text><rect x="70" y="20" width="300" height="20" rx="3" fill="var(--sol)"/><text x="362" y="35" text-anchor="end" fill="#fff">708 · %43</text>
+          <text x="0" y="74">2 SOL</text><rect x="70" y="60" width="185" height="20" rx="3" fill="var(--sol)" opacity=".8"/><text x="262" y="75">436 · %26</text>
+          <text x="0" y="114">7 SOL</text><rect x="70" y="100" width="123" height="20" rx="3" fill="var(--sol)" opacity=".65"/><text x="200" y="115">291 · %18</text>
+          <text x="0" y="154">diğer</text><rect x="70" y="140" width="95" height="20" rx="3" fill="var(--muted)" opacity=".5"/><text x="172" y="155">225 · %13</text>
+        </g>
+      </svg>
+      <div class="cap">Aynı bin_step ve taban fee grubunda üç kademenin üçü de var. Kademe seçimi havuzun o anki metriklerine bağlı görünüyor; canlı kayıtla test ediliyor.</div>
+    </div>
+    <div class="figure">
+      <h3>Pozisyon ömrü (1.635 tam pozisyon)</h3>
+      <svg viewBox="0 0 400 200" role="img" aria-label="Pozisyon ömrü çeyrekleri">
+        <g font-size="12">
+          <!-- log-ish scale: 2.4m .. 364m mapped -->
+          <line x1="20" y1="100" x2="380" y2="100" stroke="var(--line)" stroke-width="2"/>
+          <rect x="88" y="80" width="150" height="40" rx="4" fill="var(--sol-soft)" stroke="var(--sol)"/>
+          <line x1="155" y1="76" x2="155" y2="124" stroke="var(--sol)" stroke-width="3"/>
+          <line x1="20" y1="90" x2="20" y2="110" stroke="var(--muted)"/><line x1="360" y1="90" x2="360" y2="110" stroke="var(--muted)"/>
+          <text x="20" y="140" text-anchor="middle" class="m">2 dk</text><text x="88" y="140" text-anchor="middle" class="m">9 dk</text>
+          <text x="155" y="66" text-anchor="middle">medyan 37 dk</text>
+          <text x="238" y="140" text-anchor="middle" class="m">112 dk</text><text x="360" y="140" text-anchor="middle" class="m">6 sa</text>
+          <text x="200" y="180" text-anchor="middle" class="m">q10 · q25 · medyan · q75 · q90</text>
+        </g>
+      </svg>
+      <div class="cap">Pozisyon başına rebalance: medyan 13, q75 35, q90 80. Aynı anda medyan 21 pozisyon açık.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">4 · Kapanış ve dönüş</div>
+  <h2>Çıkış ayrı bir karar; çıktığı havuza çoğunlukla geri dönüyor</h2>
+  <div class="cols">
+    <div class="card"><h3>Kapanış anı</h3><p>Kapanışların %60'ında pozisyon normal yerinde, aktif bine 1 bin uzakta. Yani bot "fiyat kaçtı" diye değil, başka bir sinyalle çıkıyor. Çıkan taraf: SOL %65, token %24, karışık %10. <span class="chip c-ok">kesin</span></p></div>
+    <div class="card"><h3>Token satışı</h3><p>Token'lı kapanışlardan sonra aynı token 0–1 saniye içinde satılıyor. Rota: Jupiter 2.731, DLMM <code>swap2</code> 2.100, <code>swap</code> 894 işlem. Token tutmuyor. <span class="chip c-ok">kesin</span></p></div>
+    <div class="card"><h3>Yeniden giriş</h3><p>1.635 kapanışın 1.337'sinden (%82) sonra aynı havuza dönüş. Bekleme: q10 4 sn, q25 4 dk, medyan 50 dk, q75 5,4 saat. <span class="chip c-ok">kesin</span></p></div>
+    <div class="card"><h3>Çıkış kuralı</h3><p>Aday: son 15 dakikada sert fiyat hareketi ya da volatilite. Canlı kayıt havuzun volatilite sayacını 2 saniyede bir tutuyor; 7 günlük veriyle test edilecek. <span class="chip c-open">açık</span></p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">5 · Havuz evreni</div>
+  <h2>323 havuz: çoğu pump.fun, ama sadece yüksek fee'li değil</h2>
+  <div class="figure">
+    <table>
+      <thead><tr><th>Özellik</th><th>Dağılım (girilen 323 havuz)</th></tr></thead>
+      <tbody>
+        <tr><td>Çift</td><td>316 SOL, 5 USDC, 2 diğer</td></tr>
+        <tr><td>bin_step</td><td>100: 138 (%43) · 200: 53 · 80: 51 · 20: 13 · 50: 12 · 125: 11 · 10: 10 · 25: 8 · diğer</td></tr>
+        <tr><td>Taban fee</td><td>%2: 132 · %1: 58 · %3: 25 · %5: 21 · ve <b>%1'in altında en az 53 havuz (%16)</b>: %0,8 · 0,5 · 0,25 · 0,2 · 0,1 · 0,05 · 0,01</td></tr>
+        <tr><td>Launchpad</td><td>pump.fun 216 (%67) · yok 67 · raydium-launchlab 17 · stonkfun 11 · met-dbc 8 · bags.fun 3</td></tr>
+        <tr><td>Havuz yaşı (açılışta)</td><td>q10 16 dk · q25 2,7 saat · medyan 6,8 gün · q75 64 gün → hem yeni hem çok eski havuzlar</td></tr>
+        <tr><td>Seçim kuralı</td><td><span class="chip c-open">açık</span> Canlı kayıt 5 dakikada bir en hareketli 500 havuzu kaydediyor; girdiği ve girmediği havuzlar karşılaştırılacak.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Para akışı: kasa <code>GcEZ…</code> 8–19 Kasım arasında BviQ'ye 43 transferle (0,1–12,5 SOL) sermaye gönderdi. 20 Kasım 02:24'te BviQ'den <code>9gbS…</code>'ye 20 SOL çıktı. Açılışlarda görülen SOL bakiyesi 12 ile 71 SOL arasında. <span class="chip c-ok">kesin</span></p>
+</section>
+
+<section class="pb">
+  <div class="eyebrow">6 · Diğer raporla karşılaştırma</div>
+  <h2>Ters düştüğümüz konular</h2>
+  <p>Arkadaşının raporu ("20 SOL ile başlayan bir LP botu…", 22 Kasım) 21 cüzdanın tamamını inceliyor; biz sadece aktif cüzdan BviQ'yi, ama işlemlerinin tamamıyla inceledik. Aşağıdaki farklar BviQ için geçerli.</p>
+  <div class="figure">
+    <table class="diff">
+      <thead><tr><th style="width:18%">Konu</th><th style="width:34%">Diğer rapor</th><th style="width:34%">Bizim veri (BviQ, 91 bin işlem)</th><th>Not</th></tr></thead>
+      <tbody>
+        <tr><td>Fee bileşik mi?</td><td>"%100 çek, ücretleri topla, hepsini yeniden yatır (bileşik)."</td><td>Rebalance'ların %73'ünde sadece çekilen ana para geri konuyor, fee cüzdanda kalıyor. Örnek: 1,008 SOL çekildi, 0,019 SOL fee alındı, pozisyona 1,000 SOL kondu.</td><td><span class="chip c-diff">farklı</span></td></tr>
+        <tr><td>Taban fee filtresi</td><td>"%2–3 gibi yüksek taban ücretli"; ilk aday filtre "taban ücret ≥ %1".</td><td>Girilen havuzların en az %16'sının taban fee'si %1'in altında (%0,01'e kadar). Böyle bir filtre yok.</td><td><span class="chip c-diff">farklı</span></td></tr>
+        <tr><td>bin_step</td><td>"Çoğu … bin_step 100."</td><td>bin_step 100 havuzların %43'ü; 200 ve 80 de yaygın, 2 ile 300 arası 16 farklı bin_step var.</td><td><span class="chip c-diff">kısmen</span></td></tr>
+        <tr><td>Lot</td><td>"Sonraki cüzdanlarda 0,5–2 SOL."</td><td>BviQ'de üç kademe: 1 SOL %43, 2 SOL %26, <b>7 SOL %18</b>. 0,5 SOL'lük açılış yok denecek kadar az.</td><td><span class="chip c-diff">farklı</span></td></tr>
+        <tr><td>Eşzamanlılık</td><td>"Son cüzdanlarda 20–54 havuz aynı anda."</td><td>BviQ'de medyan 21, en fazla 33. 54'e hiç çıkmadı.</td><td><span class="chip c-diff">kısmen</span></td></tr>
+        <tr><td>Rebalance sayısı</td><td>"Pozisyon başına rebalance 16–60."</td><td>Medyan 13, q75 35, q90 80. Pozisyonların dörtte biri 2 ya da daha az rebalance ile kapanıyor.</td><td><span class="chip c-diff">kısmen</span></td></tr>
+        <tr><td>Yeniden giriş</td><td>"107 girişin 75'i, 2–10 dakika önce çıktığı havuza geri dönüş."</td><td>%82 aynı havuza dönüyor, ama bekleme 2–10 dakikayla sınırlı değil: medyan 50 dk, dörtte biri 4 dakikadan kısa, dörtte biri 5 saatten uzun.</td><td><span class="chip c-diff">kısmen</span></td></tr>
+        <tr><td>Token satışı</td><td>Bahsedilmiyor; "fiyat aşağı kırınca elinde token kalıyor ve onu hemen üstten satmaya çalışıyor."</td><td>Üstten satma (token tarafı) doğru, ek olarak kapanışta kalan token 0–1 sn içinde Jupiter/DLMM ile piyasadan satılıyor; token fee'leri de sürekli SOL'e çevriliyor.</td><td><span class="chip c-likely">ek bulgu</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="break-inside:avoid;display:grid;gap:14px">
+  <h2 style="margin-top:8px">Doğruladıklarımız</h2>
+  <div class="figure">
+    <table>
+      <thead><tr><th style="width:24%">Konu</th><th>Sonuç</th></tr></thead>
+      <tbody>
+        <tr><td>Genişlik formülü</td><td><code>round(100 / bin_step)</code>: 68.274 rebalance'ın hepsinde doğru. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Tetik</td><td>"Aktif bin aralığın 2+ bin dışına çıkınca": doğru; ek olarak 1 bin uzaklıkta hiç taşımadığını gördük. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Kayma toleransı</td><td>0: 68.274'ün hepsinde. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Başarısızlık</td><td>Rapor v2 için %11–18 diyor; BviQ'de %15,8, hepsi <code>Custom 6004</code>. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Ücretler</td><td>Rebalance 6.000, açılış 11.000 lamport, Jito yok. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Açılış şekli</td><td>Sadece SOL, <code>SpotImBalanced</code>. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Pozisyon ömrü</td><td>Rapor 16–66 dk diyor; BviQ medyan 37 dk. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Kapanış anı</td><td>"Kapanışta aktif bin çoğunlukla aralığa 1 bin uzakta": %60. <span class="chip c-ok">aynı</span></td></tr>
+        <tr><td>Para akışı</td><td>Kasa <code>GcEZ…</code> ve 20 SOL'ün <code>9gbS…</code>'ye çıkışı. <span class="chip c-ok">aynı</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">Doğrulamadıklarımız: kâr rakamları (+224 SOL, BviQ ≈ +40 SOL), ücret/envanter kaybı oranı, giriş tetiği (5 dk hacim > 2× saatlik ortalama), çıkış tetiği (15 dk'da > %10). Bunları ne doğruladık ne çürüttük; giriş ve çıkış tetikleri canlı kayıtla test edilecek.</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">7 · Sırada ne var</div>
+  <h2>Kalan dört soru ve bot</h2>
+  <div class="next">
+    <div class="card"><span class="chip c-ok">çalışıyor</span><h3>Canlı kayıt</h3><p>Sunucuda 7/24: BviQ'nin işlemleri, açık havuzların aktif bin'i ve volatilitesi (2 sn), en hareketli 500 havuz (5 dk). 7 gün sürecek.</p></div>
+    <div class="card"><span class="chip c-open">kayıtla</span><h3>Açık sorular</h3><p>1) Havuz seçimi ve giriş tetiği, 2) çıkış kuralı, 3) lot kademesi (1/2/7 SOL), 4) SOL ek yatırma formülü.</p></div>
+    <div class="card"><span class="chip c-likely">başlıyor</span><h3>Bot (Binflip <code>apps/mm</code>)</h3><p>Kesinleşen mekanik (geometri, tetik, rebalance, kapanışta satış) deneme modunda kodlanacak; seçim kuralı netleşince eklenecek, sonra BviQ ile uyum ölçülecek.</p></div>
+  </div>
+</section>
+
+<footer>
+  Kaynak: Solana mainnet işlemleri (<code>getSignaturesForAddress</code> + <code>getTransaction</code>, Helius ve public RPC), Meteora DLMM IDL (<code>@meteora-ag/dlmm</code>) ile event düzeyinde çözüldü; havuz bilgisi Meteora Data API. Betikler ve ayrıntılı tablo: Binflip reposu, <code>research/ilginc/</code> (<code>FINDINGS.md</code>, <code>analyze.mjs</code>). Kapsam: 2026-11-08 16:59 – 2026-11-25 23:03 UTC. Hazırlanma: 26 Kasım 2026.
+</footer>
+
+</div>
+</body>
+</html>
