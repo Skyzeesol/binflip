@@ -10,7 +10,9 @@ import {
   type DecodedIx,
   type MmRange,
   type RawTransaction,
+  wsUrlFromHttp,
 } from "@binflip/core";
+import { AccountWatcher } from "./accountWatcher.js";
 
 /**
  * mm — İlginç (BviQ) market-making engine, SHADOW mode.
@@ -24,6 +26,9 @@ const TICK_MS = Number(process.env.MM_TICK_MS ?? 2000);
 const TX_POLL_MS = Number(process.env.MM_TX_POLL_MS ?? 3000);
 const OUT_DIR = process.env.MM_OUT_DIR ?? "mm-data";
 const STATS_MS = Number(process.env.MM_STATS_MS ?? 60_000);
+/** Pool reads: WebSocket push (MM_WS=1, default) + this poll as a fallback. */
+const USE_WS = (process.env.MM_WS ?? "1") !== "0";
+const COMMITMENT = (process.env.MM_COMMITMENT ?? "processed") as "processed" | "confirmed";
 
 await runService("mm", async ({ config, log }) => {
   if (config.mode === "live") throw new Error("mm has no live mode yet: run it with DRY_RUN=1 (shadow only)");
@@ -43,7 +48,7 @@ await runService("mm", async ({ config, log }) => {
       const chunk = pools.slice(i, i + 100);
       const res = await rpc.call<{ value: Array<{ data: [string, string] } | null> }>("getMultipleAccounts", [
         chunk,
-        { encoding: "base64", commitment: "confirmed" },
+        { encoding: "base64", commitment: COMMITMENT },
       ]);
       res.value.forEach((acc, j) => {
         if (!acc) return;
@@ -164,24 +169,41 @@ await runService("mm", async ({ config, log }) => {
     })();
   };
 
+  // Push path: every pool change (a swap moving the active bin) runs the engine at once.
+  const watcher = USE_WS
+    ? new AccountWatcher(config.SOLANA_WS_URL ?? wsUrlFromHttp(config.SOLANA_RPC_URL), log, (pool, data) => {
+        try {
+          const s = decodeLbPair(Buffer.from(data, "base64"));
+          binSteps.set(pool, s.binStep);
+          const now = Math.floor(Date.now() / 1000);
+          for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "ws", ...d });
+          lastTickOk = Date.now();
+        } catch (err) {
+          log.debug({ err, pool }, "ws decode failed");
+        }
+      }, COMMITMENT)
+    : null;
+  watcher?.start();
+
   loop("leader", TX_POLL_MS, pollLeader);
   loop("tick", TICK_MS, async () => {
     const pools = book.pools();
+    watcher?.setAddresses(pools);
     if (!pools.length) return;
     const states = await readPools(pools);
     const now = Math.floor(Date.now() / 1000);
     for (const [pool, s] of states) {
-      for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, ...d });
+      for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "poll", ...d });
     }
     lastTickOk = Date.now();
   });
   const statsTimer = setInterval(() => {
-    const s = book.summary();
+    const s = { ...book.summary(), wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
     log.info(s, "shadow stats");
     write("stats", { t: Math.floor(Date.now() / 1000), ...s });
   }, STATS_MS);
 
-  log.info({ leader: LEADER, tickMs: TICK_MS, outDir: OUT_DIR }, "shadow mode: following leader, no transactions are sent");
+  log.info({ leader: LEADER, tickMs: TICK_MS, ws: USE_WS, commitment: COMMITMENT, outDir: OUT_DIR }, "shadow mode: following leader, no transactions are sent");
   return {
     checks: {
       tick: async () => {
@@ -192,6 +214,7 @@ await runService("mm", async ({ config, log }) => {
       () => {
         stopped = true;
         clearInterval(statsTimer);
+        watcher?.close();
       },
     ],
   };

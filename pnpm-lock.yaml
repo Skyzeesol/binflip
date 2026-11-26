@@ -135,6 +135,16 @@ importers:
       '@binflip/core':
         specifier: workspace:*
         version: link:../../packages/core
+      https-proxy-agent:
+        specifier: ^9.1.0
+        version: 9.1.0
+      ws:
+        specifier: ^8.23.0
+        version: 8.23.0(bufferutil@4.2.0)(utf-8-validate@6.1.0)
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
 
   apps/telegram:
     dependencies:

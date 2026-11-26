@@ -10,6 +10,11 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@binflip/core": "workspace:*"
+    "@binflip/core": "workspace:*",
+    "https-proxy-agent": "^9.1.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
   }
 }
