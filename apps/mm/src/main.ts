@@ -67,6 +67,8 @@ await runService("mm", async ({ config, log }) => {
   // ── leader transactions ─────────────────────────────────────────────────────
   let cursor: string | undefined;
   const seen = new Set<string>();
+  const nullTries = new Map<string, number>();
+  const MAX_NULL_TRIES = 10; // ~30 s at the default poll interval
 
   async function handleTx(tx: RawTransaction): Promise<void> {
     if ((tx.meta as { err?: unknown }).err) return;
@@ -126,8 +128,18 @@ await runService("mm", async ({ config, log }) => {
     for (const s of sigs.reverse()) {
       if (!seen.has(s.signature) && !s.err) {
         const tx = await rpc.getTransaction(s.signature); // throws → cursor stays, batch retried
-        if (!tx) return; // not yet visible at this commitment: retry from here next poll
-        await handleTx(tx);
+        if (!tx) {
+          // Not yet visible at this commitment: retry next poll, but never let one
+          // signature block everything newer than it.
+          const n = (nullTries.get(s.signature) ?? 0) + 1;
+          nullTries.set(s.signature, n);
+          if (n < MAX_NULL_TRIES) return;
+          log.warn({ signature: s.signature, tries: n }, "leader tx never resolved; skipping it");
+          write("skipped", { t: Math.floor(Date.now() / 1000), signature: s.signature, tries: n });
+        } else {
+          await handleTx(tx);
+        }
+        nullTries.delete(s.signature);
         seen.add(s.signature);
       }
       cursor = s.signature;

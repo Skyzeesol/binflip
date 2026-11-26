@@ -90,10 +90,20 @@ describe("ShadowBook", () => {
     expect(c.outcome).toBe("not_seen");
   });
 
+  it("a trigger read only AFTER the leader's block does not count as seen", () => {
+    const b = new ShadowBook(3);
+    b.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
+    b.onTick("L", -571, 3); // before the leader: distance 1
+    b.onTick("L", -570, 7); // after the leader's block at t=5
+    const c = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 5, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
+    expect(c.outcome).toBe("not_seen");
+  });
+
   it("we read the trigger distance but did not move → missed (rule gap)", () => {
     const b = new ShadowBook(3); // a stricter engine than the leader
     b.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
     b.onTick("L", -570, 3); // distance 2: our trigger is 3, hold
+    b.onTick("L", -570, 9); // a later read, after the leader's block, must not hide the earlier one
     const c = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 5, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
     expect(c.outcome).toBe("missed");
   });

@@ -16,6 +16,8 @@ export interface ShadowPosition {
   /** Our decisions since the last sync with the leader. */
   pending: Array<{ t: number; active: number; next: MmRange; distance: number }>;
   openedAt: number;
+  /** Block time of the last leader move we re-synced to. */
+  syncedAt?: number;
 }
 
 export type ShadowOutcome =
@@ -54,8 +56,8 @@ export interface ShadowStats {
 
 export class ShadowBook {
   private readonly positions = new Map<string, ShadowPosition>();
-  /** Last active bin we read per pool, to tell a rule gap from a speed gap. */
-  private readonly lastSeen = new Map<string, { t: number; active: number }>();
+  /** Recent active-bin reads per pool (bounded), to tell a rule gap from a speed gap. */
+  private readonly reads = new Map<string, Array<{ t: number; active: number }>>();
   readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [] };
 
   constructor(private readonly trigger?: number) {}
@@ -92,7 +94,10 @@ export class ShadowBook {
   /** A fresh active bin for a pool: run the engine on every shadow position there. */
   onTick(pool: string, active: number, t: number): Array<{ position: string; next: MmRange; distance: number }> {
     const out: Array<{ position: string; next: MmRange; distance: number }> = [];
-    this.lastSeen.set(pool, { t, active });
+    const hist = this.reads.get(pool) ?? [];
+    hist.push({ t, active });
+    if (hist.length > 300) hist.splice(0, hist.length - 300); // ~10 min at 2 s
+    this.reads.set(pool, hist);
     for (const p of this.positions.values()) {
       if (p.pool !== pool) continue;
       const d = mmDecide(p.range, active, p.binStep, this.trigger);
@@ -128,8 +133,12 @@ export class ShadowBook {
     const extra = Math.max(0, p.pending.length - 1);
     let outcome: ShadowOutcome;
     if (!ours) {
-      const seen = this.lastSeen.get(e.pool);
-      const sawTrigger = seen !== undefined && seen.t <= e.t && Math.abs(mmDistance(p.range, seen.active)) >= MM_TRIGGER_BINS; // the leader's trigger
+      // Did any read taken after our last sync and strictly before the leader's block
+      // already show the leader's 2-bin trigger against the range we both held?
+      const since = p.syncedAt ?? p.openedAt;
+      const sawTrigger = (this.reads.get(e.pool) ?? []).some(
+        (r) => r.t >= since && r.t < e.t && Math.abs(mmDistance(e.old, r.active)) >= MM_TRIGGER_BINS,
+      );
       outcome = sawTrigger ? "missed" : "not_seen";
     }
     else if (ours.next.side !== e.next.side) outcome = "wrong_side";
@@ -149,6 +158,7 @@ export class ShadowBook {
 
     p.range = e.next;
     p.pending = [];
+    p.syncedAt = e.t;
     return { t: e.t, position: e.position, pool: e.pool, outcome, leader, ours: ours && { t: ours.t, active: ours.active, next: ours.next }, lagSec, extra };
   }
 
