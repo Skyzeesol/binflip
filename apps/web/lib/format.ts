@@ -18,6 +18,7 @@ export const REASONS: Record<string, string> = {
   strategy_not_copied: "Strateji ayarlarda yok",
   pool_type_not_copied: "Havuz tipi kopyalanmıyor",
   leader_paused: "Lider duraklatıldı",
+  leader_position_gone: "Lider pozisyonu kapatmış; çıkış kapanış olayıyla yapılır",
   kill_switch: "Acil durdurma açık",
   fund_protection: "Zarar limiti doldu",
   unfunded_empty: "Fonlanmadı, kapatıldı",

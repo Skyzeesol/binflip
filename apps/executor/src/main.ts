@@ -10,6 +10,7 @@ import {
   TxSender,
   createConnection,
   planCopy,
+  dammRemoveShare,
   readPassphraseFile,
   runService,
   WSOL_MINT,
@@ -107,7 +108,20 @@ await runService("executor", async ({ config, log }) => {
     // Serial: positions, balances and daily limits must not race.
     { connection, concurrency: 1 },
   );
-  worker.on("failed", (job, err) => log.error({ event: job?.data.leaderEventId, err: err.message }, "event failed"));
+  worker.on("failed", (job, err) => {
+    log.error({ event: job?.data.leaderEventId, attempt: job?.attemptsMade, err: err.message }, "event failed");
+    // Out of retries on a ratio we could not read: nothing was signed, tell the user to look.
+    if (err instanceof RatioReadError || err.name === "RatioReadError") {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+        void db
+          .select({ userId: schema.leaderEvents.userId })
+          .from(schema.leaderEvents)
+          .where(eq(schema.leaderEvents.id, job.data.leaderEventId))
+          .then(([ev]) => ev && notifications.add("notify", { userId: ev.userId, kind: "copy_fail", text: `⚠️ ${err.message}. Lider kısmi çekim yaptı ama oran doğrulanamadı; kopyada hiçbir şey çekilmedi. Pozisyonu panelden kontrol et.` }, { removeOnComplete: 1000 }))
+          .catch(() => undefined);
+      }
+    }
+  });
 
   await ping();
   return {
@@ -146,6 +160,11 @@ async function setupLive(db: Db, config: Config, log: Logger): Promise<Live> {
     agentWalletId: wallet.id,
     publicKey: signer.publicKey,
   };
+}
+
+/** A leader ratio we could not read from chain: retry the event, never guess. */
+class RatioReadError extends Error {
+  override name = "RatioReadError";
 }
 
 async function handleEvent(db: Db, eventId: string, config: Config, live: Live | null, log: Logger) {
@@ -204,10 +223,13 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
   const tokenMintOfPool = pool ? (pool.solIsY ? pool.mintX : pool.mintY) : dammPool ? (dammPool.solIsA ? dammPool.mintB : dammPool.mintA) : null;
 
   // DAMM V2 partial remove → the same share of ours: removed / (left + removed) of the leader's liquidity.
+  // A failed read never counts as "nothing left" (that would turn a 10% remove into 100%): retry the event instead.
+  let dammGone = false;
   if (action.protocol === "damm_v2" && action.kind === "remove" && action.liquidityDelta && action.position) {
-    const left = await dammReader(config).unlockedLiquidity(action.position).catch(() => 0n);
-    const bps = Number((action.liquidityDelta * 10_000n) / (left + action.liquidityDelta));
-    action.removeRanges = [{ minBinId: null, maxBinId: null, bps: Math.max(1, Math.min(10_000, bps)) }];
+    const share = dammRemoveShare(action.liquidityDelta, await dammReader(config).positionLiquidity(action.position));
+    if (share.ok) action.removeRanges = [{ minBinId: null, maxBinId: null, bps: share.bps }];
+    else if (share.reason === "leader_position_gone") dammGone = true;
+    else throw new RatioReadError(`DAMM V2: liderin kalan likiditesi okunamadı (${share.detail ?? "?"}); çekim yapılmadı`);
   }
 
   let plan = planCopy(
@@ -242,6 +264,9 @@ async function handleEvent(db: Db, eventId: string, config: Config, live: Live |
       upperBinId: ours.upperBinId,
     },
   );
+
+  // The leader closed the position after this partial remove: its close event carries our exit.
+  if (dammGone && plan.do !== "skip") plan = { do: "skip", kind: action.kind, reason: "leader_position_gone" };
 
   // LP Agent Security filters: checked before a position is opened.
   if (plan.do === "open" && tokenMintOfPool) {

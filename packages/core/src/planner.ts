@@ -47,6 +47,7 @@ export type SkipReason =
   | "kill_switch"
   | "fund_protection"
   | "leader_paused"
+  | "leader_position_gone"
   | "pool_type_not_copied"
   | "strategy_not_copied"
   | "position_not_copied"

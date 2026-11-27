@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import type { LiquidityRead } from "./dammRemove.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
 import { WSOL_MINT } from "../constants.js";
@@ -182,6 +183,18 @@ export class DammTxBuilder {
   }
 
   /** Unlocked liquidity of any position (used to turn a leader's remove into a share). */
+  /** The position's unlocked liquidity, telling "account gone" apart from a failed read (never guess 0). */
+  async positionLiquidity(position: string): Promise<LiquidityRead> {
+    try {
+      const info = await this.connection.getAccountInfo(new PublicKey(position), "confirmed");
+      if (!info) return { status: "missing" };
+      const pos = await this.cpAmm.fetchPositionState(new PublicKey(position));
+      return { status: "ok", liquidity: BigInt(pos.unlockedLiquidity.toString()) };
+    } catch (err) {
+      return { status: "error", message: (err as Error).message };
+    }
+  }
+
   async unlockedLiquidity(position: string): Promise<bigint> {
     const pos = await this.cpAmm.fetchPositionState(new PublicKey(position));
     return BigInt(pos.unlockedLiquidity.toString());

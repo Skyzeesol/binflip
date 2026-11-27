@@ -21,3 +21,4 @@ export * from "./tokenFilters.js";
 export * from "./leaderStats.js";
 export * from "./meteora/dammTx.js";
 export * from "./password.js";
+export * from "./meteora/dammRemove.js";
