@@ -1,3 +1,4 @@
+import { WSOL_MINT } from "../constants.js";
 import type { LeaderAction } from "./actions.js";
 
 /**
@@ -77,4 +78,15 @@ export function scaleAdds(adds: SignedAdd[], ours: { x: bigint; y: bigint }, lea
   const sx = (v: bigint) => (leader.x > 0n ? (v * ours.x * keep) / (leader.x * 10_000n) : 0n);
   const sy = (v: bigint) => (leader.y > 0n ? (v * ours.y * keep) / (leader.y * 10_000n) : 0n);
   return adds.map((a) => ({ ...a, x0: sx(a.x0), deltaX: sx(a.deltaX), y0: sy(a.y0), deltaY: sy(a.deltaY) }));
+}
+
+/**
+ * The close-and-reopen fallback of a full move (used when the single rebalance_liquidity can't be
+ * built) puts what came out back as SOL below the price and token above it. That only matches pools
+ * where SOL is Y; anywhere else it must stop before the first close, leaving the old position open.
+ */
+export function rebalanceFallbackSupported(p: { mintX: string; mintY: string }): { ok: true } | { ok: false; reason: "rebalance_fallback_sol_x" | "rebalance_fallback_no_sol" } {
+  if (p.mintY === WSOL_MINT) return { ok: true };
+  if (p.mintX === WSOL_MINT) return { ok: false, reason: "rebalance_fallback_sol_x" };
+  return { ok: false, reason: "rebalance_fallback_no_sol" };
 }

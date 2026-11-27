@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LeaderAction } from "./actions.js";
-import { classifyRebalance } from "./rebalance.js";
+import { classifyRebalance, rebalanceFallbackSupported } from "./rebalance.js";
 
 const SOL = 1_000_000_000n;
 const add = { min_delta_id: -10, max_delta_id: 0, x0: 0n, y0: 100n, delta_x: 0n, delta_y: 10n, bit_flag: 0 };
@@ -76,5 +76,15 @@ describe("single-transaction rebalance scaling", () => {
     const [a] = scaleAdds([{ minDeltaId: 1, maxDeltaId: 9, x0: 100n, y0: 0n, deltaX: 10n, deltaY: 0n }], { x: 50n, y: 0n }, { x: 0n, y: 0n });
     expect(a!.x0).toBe(0n);
     expect(a!.deltaX).toBe(0n);
+  });
+});
+
+describe("close-and-reopen fallback direction", () => {
+  const SOL = "So11111111111111111111111111111111111111112";
+  const TOKEN = "Tok1111111111111111111111111111111111111111";
+  it("only SOL = Y pools may close the old position for the fallback", () => {
+    expect(rebalanceFallbackSupported({ mintX: TOKEN, mintY: SOL })).toEqual({ ok: true });
+    expect(rebalanceFallbackSupported({ mintX: SOL, mintY: TOKEN })).toEqual({ ok: false, reason: "rebalance_fallback_sol_x" });
+    expect(rebalanceFallbackSupported({ mintX: TOKEN, mintY: "USDC111111111111111111111111111111111111111" })).toEqual({ ok: false, reason: "rebalance_fallback_no_sol" });
   });
 });

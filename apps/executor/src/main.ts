@@ -11,6 +11,7 @@ import {
   createConnection,
   planCopy,
   dammRemoveShare,
+  rebalanceFallbackSupported,
   readPassphraseFile,
   runService,
   WSOL_MINT,
@@ -590,9 +591,14 @@ async function executeLiveInner(
         // Nothing signed (failed while building or simulating): a full move may fall back to
         // close-and-reopen. Once something was signed, or for a partial move, it is reported, never re-sent.
         if (!plan.full || signed) throw err;
+        // Decide BEFORE anything is closed: the reopen below puts SOL below price and the token above,
+        // which only matches pools where SOL is Y. Elsewhere the old position stays as it is.
+        const check = rebalanceFallbackSupported({ mintX: info.mintX, mintY: info.mintY });
+        if (!check.ok) throw new Error(`${check.reason}: tek işlemlik taşıma yapılamadı ve bu havuz yönünde kapat-yeniden aç desteklenmiyor; eski pozisyon açık bırakıldı (${(err as Error).message.slice(0, 160)})`);
         log.warn({ err: (err as Error).message.slice(0, 300) }, "single-transaction rebalance unavailable, falling back to close-and-reopen");
       }
       const before = await l.builder.positionBins(pool, position);
+      // Pool is SOL = Y (checked above): Y amounts are SOL, X amounts are the token.
       const ourY = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.y, 0)));
       const ourX = BigInt(Math.floor(before.bins.reduce((s, b) => s + b.x, 0)));
       await sendAll(await l.builder.remove({ pool, position, bps: 10_000, close: true }));
