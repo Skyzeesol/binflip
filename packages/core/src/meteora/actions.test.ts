@@ -79,3 +79,24 @@ describe("extractActions on Karınca fixtures", () => {
     }
   });
 });
+
+describe("DLMM per-bin remove_liquidity", () => {
+  it("keeps the bins: consecutive bins with the same bps become one range", () => {
+    const ix = (name: string, args: Record<string, unknown>) => ({
+      kind: "ix" as const,
+      protocol: "dlmm" as const,
+      name,
+      accounts: { position: "Pos1111111111111111111111111111111111111111", lb_pair: "Pool111111111111111111111111111111111111111", sender: "Lead111111111111111111111111111111111111111" },
+      args,
+      topIndex: 0,
+      innerIndex: null,
+    });
+    const removal = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((id) => ({ bin_id: id, bps_to_remove: 10_000 })).concat([{ bin_id: 30, bps_to_remove: 5_000 }]);
+    const [a] = extractActions([ix("remove_liquidity2", { bin_liquidity_removal: removal })] as never);
+    expect(a?.kind).toBe("remove");
+    expect(a?.removeRanges).toEqual([
+      { minBinId: 10, maxBinId: 19, bps: 10_000 },
+      { minBinId: 30, maxBinId: 30, bps: 5_000 },
+    ]);
+  });
+});

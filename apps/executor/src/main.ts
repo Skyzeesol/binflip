@@ -553,8 +553,16 @@ async function executeLiveInner(
           slippagePct,
         }),
       );
-    case "remove":
-      return sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: plan.bps, close: false }));
+    case "remove": {
+      if (!plan.ranges) return sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: plan.bps, close: false }));
+      // Only the bins the leader emptied, each with its own share; ranges where we hold nothing are left alone.
+      const chain = await l.builder.positionBins(pool, ours!.ourPosition!);
+      const held = (r: { fromBinId: number; toBinId: number }) => chain.bins.some((b) => b.id >= r.fromBinId && b.id <= r.toBinId && (b.x > 0 || b.y > 0));
+      for (const r of plan.ranges.filter(held)) {
+        await sendAll(await l.builder.removeRange({ pool, position: ours!.ourPosition!, fromBinId: r.fromBinId, toBinId: r.toBinId, bps: r.bps }));
+      }
+      return ours!.ourPosition!;
+    }
     case "close":
       return sendAll(await l.builder.remove({ pool, position: ours!.ourPosition!, bps: 10_000, close: true }));
     case "claim":
@@ -769,7 +777,9 @@ function describe(label: string, a: LeaderAction, plan: Plan, dryRun: boolean): 
     case "add":
       return `${head} → ${sol(plan.amountSol)} SOL ${verb("eklerdim", "eklendi")} (lider ${sol(leaderSol)} SOL, oran %${(Number(plan.ratioPpm) / 10_000).toFixed(2)})${plan.capped ? `, sınır: ${plan.capped}` : ""}`;
     case "remove":
-      return `${head} → pozisyonun %${plan.bps / 100}'i ${verb("çekilirdi, çıkan token SOL'e çevrilirdi", "çekildi")}`;
+      return plan.ranges
+        ? `${head} → sadece liderin boşalttığı bin'lerden (${plan.ranges.map((r) => `${r.fromBinId}…${r.toBinId} %${r.bps / 100}`).join(", ")}) ${verb("çekilirdi, çıkan token SOL'e çevrilirdi", "çekildi")}`
+        : `${head} → pozisyonun %${plan.bps / 100}'i ${verb("çekilirdi, çıkan token SOL'e çevrilirdi", "çekildi")}`;
     case "close":
       return `${head} → pozisyon ${verb("kapatılırdı, kalan token aynı havuzda SOL'e çevrilirdi", "kapatıldı")}`;
     case "claim":

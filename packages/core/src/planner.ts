@@ -48,6 +48,10 @@ export type SkipReason =
   | "fund_protection"
   | "leader_paused"
   | "leader_position_gone"
+  /** A remove whose bins/share could not be read from the leader's tx: never guessed as 100%. */
+  | "remove_unresolved"
+  /** The leader emptied bins our copy doesn't have. */
+  | "remove_outside_copy"
   | "pool_type_not_copied"
   | "strategy_not_copied"
   | "position_not_copied"
@@ -73,7 +77,11 @@ export type Plan =
   /** swapSol: part of amountSol to swap into the token first, so our deposit has the leader's ratio (LP Agent zap). */
   | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint; tokenFromHold?: bigint }
   | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint; tokenFromHold?: bigint }
-  | { do: "remove"; bps: number }
+  /**
+   * bps applies to the whole position when `ranges` is absent (an explicit full-range remove);
+   * with `ranges`, only those bins are touched, each with its own share.
+   */
+  | { do: "remove"; bps: number; ranges?: Array<{ fromBinId: number; toBinId: number; bps: number }> }
   | { do: "close" }
   | { do: "claim" }
   /** Repeat the leader's full move: same withdrawals, same new range and shape, scaled to us. */
@@ -117,9 +125,7 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
       if (c.reason === "rebalance_partial" || c.reason === "rebalance_take_profit") return { do: "rebalance", full: false };
       return skip(c.reason);
     }
-    const full = a.removeRanges.some((r) => r.bps >= 10_000 && r.minBinId === null);
-    const bps = full ? 10_000 : Math.max(0, ...a.removeRanges.map((r) => r.bps));
-    return { do: "remove", bps: mirrorRemoveBps(bps || 10_000) };
+    return planRemove(a, ours, skip);
   }
 
   // open / add
@@ -185,4 +191,36 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
   const extra = { ...(swapSol > 0n ? { swapSol } : {}), ...(tokenFromHold > 0n ? { tokenFromHold } : {}) };
   if (a.kind === "open") return { do: "open", amountSol, ratioPpm, capped, empty: false, ...extra };
   return { do: "add", amountSol, ratioPpm, capped, firstFunding, ...extra };
+}
+
+/**
+ * A leader remove mirrored on our copy, keeping WHICH bins the leader emptied:
+ * - an unbounded range (remove_all, DAMM V2 share) applies to the whole position;
+ * - bounded ranges stay ranges, clipped to our copy's bins, each with its own bps;
+ * - nothing readable → skip (a remove we can't read is never turned into a full withdraw).
+ */
+function planRemove(a: LeaderAction, ours: OurPosition, skip: (r: SkipReason) => Plan): Plan {
+  const rs = a.removeRanges.filter((r) => r.bps > 0);
+  if (!rs.length) return skip("remove_unresolved");
+  const whole = rs.filter((r) => r.minBinId === null || r.maxBinId === null);
+  if (whole.length) return { do: "remove", bps: mirrorRemoveBps(Math.max(...whole.map((r) => r.bps))) };
+
+  const lo = ours.lowerBinId, hi = ours.upperBinId;
+  const ranges = rs
+    .map((r) => ({ fromBinId: Math.max(r.minBinId!, lo ?? r.minBinId!), toBinId: Math.min(r.maxBinId!, hi ?? r.maxBinId!), bps: mirrorRemoveBps(r.bps) }))
+    .filter((r) => r.fromBinId <= r.toBinId && r.bps > 0)
+    .sort((x, y) => x.fromBinId - y.fromBinId);
+  if (!ranges.length) return skip("remove_outside_copy");
+  // The leader emptied every bin our copy has: the same as an explicit full remove.
+  if (lo !== null && hi !== null && ranges.every((r) => r.bps === 10_000) && covers(ranges, lo, hi)) return { do: "remove", bps: 10_000 };
+  return { do: "remove", bps: Math.max(...ranges.map((r) => r.bps)), ranges };
+}
+
+function covers(ranges: Array<{ fromBinId: number; toBinId: number }>, lo: number, hi: number): boolean {
+  let next = lo;
+  for (const r of ranges) {
+    if (r.fromBinId > next) return false;
+    next = Math.max(next, r.toBinId + 1);
+  }
+  return next > hi;
 }

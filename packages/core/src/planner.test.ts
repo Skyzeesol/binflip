@@ -104,6 +104,36 @@ describe("planCopy", () => {
     expect(planCopy(a, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "remove", bps: 10_000 });
   });
 
+  it("a leader emptying bins 10–19 only touches those bins of a 0–99 copy", () => {
+    const own = ours({ state: "ACTIVE", lowerBinId: 0, upperBinId: 99 });
+    const a = action({ kind: "remove", removeRanges: [{ minBinId: 10, maxBinId: 19, bps: 10_000 }] });
+    expect(planCopy(a, settings(), own)).toEqual({ do: "remove", bps: 10_000, ranges: [{ fromBinId: 10, toBinId: 19, bps: 10_000 }] });
+  });
+
+  it("two ranges keep their own shares; ranges are clipped to our bins", () => {
+    const own = ours({ state: "ACTIVE", lowerBinId: 0, upperBinId: 99 });
+    const a = action({ kind: "remove", removeRanges: [{ minBinId: 60, maxBinId: 120, bps: 2_500 }, { minBinId: -5, maxBinId: 9, bps: 10_000 }] });
+    expect(planCopy(a, settings(), own)).toEqual({
+      do: "remove",
+      bps: 10_000,
+      ranges: [
+        { fromBinId: 0, toBinId: 9, bps: 10_000 },
+        { fromBinId: 60, toBinId: 99, bps: 2_500 },
+      ],
+    });
+  });
+
+  it("a remove we can't read is skipped, never a full withdraw; bins outside our copy are skipped", () => {
+    expect(planCopy(action({ kind: "remove", removeRanges: [] }), settings(), ours({ state: "ACTIVE" }))).toMatchObject({ do: "skip", reason: "remove_unresolved" });
+    const outside = action({ kind: "remove", removeRanges: [{ minBinId: 500, maxBinId: 510, bps: 10_000 }] });
+    expect(planCopy(outside, settings(), ours({ state: "ACTIVE" }))).toMatchObject({ do: "skip", reason: "remove_outside_copy" });
+  });
+
+  it("an explicit unbounded remove (remove_all / DAMM share) applies to the whole position", () => {
+    const a = action({ kind: "remove", removeRanges: [{ minBinId: null, maxBinId: null, bps: 3_000 }] });
+    expect(planCopy(a, settings(), ours({ state: "ACTIVE" }))).toEqual({ do: "remove", bps: 3_000 });
+  });
+
   it("per-tx safety cap and daily limit", () => {
     const capped = planCopy(action({ added: { x: 0n, y: 10n * SOL } }), settings({ maxSolPerTx: SOL }), ours());
     expect(capped).toMatchObject({ do: "add", amountSol: SOL, capped: "max_sol_per_tx" });

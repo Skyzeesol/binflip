@@ -165,7 +165,20 @@ class Builder {
         else this.dammRemove = true;
         break;
       case "remove_liquidity":
+      case "remove_liquidity2":
         if (this.protocol === "damm_v2") this.dammRemove = true;
+        else {
+          // DLMM v1 style: a bps per bin. Consecutive bins with the same bps become one range.
+          const per = ((args.bin_liquidity_removal ?? []) as Array<{ bin_id: number; bps_to_remove: number }>)
+            .map((b) => ({ id: Number(b.bin_id), bps: Number(b.bps_to_remove) }))
+            .filter((b) => b.bps > 0)
+            .sort((a, b) => a.id - b.id);
+          for (const b of per) {
+            const last = this.removeRanges[this.removeRanges.length - 1];
+            if (last && last.maxBinId !== null && last.maxBinId === b.id - 1 && last.bps === b.bps) last.maxBinId = b.id;
+            else this.removeRanges.push({ minBinId: b.id, maxBinId: b.id, bps: b.bps });
+          }
+        }
         break;
       case "rebalance_liquidity": {
         const p = args.params as {
