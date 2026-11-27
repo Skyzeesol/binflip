@@ -6,6 +6,7 @@ import {
   WSOL_MINT,
   decide,
   flipParamsFrom,
+  feesTakenOutLamports,
   readLivePosition,
   shouldCompound,
   compoundRanges,
@@ -268,7 +269,7 @@ export function startManagement(p: {
     const exits: ExitRules = pos.exitRulesSaved
       ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps }
       : { takeProfitBps: null, stopLossBps: null, trailingStopBps: null };
-    const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: 0, peakY: pos.peakValue ? Number(pos.peakValue) * 1e9 : value, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
+    const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: feesTakenOutLamports(pos), peakY: pos.peakValue ? Number(pos.peakValue) * 1e9 : value, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
     if (d.do !== "close") return { skipped: "stale" };
     const [t] = await db.insert(schema.txs).values({ userId: pos.userId, positionId: pos.id, idempotencyKey: key, kind: "close", status: "planned", reason: d.reason, dryRun: false }).onConflictDoNothing().returning();
     if (!t) return { skipped: "duplicate" };

@@ -12,6 +12,7 @@ import {
   decide,
   distribute,
   flipParamsFrom,
+  feesTakenOutLamports,
   mergeBins,
   runService,
   type Bin,
@@ -504,7 +505,7 @@ async function manageDammLive(db: Db, management: Queue<ManagementJob>, log: Log
       await db.update(schema.positions).set({ currentValueSol: String(value / 1e9), peakValue: String(peak / 1e9), lastManagedAt: new Date() }).where(eq(schema.positions.id, pos.id));
       await snapshot(db, pos, value);
       const exits = pos.exitRulesSaved ? { takeProfitBps: pos.takeProfitBps, stopLossBps: pos.stopLossBps, trailingStopBps: pos.trailingStopBps } : { takeProfitBps: null, stopLossBps: null, trailingStopBps: null };
-      const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: 0, peakY: peak, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
+      const d = decide({ bins: [{ id: 0, x: 0, y: value }], activeId: 0, binStep: 1, depositedY: Number(pos.depositedSol), claimedFeesY: feesTakenOutLamports(pos), peakY: peak, entryActiveId: 0, lastFlipActiveId: null, lowerBinId: 0, upperBinId: 0 }, "mirror", exits);
       if (d.do === "close") {
         await management.add("manage", { positionId: pos.id, kind: "close", reason: d.reason, activeId: 0 }, { jobId: `mgmt_${pos.id}_close_damm`, attempts: 5, backoff: { type: "exponential", delay: 5_000 }, removeOnComplete: { age: 86_400 } });
         log.info({ position: pos.id, reason: d.reason }, "damm exit queued");

@@ -9,11 +9,24 @@ export interface LivePositionRow {
   peakValue: string | null;
   entryActiveBinId: number | null;
   lastFlipBinId: number | null;
+  /** Fees claimed so far (SOL, numeric string) and the part of them put back into the position. */
+  claimedFeeSol?: string | null;
+  compoundedFeeSol?: string | null;
 }
 
 /**
- * Read a live position from chain into the engine's model. Unclaimed fees
- * count as value (they are ours); claimed fees are already back in the wallet.
+ * Fees that LEFT the position (claimed to the wallet / sold to SOL), in lamports. They count toward PnL
+ * (the panel counts them too); compounded fees went back in and are already inside the bins' value.
+ */
+export function feesTakenOutLamports(row: Pick<LivePositionRow, "claimedFeeSol" | "compoundedFeeSol">): number {
+  const claimed = Number(row.claimedFeeSol ?? 0);
+  const compounded = Number(row.compoundedFeeSol ?? 0);
+  return Math.max(0, Math.round((claimed - compounded) * 1e9));
+}
+
+/**
+ * Read a live position from chain into the engine's model. Unclaimed fees count as value (they are ours),
+ * and so do fees already claimed out of the position (they are profit of this position, e.g. "always sell").
  * SOL-as-Y pools only (checked by the caller via poolInfo.solIsY).
  */
 export async function readLivePosition(
@@ -36,7 +49,7 @@ export async function readLivePosition(
       activeId: info.activeBinId,
       binStep: info.binStep,
       depositedY: deposited,
-      claimedFeesY: unclaimedY,
+      claimedFeesY: unclaimedY + feesTakenOutLamports(row),
       peakY: peak,
       entryActiveId: row.entryActiveBinId ?? info.activeBinId,
       lastFlipActiveId: row.lastFlipBinId,

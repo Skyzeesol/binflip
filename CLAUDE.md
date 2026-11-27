@@ -584,3 +584,7 @@ Kullanıcı: "Fiyat %10 aşağı düştü flip yaptı, tekrar aynı yerine dönd
 - **Deneme:** `applyFlip` her iki yönü uygular (test: değer korunuyor, dokunulmamış SOL aynı, şekil Bid-Ask, sonrası tekrar flip yapabiliyor).
 - **Canlı:** `flipSteps` artık taraf bilir; geri flip'te çekimden gelen SOL işlemden okunur (lamport farkı + ödenen fee + WSOL farkı), `builder.add` ile aynı bin'lere (şimdiki fiyatın altına kırpılarak) Bid-Ask eklenir. Kesinti/uzlaştırma kuralları aynı. Mainnet simülasyonu: SOL bin'lerinden çekim 74k CU, aynı bin'lere Bid-Ask ekleme 279k CU.
 - Reason `back_flip`; Telegram: "geri flip yapıldı … SOL fiyatın altına ilk şekliyle (Bid-Ask) geri kondu".
+
+## 34. TP claim edilmiş fee'leri görmüyordu (27 Kasım 2026)
+
+Kullanıcı: Telegram'dan açılan pozisyon panelde %13,2 kârdayken (TP %10) kapanmadı. Sebep: `readLivePosition` kâra sadece claim edilmemiş fee'leri katıyordu; "Sürekli SOL'e sat" ile claim edilip satılan fee'ler (`claimed_fee_sol`) sayılmıyordu (manager ~%9,2 görüyordu). Panel ve §19 kuralı onları sayıyor. Düzeltme: `feesTakenOutLamports = claimed_fee_sol − compounded_fee_sol` (compound edilen fee zaten pozisyonun içinde, çift sayılmaz) DLMM canlı kararına, executor'ın yeniden doğrulamasına ve DAMM V2 TP/SL'ine eklendi. Test, kullanıcının değerleriyle (0,5 → 0,5459 + 0,02 claim) TP'nin tetiklendiğini doğruluyor.
