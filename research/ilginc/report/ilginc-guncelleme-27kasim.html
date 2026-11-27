@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>İlginç Analiz Güncellemesi</title>
+<style>
+:root{
+  --bg:#f4f6f7; --surface:#fff; --ink:#14202a; --muted:#5a6a77; --line:#d7dee3; --chip:#e8edf0;
+  --sol:#0e7c74; --sol-soft:#d5ece9; --tok:#b7791f; --tok-soft:#f6e7cc; --gain:#1f8a4c; --loss:#c2410c; --warn:#9a3412; --warn-soft:#fde7dc;
+  --f-body:"Inter",system-ui,sans-serif; --f-mono:"JetBrains Mono","DejaVu Sans Mono",monospace;
+}
+@page{size:A4;margin:14mm 13mm}
+*{box-sizing:border-box}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:13.5px;line-height:1.55}
+.wrap{max-width:900px;margin:0 auto;padding:28px 16px 40px;display:grid;gap:34px}
+h1,h2,h3{margin:0;line-height:1.2;letter-spacing:-.01em}
+h1{font-size:32px;font-weight:700}
+h2{font-size:20px;font-weight:650}
+h3{font-size:14px;font-weight:650}
+p{margin:0;max-width:72ch}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--chip);padding:1px 5px;border-radius:4px}
+.eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+section{display:grid;gap:14px;break-inside:auto}
+.lede{font-size:15px;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:2px}
+.stat b{font-family:var(--f-mono);font-size:24px;font-weight:500}
+.stat span{font-size:12px;color:var(--muted)}
+.chip{display:inline-block;font-family:var(--f-mono);font-size:10px;letter-spacing:.04em;padding:1px 7px;border-radius:99px;vertical-align:1px;white-space:nowrap}
+.c-ok{background:color-mix(in srgb,var(--gain) 16%,transparent);color:var(--gain)}
+.c-likely{background:var(--tok-soft);color:var(--tok)}
+.c-open{background:var(--chip);color:var(--muted)}
+.c-diff{background:var(--warn-soft);color:var(--warn)}
+.figure{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:grid;gap:10px;break-inside:avoid}
+.figure svg{width:100%;height:auto;display:block}
+.cap{font-size:12px;color:var(--muted)}
+svg text{font-family:var(--f-mono);fill:var(--ink)}
+svg .m{fill:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--f-mono);font-weight:500;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+tr{break-inside:avoid}
+.rule{display:grid;grid-template-columns:120px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.rule:last-child{border-bottom:0}
+.rule dt{font-family:var(--f-mono);font-size:12px;color:var(--muted);padding-top:1px}
+.rule dd{margin:0}
+dl{margin:0}
+ul{margin:0;padding-left:18px;display:grid;gap:5px}
+.diff td:first-child{font-weight:600}
+.card{break-inside:avoid;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:5px;align-content:start}
+.card p{font-size:12.5px;color:var(--muted)}
+.next{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+footer{font-size:11.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px}
+.pb{break-before:page}
+@media print{body{background:#fff}.wrap{padding:0}}
+h2{break-after:avoid}.eyebrow{break-after:avoid}
+@media (max-width:640px){.stats,.cols,.next{grid-template-columns:1fr 1fr}.rule{grid-template-columns:1fr}}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+<header style="display:grid;gap:18px">
+  <div class="eyebrow">İlginç (BviQ…v6eU) · güncelleme · 27 Kasım 2026</div>
+  <h1>Giriş, lot ve çıkış: dakikalık veriyle ilk sonuçlar</h1>
+  <p class="lede">İlk raporda botun <b>mekaniğini</b> (genişlik, yerleşim, 2 bin tetiği) çözmüştük. Bu güncelleme üç şeyi anlatıyor: kendi motorumuzun BviQ ile canlıda ne kadar aynı hamleyi yaptığı, <b>ne zaman girdiği</b> ve <b>ne kadar SOL koyduğu</b>; bir de çıkışın neden henüz çözülemediği.</p>
+  <div class="stats">
+    <div class="stat"><b>%85,7</b><span>gölge motorun BviQ ile birebir aynı hamle oranı (406 karşılaştırma)</span></div>
+    <div class="stat"><b>2,9×</b><span>açılış anında 5 dk hacmin saatlik ortalamaya oranı (kontrolde 0,57×)</span></div>
+    <div class="stat"><b>%1,2</b><span>7 SOL'lük açılışlarda son 15 dk fiyat aralığı (1 SOL'de %20)</span></div>
+    <div class="stat"><b>1.340</b><span>dakikalık veriyle incelenen açılış (+1.329 kapanış)</span></div>
+  </div>
+  <p class="mono" style="font-size:11.5px;color:var(--muted)">Etiketler: <span class="chip c-ok">kesin</span> · <span class="chip c-likely">güçlü</span> · <span class="chip c-open">açık</span></p>
+</header>
+
+<section>
+  <div class="eyebrow">1 · Gölge motor</div>
+  <h2>Kurallar aynı; kalan fark hızdan geliyor</h2>
+  <p>Motor (Binflip <code>apps/mm</code>) BviQ'nin açtığı her pozisyonun kopyasını tutuyor, havuz fiyatına göre kendi kararını veriyor ve BviQ'nin gerçek hamlesiyle karşılaştırıyor. Hiç işlem göndermiyor. İlk sürüm havuzu 2 saniyede bir okuyordu; kaçırılan hamlelerin neredeyse hepsi tam tetik noktasındaydı, yani BviQ bizden önce görüyordu. Okumayı WebSocket aboneliğine çevirdik: fiyat değiştiği anda haber geliyor.</p>
+  <div class="figure">
+    <svg viewBox="0 0 860 168" role="img">
+<text x="0" y="24" font-size="12">Birebir aynı hamle</text>
+<rect x="200" y="8" width="412.4" height="10" rx="2" fill="var(--muted)" opacity=".55"/>
+<text x="618.4" y="17" font-size="10" class="m">%69.9</text>
+<rect x="200" y="20" width="505.6" height="10" rx="2" fill="var(--sol)"/>
+<text x="711.6" y="29" font-size="10">%85.7</text>
+<text x="0" y="54" font-size="12">Doğru taraf</text>
+<rect x="200" y="38" width="474.9" height="10" rx="2" fill="var(--muted)" opacity=".55"/>
+<text x="681.0" y="47" font-size="10" class="m">%80.5</text>
+<rect x="200" y="50" width="550.5" height="10" rx="2" fill="var(--sol)"/>
+<text x="756.5" y="59" font-size="10">%93.3</text>
+<text x="0" y="84" font-size="12">Görmeden kaçırma</text>
+<rect x="200" y="68" width="115.0" height="10" rx="2" fill="var(--muted)" opacity=".55"/>
+<text x="321.1" y="77" font-size="10" class="m">%19.5</text>
+<rect x="200" y="80" width="30.7" height="10" rx="2" fill="var(--sol)"/>
+<text x="236.7" y="89" font-size="10">%5.2</text>
+<text x="0" y="114" font-size="12">Yanlış taraf</text>
+<rect x="200" y="98" width="0.0" height="10" rx="2" fill="var(--muted)" opacity=".55"/>
+<text x="206.0" y="107" font-size="10" class="m">%0</text>
+<rect x="200" y="110" width="7.1" height="10" rx="2" fill="var(--sol)"/>
+<text x="213.1" y="119" font-size="10">%1.2</text>
+<text x="0" y="144" font-size="12">Kural farkı (missed)</text>
+<rect x="200" y="128" width="0.0" height="10" rx="2" fill="var(--muted)" opacity=".55"/>
+<text x="206.0" y="137" font-size="10" class="m">%0</text>
+<rect x="200" y="140" width="1.2" height="10" rx="2" fill="var(--sol)"/>
+<text x="207.2" y="149" font-size="10">%0.2</text>
+</svg>
+    <div class="cap"><span style="color:var(--muted)">■</span> 2 sn okuma (272 karşılaştırma) &nbsp; <span style="color:var(--sol)">■</span> WebSocket + "processed" (406 karşılaştırma, ~8 saat). Karar gecikmesi medyan 1 sn → <b>0 sn</b>. "Kural farkı" = tetiği gördüğümüz halde karar vermediğimiz durum; 406'da 1. Geçmiş veride tekrar oynatmada kurallar 23.829 hamlenin hepsini birebir üretmişti.</div>
+  </div>
+  <div class="cols">
+    <div class="card"><h3>Kalan %5 görmeden kaçırma</h3><p>Public RPC'nin WebSocket'i saatte ~37 kez kopuyor; arada 2 sn'lik yedek okuma devreye giriyor. Helius'un WebSocket'ine geçmek bu boşluğu kapatmalı. <span class="chip c-likely">güçlü</span></p></div>
+    <div class="card"><h3>Yeni: %1,2 yanlış taraf</h3><p>En taze ("processed") veriyi okumaya başlayınca çıktı. Aday sebep: bu seviyede görülüp sonradan geri alınan fiyat durumları. Vakalar tek tek incelenecek. <span class="chip c-open">açık</span></p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">2 · Giriş</div>
+  <h2>Hacim ve hareket patlamasının hemen arkasından giriyor</h2>
+  <p>1.340 açılışın her biri için, açılış dakikasından <b>önceki</b> dakikalardan ölçüm yaptık (GeckoTerminal dakikalık mumları). Kontrol: aynı havuzda, açılıştan 2 saat önce, pozisyon yokken. Kutular çeyrekler arası (q25–q75), ince çizgi q10–q90, kalın çizgi medyan.</p>
+  <div class="figure">
+    <h3>Hacim patlaması: son 5 dk hacmi ÷ saatin 5 dk ortalaması</h3>
+    <svg viewBox="0 0 860 128" role="img">
+<line x1="150.0" y1="20" x2="150.0" y2="100" stroke="var(--line)"/>
+<text x="150.0" y="116" text-anchor="middle" font-size="11" class="m">0</text>
+<line x1="206.7" y1="20" x2="206.7" y2="100" stroke="var(--line)"/>
+<text x="206.7" y="116" text-anchor="middle" font-size="11" class="m">1</text>
+<line x1="263.3" y1="20" x2="263.3" y2="100" stroke="var(--line)"/>
+<text x="263.3" y="116" text-anchor="middle" font-size="11" class="m">2</text>
+<line x1="376.7" y1="20" x2="376.7" y2="100" stroke="var(--line)"/>
+<text x="376.7" y="116" text-anchor="middle" font-size="11" class="m">4</text>
+<line x1="490.0" y1="20" x2="490.0" y2="100" stroke="var(--line)"/>
+<text x="490.0" y="116" text-anchor="middle" font-size="11" class="m">6</text>
+<line x1="603.3" y1="20" x2="603.3" y2="100" stroke="var(--line)"/>
+<text x="603.3" y="116" text-anchor="middle" font-size="11" class="m">8</text>
+<line x1="716.7" y1="20" x2="716.7" y2="100" stroke="var(--line)"/>
+<text x="716.7" y="116" text-anchor="middle" font-size="11" class="m">10</text>
+<line x1="830.0" y1="20" x2="830.0" y2="100" stroke="var(--line)"/>
+<text x="830.0" y="116" text-anchor="middle" font-size="11" class="m">12</text>
+<text x="0" y="45" font-size="12">açılış</text>
+<line x1="170.4" y1="40" x2="830.0" y2="40" stroke="var(--sol)" stroke-width="2"/>
+<rect x="202.1" y="30" width="627.9" height="20" rx="3" fill="var(--sol)" opacity=".28" stroke="var(--sol)"/>
+<line x1="314.3" y1="27" x2="314.3" y2="53" stroke="var(--sol)" stroke-width="3"/>
+<text x="320.3" y="25" font-size="11">2.9×</text>
+<text x="0" y="79" font-size="12">kontrol</text>
+<line x1="150.0" y1="74" x2="290.5" y2="74" stroke="var(--muted)" stroke-width="2"/>
+<rect x="155.7" y="64" width="68.0" height="20" rx="3" fill="var(--muted)" opacity=".28" stroke="var(--muted)"/>
+<line x1="182.3" y1="61" x2="182.3" y2="87" stroke="var(--muted)" stroke-width="3"/>
+<text x="188.3" y="59" font-size="11">0.57×</text>
+</svg>
+    <div class="cap">Tavan 12: saatin bütün hacmi son 5 dakikadaysa oran tam 12 çıkıyor. Açılışların dörtte üçünde oran ≥ 0,92; kontrol anlarının dörtte üçünde ≤ 1,3. <span class="chip c-ok">güçlü fark</span></div>
+  </div>
+  <div class="cols">
+    <div class="figure">
+      <h3>Son 5 dk hacim ($, log ölçek)</h3>
+      <svg viewBox="0 0 420 128" role="img">
+<line x1="70.0" y1="20" x2="70.0" y2="100" stroke="var(--line)"/>
+<text x="70.0" y="116" text-anchor="middle" font-size="11" class="m">$1</text>
+<line x1="134.0" y1="20" x2="134.0" y2="100" stroke="var(--line)"/>
+<text x="134.0" y="116" text-anchor="middle" font-size="11" class="m">$10</text>
+<line x1="198.0" y1="20" x2="198.0" y2="100" stroke="var(--line)"/>
+<text x="198.0" y="116" text-anchor="middle" font-size="11" class="m">$100</text>
+<line x1="262.0" y1="20" x2="262.0" y2="100" stroke="var(--line)"/>
+<text x="262.0" y="116" text-anchor="middle" font-size="11" class="m">$1.0k</text>
+<line x1="326.0" y1="20" x2="326.0" y2="100" stroke="var(--line)"/>
+<text x="326.0" y="116" text-anchor="middle" font-size="11" class="m">$10k</text>
+<line x1="390.0" y1="20" x2="390.0" y2="100" stroke="var(--line)"/>
+<text x="390.0" y="116" text-anchor="middle" font-size="11" class="m">$100k</text>
+<text x="0" y="45" font-size="12">açılış</text>
+<line x1="70.0" y1="40" x2="341.6" y2="40" stroke="var(--sol)" stroke-width="2"/>
+<rect x="192.8" y="30" width="119.0" height="20" rx="3" fill="var(--sol)" opacity=".28" stroke="var(--sol)"/>
+<line x1="270.3" y1="27" x2="270.3" y2="53" stroke="var(--sol)" stroke-width="3"/>
+<text x="276.3" y="25" font-size="11">$1.3k</text>
+<text x="0" y="79" font-size="12">kontrol</text>
+<line x1="70.0" y1="74" x2="309.7" y2="74" stroke="var(--muted)" stroke-width="2"/>
+<rect x="70.0" y="64" width="196.8" height="20" rx="3" fill="var(--muted)" opacity=".28" stroke="var(--muted)"/>
+<line x1="203.8" y1="61" x2="203.8" y2="87" stroke="var(--muted)" stroke-width="3"/>
+<text x="209.8" y="59" font-size="11">$123</text>
+</svg>
+      <div class="cap">Açılışta medyan $1.346, kontrolde $123.</div>
+    </div>
+    <div class="figure">
+      <h3>Son 15 dk fiyat aralığı (en yüksek / en düşük)</h3>
+      <svg viewBox="0 0 420 128" role="img">
+<line x1="70.0" y1="20" x2="70.0" y2="100" stroke="var(--line)"/>
+<text x="70.0" y="116" text-anchor="middle" font-size="11" class="m">%0</text>
+<line x1="161.4" y1="20" x2="161.4" y2="100" stroke="var(--line)"/>
+<text x="161.4" y="116" text-anchor="middle" font-size="11" class="m">%20</text>
+<line x1="252.9" y1="20" x2="252.9" y2="100" stroke="var(--line)"/>
+<text x="252.9" y="116" text-anchor="middle" font-size="11" class="m">%40</text>
+<line x1="344.3" y1="20" x2="344.3" y2="100" stroke="var(--line)"/>
+<text x="344.3" y="116" text-anchor="middle" font-size="11" class="m">%60</text>
+<text x="0" y="45" font-size="12">açılış</text>
+<line x1="72.1" y1="40" x2="377.7" y2="40" stroke="var(--sol)" stroke-width="2"/>
+<rect x="79.1" y="30" width="137.9" height="20" rx="3" fill="var(--sol)" opacity=".28" stroke="var(--sol)"/>
+<line x1="123.2" y1="27" x2="123.2" y2="53" stroke="var(--sol)" stroke-width="3"/>
+<text x="129.2" y="25" font-size="11">%11.64</text>
+<text x="0" y="79" font-size="12">kontrol</text>
+<line x1="74.2" y1="74" x2="203.0" y2="74" stroke="var(--muted)" stroke-width="2"/>
+<rect x="84.1" y="64" width="52.1" height="20" rx="3" fill="var(--muted)" opacity=".28" stroke="var(--muted)"/>
+<line x1="103.0" y1="61" x2="103.0" y2="87" stroke="var(--muted)" stroke-width="3"/>
+<text x="109.0" y="59" font-size="11">%7.21</text>
+</svg>
+      <div class="cap">Açılışta medyan %11,6, kontrolde %7,2. Yön önemsiz: 5 dk fiyat değişimi q10/q90 açılışta −%14,5 / +%14,7, kontrolde ±%4,5.</div>
+    </div>
+  </div>
+  <p>Okuma: bot sakin havuza girmiyor; birisi havuzda sert alım ya da satım yaptığında, hacmin ve fiyat hareketinin hemen arkasından giriyor. Bu, piyasa yapıcı mantığıyla uyumlu: hareket olan yerde bin'ler sık geçiliyor, fee birikiyor. <span class="chip c-likely">güçlü</span> Kesin eşik için girmediği havuzlarla karşılaştırma gerekiyor; o veri 26 Kasım'dan beri kaydediliyor. <span class="chip c-open">eşik açık</span></p>
+</section>
+
+<section>
+  <div style="break-inside:avoid;display:grid;gap:14px">
+  <div class="eyebrow">3 · Lot</div>
+  <h2>Sakin tokena büyük, volatil memecoin'e küçük lot</h2>
+  <div class="figure">
+    <h3>Açılış anında son 15 dk fiyat aralığı, lot kademesine göre</h3>
+    <svg viewBox="0 0 860 162" role="img">
+<line x1="150.0" y1="20" x2="150.0" y2="134" stroke="var(--line)"/>
+<text x="150.0" y="150" text-anchor="middle" font-size="11" class="m">%0</text>
+<line x1="247.1" y1="20" x2="247.1" y2="134" stroke="var(--line)"/>
+<text x="247.1" y="150" text-anchor="middle" font-size="11" class="m">%10</text>
+<line x1="344.3" y1="20" x2="344.3" y2="134" stroke="var(--line)"/>
+<text x="344.3" y="150" text-anchor="middle" font-size="11" class="m">%20</text>
+<line x1="441.4" y1="20" x2="441.4" y2="134" stroke="var(--line)"/>
+<text x="441.4" y="150" text-anchor="middle" font-size="11" class="m">%30</text>
+<line x1="538.6" y1="20" x2="538.6" y2="134" stroke="var(--line)"/>
+<text x="538.6" y="150" text-anchor="middle" font-size="11" class="m">%40</text>
+<line x1="635.7" y1="20" x2="635.7" y2="134" stroke="var(--line)"/>
+<text x="635.7" y="150" text-anchor="middle" font-size="11" class="m">%50</text>
+<line x1="732.9" y1="20" x2="732.9" y2="134" stroke="var(--line)"/>
+<text x="732.9" y="150" text-anchor="middle" font-size="11" class="m">%60</text>
+<line x1="830.0" y1="20" x2="830.0" y2="134" stroke="var(--line)"/>
+<text x="830.0" y="150" text-anchor="middle" font-size="11" class="m">%70</text>
+<text x="0" y="45" font-size="12">7 SOL (292)</text>
+<line x1="151.8" y1="40" x2="247.9" y2="40" stroke="var(--sol)" stroke-width="2"/>
+<rect x="154.2" y="30" width="26.1" height="20" rx="3" fill="var(--sol)" opacity=".28" stroke="var(--sol)"/>
+<line x1="161.9" y1="27" x2="161.9" y2="53" stroke="var(--sol)" stroke-width="3"/>
+<text x="167.9" y="25" font-size="11">%1.23</text>
+<text x="0" y="79" font-size="12">2 SOL (191)</text>
+<line x1="156.6" y1="74" x2="830.0" y2="74" stroke="var(--tok)" stroke-width="2"/>
+<rect x="182.2" y="64" width="506.5" height="20" rx="3" fill="var(--tok)" opacity=".28" stroke="var(--tok)"/>
+<line x1="437.3" y1="61" x2="437.3" y2="87" stroke="var(--tok)" stroke-width="3"/>
+<text x="443.3" y="59" font-size="11">%29.57</text>
+<text x="0" y="113" font-size="12">1 SOL (711)</text>
+<line x1="175.0" y1="108" x2="830.0" y2="108" stroke="var(--tok)" stroke-width="2"/>
+<rect x="231.4" y="98" width="283.9" height="20" rx="3" fill="var(--tok)" opacity=".28" stroke="var(--tok)"/>
+<line x1="348.6" y1="95" x2="348.6" y2="121" stroke="var(--tok)" stroke-width="3"/>
+<text x="354.6" y="93" font-size="11">%20.44</text>
+</svg>
+    <div class="cap">7 SOL'lük açılışlar neredeyse hareketsiz havuzlarda (medyan %1,2; 1 saatlik hacim medyanı $123). 1 ve 2 SOL'lük açılışlar volatil havuzlarda (%20 ve %30).</div>
+  </div>
+  </div>
+  <table>
+    <thead><tr><th>Lot</th><th>Açılış</th><th>Ne tür tokenlar (19–25 Kasım örneği)</th></tr></thead>
+    <tbody>
+      <tr><td><b>7 SOL</b></td><td>292</td><td>%84'ü launchpad'siz: likit staking tokenları (strongSOL, xSOL), tokenize hisse/kripto (QNT, LTC, LLY, WLFI). bin_step dağınık (5–300).</td></tr>
+      <tr><td>2 SOL</td><td>191</td><td>Çoğu pump.fun; 1 SOL'e göre daha yüksek hacimli havuzlar (1 saatlik hacim medyanı $27k).</td></tr>
+      <tr><td>1 SOL</td><td>711</td><td>Çoğu pump.fun memecoin'i (1 saatlik hacim medyanı $18,5k).</td></tr>
+    </tbody>
+  </table>
+  <p>Kural adayı: lot, açılış anındaki <b>volatiliteye ters</b> orantılı. Aynı havuz (GMEx, NEURALINK) farklı zamanlarda farklı kademe alabildiği için seçim havuzun tipinden çok o anki duruma bağlı görünüyor. <span class="chip c-likely">güçlü</span> Eşikler (ör. "15 dk aralık %X'in altındaysa 7 SOL") henüz test edilmedi. <span class="chip c-open">açık</span></p>
+</section>
+
+<section>
+  <div class="eyebrow">4 · Çıkış</div>
+  <h2>Fiyat ve hacim çıkışı açıklamıyor</h2>
+  <p>1.329 kapanışı, aynı pozisyonun ortasındaki anla (botun kalmayı seçtiği an) karşılaştırdık. Fark küçük:</p>
+  <div class="cols">
+    <div class="figure">
+      <h3>Hacim patlaması</h3>
+      <svg viewBox="0 0 420 128" role="img">
+<line x1="70.0" y1="20" x2="70.0" y2="100" stroke="var(--line)"/>
+<text x="70.0" y="116" text-anchor="middle" font-size="11" class="m">0</text>
+<line x1="150.0" y1="20" x2="150.0" y2="100" stroke="var(--line)"/>
+<text x="150.0" y="116" text-anchor="middle" font-size="11" class="m">1</text>
+<line x1="230.0" y1="20" x2="230.0" y2="100" stroke="var(--line)"/>
+<text x="230.0" y="116" text-anchor="middle" font-size="11" class="m">2</text>
+<line x1="310.0" y1="20" x2="310.0" y2="100" stroke="var(--line)"/>
+<text x="310.0" y="116" text-anchor="middle" font-size="11" class="m">3</text>
+<line x1="390.0" y1="20" x2="390.0" y2="100" stroke="var(--line)"/>
+<text x="390.0" y="116" text-anchor="middle" font-size="11" class="m">4</text>
+<text x="0" y="45" font-size="12">kapanış</text>
+<line x1="70.0" y1="40" x2="381.2" y2="40" stroke="var(--loss)" stroke-width="2"/>
+<rect x="79.6" y="30" width="108.8" height="20" rx="3" fill="var(--loss)" opacity=".28" stroke="var(--loss)"/>
+<line x1="119.6" y1="27" x2="119.6" y2="53" stroke="var(--loss)" stroke-width="3"/>
+<text x="125.6" y="25" font-size="11">0.62×</text>
+<text x="0" y="79" font-size="12">orta</text>
+<line x1="70.0" y1="74" x2="282.8" y2="74" stroke="var(--muted)" stroke-width="2"/>
+<rect x="70.0" y="64" width="102.4" height="20" rx="3" fill="var(--muted)" opacity=".28" stroke="var(--muted)"/>
+<line x1="106.8" y1="61" x2="106.8" y2="87" stroke="var(--muted)" stroke-width="3"/>
+<text x="112.8" y="59" font-size="11">0.46×</text>
+</svg>
+      <div class="cap">Kapanışta medyan 0,62, ortada 0,46.</div>
+    </div>
+    <div class="figure">
+      <h3>Son 15 dk fiyat aralığı</h3>
+      <svg viewBox="0 0 420 128" role="img">
+<line x1="70.0" y1="20" x2="70.0" y2="100" stroke="var(--line)"/>
+<text x="70.0" y="116" text-anchor="middle" font-size="11" class="m">%0</text>
+<line x1="161.4" y1="20" x2="161.4" y2="100" stroke="var(--line)"/>
+<text x="161.4" y="116" text-anchor="middle" font-size="11" class="m">%20</text>
+<line x1="252.9" y1="20" x2="252.9" y2="100" stroke="var(--line)"/>
+<text x="252.9" y="116" text-anchor="middle" font-size="11" class="m">%40</text>
+<line x1="344.3" y1="20" x2="344.3" y2="100" stroke="var(--line)"/>
+<text x="344.3" y="116" text-anchor="middle" font-size="11" class="m">%60</text>
+<text x="0" y="45" font-size="12">kapanış</text>
+<line x1="83.2" y1="40" x2="390.0" y2="40" stroke="var(--loss)" stroke-width="2"/>
+<rect x="105.2" y="30" width="164.4" height="20" rx="3" fill="var(--loss)" opacity=".28" stroke="var(--loss)"/>
+<line x1="158.1" y1="27" x2="158.1" y2="53" stroke="var(--loss)" stroke-width="3"/>
+<text x="164.1" y="25" font-size="11">%19.27</text>
+<text x="0" y="79" font-size="12">orta</text>
+<line x1="74.8" y1="74" x2="358.9" y2="74" stroke="var(--muted)" stroke-width="2"/>
+<rect x="96.0" y="64" width="138.4" height="20" rx="3" fill="var(--muted)" opacity=".28" stroke="var(--muted)"/>
+<line x1="149.7" y1="61" x2="149.7" y2="87" stroke="var(--muted)" stroke-width="3"/>
+<text x="155.7" y="59" font-size="11">%17.44</text>
+</svg>
+      <div class="cap">Kapanışta medyan %19,3, ortada %17,4.</div>
+    </div>
+  </div>
+  <p>Tutma süresi medyan 56 dk (q25 14 dk, q75 2,3 saat). Pozisyon açıkken fiyat iki yöne de eşit oynuyor (q25/q75 −%5,9 / +%5,9). Yani bot fiyata ya da hacme bakarak çıkmıyor; başka bir şeye bakıyor. <span class="chip c-open">açık</span></p>
+  <div class="cols">
+    <div class="card"><h3>En güçlü aday: pozisyonun kârı/zararı</h3><p>Bot fiyat düşerken token biriktiriyor; envanter kaybı fee'yi geçmeye başlayınca ya da belli bir kâra ulaşınca çıkıyor olabilir. Her pozisyon için yatırılan, çekilen, toplanan fee ve tutulan token değeri hesaplanıp kapanış anlarıyla karşılaştırılacak.</p></div>
+    <div class="card"><h3>Diğer adaylar</h3><p>Fee kazancının yavaşlaması (son N dakikada toplanan fee), havuz TVL'sindeki değişim, başka bir havuzda daha iyi fırsat (sermaye kaydırma). Canlı kaydın olay fotoğrafları ve havuz evreni bunları test etmeye yarayacak.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">5 · Durum ve sıradakiler</div>
+  <h2>Neredeyiz</h2>
+  <div class="figure">
+    <table>
+      <thead><tr><th>Parça</th><th>Durum</th></tr></thead>
+      <tbody>
+        <tr><td>Mekanik (genişlik, yerleşim, tetik, taraf)</td><td><span class="chip c-ok">kesin</span> Geçmişte 23.829/23.829 birebir; canlıda %85,7 birebir, %93,3 doğru taraf.</td></tr>
+        <tr><td>Giriş tetiği</td><td><span class="chip c-likely">güçlü</span> Hacim + hareket patlaması. Eşik açık.</td></tr>
+        <tr><td>Havuz seçimi</td><td><span class="chip c-open">açık</span> Girmediği havuzlarla karşılaştırma; veri birikiyor.</td></tr>
+        <tr><td>Lot kademesi</td><td><span class="chip c-likely">güçlü</span> Volatiliteye ters. Eşik açık.</td></tr>
+        <tr><td>Çıkış</td><td><span class="chip c-open">açık</span> Fiyat/hacim değil; sıradaki aday kâr/zarar.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="next">
+    <div class="card"><span class="chip c-likely">1</span><h3>Pozisyon muhasebesi</h3><p>Her pozisyonun anlık kâr/zararını hesaplayıp çıkış anlarına bakmak.</p></div>
+    <div class="card"><span class="chip c-likely">2</span><h3>Eşikler</h3><p>Giriş ve lot için kesin eşikleri, girdiği ve girmediği havuzları karşılaştırarak bulmak.</p></div>
+    <div class="card"><span class="chip c-likely">3</span><h3>Altyapı</h3><p>Olay fotoğraflarının kapsamını düzeltmek (8 saatte 5, beklenen ~30) ve Helius WebSocket'e geçmek.</p></div>
+  </div>
+</section>
+
+<footer>
+  Kaynak: BviQ'nin 91.004 işlemi (8–25 Kasım), GeckoTerminal 1 dk mumları (323 havuz), canlı gölge motor karşılaştırmaları (26–27 Kasım). Betikler: Binflip reposu <code>research/ilginc/</code> (<code>features.mjs</code>, <code>ohlcv.mjs</code>), motor <code>packages/core/src/mm</code>, <code>apps/mm</code>. Ayrıntılar: <code>FINDINGS.md</code>. Hazırlanma: 27 Kasım 2026.
+</footer>
+
+</div>
+
+</body>
+</html>

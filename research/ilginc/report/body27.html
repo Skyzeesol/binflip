@@ -1,0 +1,124 @@
+<div class="wrap">
+
+<header style="display:grid;gap:18px">
+  <div class="eyebrow">İlginç (BviQ…v6eU) · güncelleme · 27 Kasım 2026</div>
+  <h1>Giriş, lot ve çıkış: dakikalık veriyle ilk sonuçlar</h1>
+  <p class="lede">İlk raporda botun <b>mekaniğini</b> (genişlik, yerleşim, 2 bin tetiği) çözmüştük. Bu güncelleme üç şeyi anlatıyor: kendi motorumuzun BviQ ile canlıda ne kadar aynı hamleyi yaptığı, <b>ne zaman girdiği</b> ve <b>ne kadar SOL koyduğu</b>; bir de çıkışın neden henüz çözülemediği.</p>
+  <div class="stats">
+    <div class="stat"><b>%85,7</b><span>gölge motorun BviQ ile birebir aynı hamle oranı (406 karşılaştırma)</span></div>
+    <div class="stat"><b>2,9×</b><span>açılış anında 5 dk hacmin saatlik ortalamaya oranı (kontrolde 0,57×)</span></div>
+    <div class="stat"><b>%1,2</b><span>7 SOL'lük açılışlarda son 15 dk fiyat aralığı (1 SOL'de %20)</span></div>
+    <div class="stat"><b>1.340</b><span>dakikalık veriyle incelenen açılış (+1.329 kapanış)</span></div>
+  </div>
+  <p class="mono" style="font-size:11.5px;color:var(--muted)">Etiketler: <span class="chip c-ok">kesin</span> · <span class="chip c-likely">güçlü</span> · <span class="chip c-open">açık</span></p>
+</header>
+
+<section>
+  <div class="eyebrow">1 · Gölge motor</div>
+  <h2>Kurallar aynı; kalan fark hızdan geliyor</h2>
+  <p>Motor (Binflip <code>apps/mm</code>) BviQ'nin açtığı her pozisyonun kopyasını tutuyor, havuz fiyatına göre kendi kararını veriyor ve BviQ'nin gerçek hamlesiyle karşılaştırıyor. Hiç işlem göndermiyor. İlk sürüm havuzu 2 saniyede bir okuyordu; kaçırılan hamlelerin neredeyse hepsi tam tetik noktasındaydı, yani BviQ bizden önce görüyordu. Okumayı WebSocket aboneliğine çevirdik: fiyat değiştiği anda haber geliyor.</p>
+  <div class="figure">
+    {{SHADOW}}
+    <div class="cap"><span style="color:var(--muted)">■</span> 2 sn okuma (272 karşılaştırma) &nbsp; <span style="color:var(--sol)">■</span> WebSocket + "processed" (406 karşılaştırma, ~8 saat). Karar gecikmesi medyan 1 sn → <b>0 sn</b>. "Kural farkı" = tetiği gördüğümüz halde karar vermediğimiz durum; 406'da 1. Geçmiş veride tekrar oynatmada kurallar 23.829 hamlenin hepsini birebir üretmişti.</div>
+  </div>
+  <div class="cols">
+    <div class="card"><h3>Kalan %5 görmeden kaçırma</h3><p>Public RPC'nin WebSocket'i saatte ~37 kez kopuyor; arada 2 sn'lik yedek okuma devreye giriyor. Helius'un WebSocket'ine geçmek bu boşluğu kapatmalı. <span class="chip c-likely">güçlü</span></p></div>
+    <div class="card"><h3>Yeni: %1,2 yanlış taraf</h3><p>En taze ("processed") veriyi okumaya başlayınca çıktı. Aday sebep: bu seviyede görülüp sonradan geri alınan fiyat durumları. Vakalar tek tek incelenecek. <span class="chip c-open">açık</span></p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">2 · Giriş</div>
+  <h2>Hacim ve hareket patlamasının hemen arkasından giriyor</h2>
+  <p>1.340 açılışın her biri için, açılış dakikasından <b>önceki</b> dakikalardan ölçüm yaptık (GeckoTerminal dakikalık mumları). Kontrol: aynı havuzda, açılıştan 2 saat önce, pozisyon yokken. Kutular çeyrekler arası (q25–q75), ince çizgi q10–q90, kalın çizgi medyan.</p>
+  <div class="figure">
+    <h3>Hacim patlaması: son 5 dk hacmi ÷ saatin 5 dk ortalaması</h3>
+    {{SPIKE}}
+    <div class="cap">Tavan 12: saatin bütün hacmi son 5 dakikadaysa oran tam 12 çıkıyor. Açılışların dörtte üçünde oran ≥ 0,92; kontrol anlarının dörtte üçünde ≤ 1,3. <span class="chip c-ok">güçlü fark</span></div>
+  </div>
+  <div class="cols">
+    <div class="figure">
+      <h3>Son 5 dk hacim ($, log ölçek)</h3>
+      {{V5}}
+      <div class="cap">Açılışta medyan $1.346, kontrolde $123.</div>
+    </div>
+    <div class="figure">
+      <h3>Son 15 dk fiyat aralığı (en yüksek / en düşük)</h3>
+      {{RNG}}
+      <div class="cap">Açılışta medyan %11,6, kontrolde %7,2. Yön önemsiz: 5 dk fiyat değişimi q10/q90 açılışta −%14,5 / +%14,7, kontrolde ±%4,5.</div>
+    </div>
+  </div>
+  <p>Okuma: bot sakin havuza girmiyor; birisi havuzda sert alım ya da satım yaptığında, hacmin ve fiyat hareketinin hemen arkasından giriyor. Bu, piyasa yapıcı mantığıyla uyumlu: hareket olan yerde bin'ler sık geçiliyor, fee birikiyor. <span class="chip c-likely">güçlü</span> Kesin eşik için girmediği havuzlarla karşılaştırma gerekiyor; o veri 26 Kasım'dan beri kaydediliyor. <span class="chip c-open">eşik açık</span></p>
+</section>
+
+<section>
+  <div style="break-inside:avoid;display:grid;gap:14px">
+  <div class="eyebrow">3 · Lot</div>
+  <h2>Sakin tokena büyük, volatil memecoin'e küçük lot</h2>
+  <div class="figure">
+    <h3>Açılış anında son 15 dk fiyat aralığı, lot kademesine göre</h3>
+    {{LOTRNG}}
+    <div class="cap">7 SOL'lük açılışlar neredeyse hareketsiz havuzlarda (medyan %1,2; 1 saatlik hacim medyanı $123). 1 ve 2 SOL'lük açılışlar volatil havuzlarda (%20 ve %30).</div>
+  </div>
+  </div>
+  <table>
+    <thead><tr><th>Lot</th><th>Açılış</th><th>Ne tür tokenlar (19–25 Kasım örneği)</th></tr></thead>
+    <tbody>
+      <tr><td><b>7 SOL</b></td><td>292</td><td>%84'ü launchpad'siz: likit staking tokenları (strongSOL, xSOL), tokenize hisse/kripto (QNT, LTC, LLY, WLFI). bin_step dağınık (5–300).</td></tr>
+      <tr><td>2 SOL</td><td>191</td><td>Çoğu pump.fun; 1 SOL'e göre daha yüksek hacimli havuzlar (1 saatlik hacim medyanı $27k).</td></tr>
+      <tr><td>1 SOL</td><td>711</td><td>Çoğu pump.fun memecoin'i (1 saatlik hacim medyanı $18,5k).</td></tr>
+    </tbody>
+  </table>
+  <p>Kural adayı: lot, açılış anındaki <b>volatiliteye ters</b> orantılı. Aynı havuz (GMEx, NEURALINK) farklı zamanlarda farklı kademe alabildiği için seçim havuzun tipinden çok o anki duruma bağlı görünüyor. <span class="chip c-likely">güçlü</span> Eşikler (ör. "15 dk aralık %X'in altındaysa 7 SOL") henüz test edilmedi. <span class="chip c-open">açık</span></p>
+</section>
+
+<section>
+  <div class="eyebrow">4 · Çıkış</div>
+  <h2>Fiyat ve hacim çıkışı açıklamıyor</h2>
+  <p>1.329 kapanışı, aynı pozisyonun ortasındaki anla (botun kalmayı seçtiği an) karşılaştırdık. Fark küçük:</p>
+  <div class="cols">
+    <div class="figure">
+      <h3>Hacim patlaması</h3>
+      {{EXITSPIKE}}
+      <div class="cap">Kapanışta medyan 0,62, ortada 0,46.</div>
+    </div>
+    <div class="figure">
+      <h3>Son 15 dk fiyat aralığı</h3>
+      {{EXITRNG}}
+      <div class="cap">Kapanışta medyan %19,3, ortada %17,4.</div>
+    </div>
+  </div>
+  <p>Tutma süresi medyan 56 dk (q25 14 dk, q75 2,3 saat). Pozisyon açıkken fiyat iki yöne de eşit oynuyor (q25/q75 −%5,9 / +%5,9). Yani bot fiyata ya da hacme bakarak çıkmıyor; başka bir şeye bakıyor. <span class="chip c-open">açık</span></p>
+  <div class="cols">
+    <div class="card"><h3>En güçlü aday: pozisyonun kârı/zararı</h3><p>Bot fiyat düşerken token biriktiriyor; envanter kaybı fee'yi geçmeye başlayınca ya da belli bir kâra ulaşınca çıkıyor olabilir. Her pozisyon için yatırılan, çekilen, toplanan fee ve tutulan token değeri hesaplanıp kapanış anlarıyla karşılaştırılacak.</p></div>
+    <div class="card"><h3>Diğer adaylar</h3><p>Fee kazancının yavaşlaması (son N dakikada toplanan fee), havuz TVL'sindeki değişim, başka bir havuzda daha iyi fırsat (sermaye kaydırma). Canlı kaydın olay fotoğrafları ve havuz evreni bunları test etmeye yarayacak.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">5 · Durum ve sıradakiler</div>
+  <h2>Neredeyiz</h2>
+  <div class="figure">
+    <table>
+      <thead><tr><th>Parça</th><th>Durum</th></tr></thead>
+      <tbody>
+        <tr><td>Mekanik (genişlik, yerleşim, tetik, taraf)</td><td><span class="chip c-ok">kesin</span> Geçmişte 23.829/23.829 birebir; canlıda %85,7 birebir, %93,3 doğru taraf.</td></tr>
+        <tr><td>Giriş tetiği</td><td><span class="chip c-likely">güçlü</span> Hacim + hareket patlaması. Eşik açık.</td></tr>
+        <tr><td>Havuz seçimi</td><td><span class="chip c-open">açık</span> Girmediği havuzlarla karşılaştırma; veri birikiyor.</td></tr>
+        <tr><td>Lot kademesi</td><td><span class="chip c-likely">güçlü</span> Volatiliteye ters. Eşik açık.</td></tr>
+        <tr><td>Çıkış</td><td><span class="chip c-open">açık</span> Fiyat/hacim değil; sıradaki aday kâr/zarar.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="next">
+    <div class="card"><span class="chip c-likely">1</span><h3>Pozisyon muhasebesi</h3><p>Her pozisyonun anlık kâr/zararını hesaplayıp çıkış anlarına bakmak.</p></div>
+    <div class="card"><span class="chip c-likely">2</span><h3>Eşikler</h3><p>Giriş ve lot için kesin eşikleri, girdiği ve girmediği havuzları karşılaştırarak bulmak.</p></div>
+    <div class="card"><span class="chip c-likely">3</span><h3>Altyapı</h3><p>Olay fotoğraflarının kapsamını düzeltmek (8 saatte 5, beklenen ~30) ve Helius WebSocket'e geçmek.</p></div>
+  </div>
+</section>
+
+<footer>
+  Kaynak: BviQ'nin 91.004 işlemi (8–25 Kasım), GeckoTerminal 1 dk mumları (323 havuz), canlı gölge motor karşılaştırmaları (26–27 Kasım). Betikler: Binflip reposu <code>research/ilginc/</code> (<code>features.mjs</code>, <code>ohlcv.mjs</code>), motor <code>packages/core/src/mm</code>, <code>apps/mm</code>. Ayrıntılar: <code>FINDINGS.md</code>. Hazırlanma: 27 Kasım 2026.
+</footer>
+
+</div>
