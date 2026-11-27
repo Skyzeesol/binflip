@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bucketOf, history, positionMetrics, rangeVsPrice, summarize } from "./portfolioMath.js";
+import { bucketOf, history, positionMetrics, rangeVsPrice, summarize, accountTotals } from "./portfolioMath.js";
 
 describe("portfolio math (LP Agent definitions)", () => {
   const now = new Date("2026-11-23T12:00:00Z");
@@ -59,5 +59,17 @@ describe("portfolio math (LP Agent definitions)", () => {
     expect(r.upperPct).toBeCloseTo(1);
     expect(rangeVsPrice(-68, -10, 0, 100)!.inRange).toBe(false);
     expect(rangeVsPrice(null, 0, 0, 100)).toBeNull();
+  });
+});
+
+describe("account totals", () => {
+  it("dry-run positions never count towards the live net worth", () => {
+    const t = accountTotals({ sol: 2, tokensValue: 0, positions: [{ value: 3, dryRun: true }] });
+    expect(t).toMatchObject({ netWorth: 2, positionsValue: 0, dryRunValue: 3, complete: true });
+    const t2 = accountTotals({ sol: 2, tokensValue: 0, positions: [{ value: 3, dryRun: true }, { value: 1, dryRun: false }] });
+    expect(t2.netWorth).toBe(3);
+  });
+  it("no wallet balance = no net worth (never positions alone)", () => {
+    expect(accountTotals({ sol: null, tokensValue: 0, positions: [{ value: 1, dryRun: false }] })).toMatchObject({ netWorth: null, complete: false, positionsValue: 1 });
   });
 });

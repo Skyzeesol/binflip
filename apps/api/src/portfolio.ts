@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Queue } from "bullmq";
 import { NOTIFICATION_KINDS, QUEUES, TokenInfoClient, WSOL_MINT, type Config, type ManagementJob, type TokenInfo, type WithdrawJob } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
-import { history, positionMetrics, rangeVsPrice, summarize, type Group } from "./portfolioMath.js";
+import { history, positionMetrics, rangeVsPrice, summarize, type Group, accountTotals } from "./portfolioMath.js";
 
 type Pos = typeof schema.positions.$inferSelect;
 
@@ -310,13 +310,16 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
 
   app.get("/v1/prices/sol", async () => ({ usd: await solUsd() }));
 
+  // Last complete total per user, shown (with its time) when the wallet can't be read.
+  const lastGood = new Map<string, { netWorth: number; at: string }>();
   app.get("/v1/account", async (req) => {
     const [w] = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.userId, req.userId!));
     const open = await db.select().from(schema.positions).where(and(eq(schema.positions.userId, req.userId!), inArray(schema.positions.state, ["OPENING", "ACTIVE", "FLIPPING", "CLOSING", "HOLDING"])));
-    const positionsValue = open.reduce((s, p) => s + (n(p.currentValueSol) ?? 0), 0);
+    const positions = open.map((p) => ({ value: n(p.currentValueSol), dryRun: p.dryRun }));
     const usd = await solUsd();
-    const base = { wallet: w?.publicKey ?? null, mainWallet: config.SWEEP_TO_ADDRESS ?? null, solUsd: usd, positionsValue, mode: config.mode };
-    if (!w) return { ...base, sol: null, tokens: [], tokensValue: 0, netWorth: positionsValue };
+    const { positionsValue, dryRunValue } = accountTotals({ sol: null, tokensValue: 0, positions });
+    const base = { wallet: w?.publicKey ?? null, mainWallet: config.SWEEP_TO_ADDRESS ?? null, solUsd: usd, positionsValue, dryRunValue, mode: config.mode };
+    if (!w) return { ...base, sol: null, tokens: [], tokensValue: 0, netWorth: null, complete: false, error: "Bot cüzdanı yok" };
     try {
       const bal = await rpc<{ value: number }>("getBalance", [w.publicKey, { commitment: "confirmed" }]);
       const accounts = (
@@ -339,11 +342,15 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
       });
       const sol = bal.value / 1e9;
       const tokensValue = list.reduce((s, t) => s + (t.valueSol ?? 0), 0);
-      // LP Agent: Total Net Worth = tokens held + open positions + unclaimed fees (+ rent, inside position value).
+      // LP Agent: Total Net Worth = tokens held + open (live) positions + unclaimed fees (+ rent, inside position value).
+      const t = accountTotals({ sol, tokensValue, positions });
+      const at = new Date().toISOString();
+      lastGood.set(req.userId!, { netWorth: t.netWorth!, at });
       const emptyAccounts = accounts.length - held.length;
-      return { ...base, sol, tokens: list, tokensValue, netWorth: sol + tokensValue + positionsValue, emptyAccounts, claimableSol: emptyAccounts * 0.00203928 };
+      return { ...base, sol, tokens: list, tokensValue, netWorth: t.netWorth, complete: true, at, emptyAccounts, claimableSol: emptyAccounts * 0.00203928 };
     } catch (err) {
-      return { ...base, sol: null, tokens: [], tokensValue: 0, netWorth: positionsValue, error: (err as Error).message };
+      // Never present positions alone as the net worth: say the balance is missing, offer the last complete one.
+      return { ...base, sol: null, tokens: [], tokensValue: 0, netWorth: null, complete: false, lastGood: lastGood.get(req.userId!) ?? null, error: (err as Error).message };
     }
   });
 

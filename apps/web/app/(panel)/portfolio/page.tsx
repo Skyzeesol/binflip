@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Account, PfPosition, Portfolio } from "@/lib/types";
-import { Amount, tone } from "@/components/Num";
+import { Amount, NetWorth, tone } from "@/components/Num";
 import { FeeHistory, type Group, type Metric, type Proto, type Range } from "@/components/portfolio/FeeHistory";
 import { EMPTY_FILTER, HistoricalPositions, OpenPositions, type HistFilter, type RowActions } from "@/components/portfolio/Positions";
 import { ActionDialog, ExitsDialog, PositionDrawer, type ActionKind } from "@/components/portfolio/Dialogs";
@@ -120,7 +120,8 @@ export default function PortfolioPage() {
         <div className="pf-metrics">
           <div className="pf-networth">
             <div className="kpi-label" title="Cüzdandaki SOL + token'lar + açık pozisyonlar + bekleyen fee'ler">NET WORTH</div>
-            <div className="kpi-big"><Amount sol={acc?.netWorth ?? null} d={2} /></div>
+            <div className="kpi-big"><NetWorth acc={acc} /></div>
+            {!!acc?.dryRunValue && <div className="small muted">+ <Amount sol={acc.dryRunValue} d={2} /> dry run (sayılmaz)</div>}
           </div>
           <Kpi label="CLOSED" v={s ? String(s.totalClosed) : "—"} />
           <Kpi label="WIN RATE" v={s?.winRate === null || !s ? "—" : `${s.winRate.toFixed(2)}%`} cls={s?.winRate != null ? (s.winRate >= 50 ? "pos" : "neg") : ""} />

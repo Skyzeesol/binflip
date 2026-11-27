@@ -106,3 +106,15 @@ export function rangeVsPrice(lower: number | null, upper: number | null, active:
     bins: upper - lower + 1,
   };
 }
+
+/**
+ * Account totals for the panel. Only LIVE open positions count towards the wallet's net worth;
+ * dry-run (simulated) positions are reported apart. Without a wallet balance (RPC failed) there is
+ * no net worth: the caller shows the last good one with its time, or "Bakiye alınamadı".
+ */
+export function accountTotals(p: { sol: number | null; tokensValue: number; positions: Array<{ value: number | null; dryRun: boolean }> }) {
+  const positionsValue = p.positions.filter((x) => !x.dryRun).reduce((s, x) => s + (x.value ?? 0), 0);
+  const dryRunValue = p.positions.filter((x) => x.dryRun).reduce((s, x) => s + (x.value ?? 0), 0);
+  const complete = p.sol !== null;
+  return { positionsValue, dryRunValue, complete, netWorth: complete ? p.sol! + p.tokensValue + positionsValue : null };
+}

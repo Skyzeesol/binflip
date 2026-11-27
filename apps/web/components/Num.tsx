@@ -58,3 +58,21 @@ export function age(ms: number | null): string {
   const h = ms / 3_600_000;
   return h < 48 ? `${h.toFixed(2)}h` : `${(h / 24).toFixed(1)}d`;
 }
+
+/**
+ * Net worth that is honest about a failed wallet read: the current total, else the last complete one
+ * with its time, else "Bakiye alınamadı". Never the positions alone.
+ */
+export function NetWorth({ acc, d = 2 }: { acc: { netWorth: number | null; lastGood?: { netWorth: number; at: string } | null; error?: string } | null; d?: number }) {
+  if (!acc) return <Amount sol={null} d={d} />;
+  if (acc.netWorth !== null) return <Amount sol={acc.netWorth} d={d} />;
+  if (acc.lastGood) {
+    const t = new Date(acc.lastGood.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
+    return (
+      <span title={`Cüzdan şu an okunamadı (${acc.error ?? "RPC"}); ${t} itibarıyla son tam değer`}>
+        <Amount sol={acc.lastGood.netWorth} d={d} /> <span className="small muted">({t} itibarıyla)</span>
+      </span>
+    );
+  }
+  return <span className="neg small" title={acc.error}>Bakiye alınamadı</span>;
+}

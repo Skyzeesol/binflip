@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, post } from "@/lib/api";
 import type { Account, Me } from "@/lib/types";
-import { Amount } from "@/components/Num";
+import { Amount, NetWorth } from "@/components/Num";
 import { short } from "@/lib/format";
 
 /**
@@ -62,7 +62,7 @@ export function AccountPanel({ me, onLogout }: { me: Me; onLogout: () => void })
             <span className="muted">SOL</span><b><Amount sol={acc?.sol ?? null} /></b>
             <span className="muted">Tokens</span><b><Amount sol={acc?.tokensValue ?? null} /></b>
             <span className="muted">Positions</span><b><Amount sol={acc?.positionsValue ?? null} /></b>
-            <span className="muted">Net worth</span><b><Amount sol={acc?.netWorth ?? null} /></b>
+            <span className="muted">Net worth</span><b><NetWorth acc={acc} d={4} /></b>
           </div>
           {!!acc?.tokens.length && (
             <div className="acct-tokens">

@@ -178,7 +178,14 @@ export interface Account {
   sol: number | null;
   tokens: Array<{ mint: string; symbol: string | null; icon: string | null; amount: number; valueSol: number | null }>;
   tokensValue: number;
-  netWorth: number;
+  /** null when the wallet balance could not be read: never positions alone. */
+  netWorth: number | null;
+  complete?: boolean;
+  at?: string;
+  /** Last complete total, shown with its time when this read failed. */
+  lastGood?: { netWorth: number; at: string } | null;
+  /** Simulated (dry-run) positions, never part of the net worth. */
+  dryRunValue?: number;
   emptyAccounts?: number;
   claimableSol?: number;
   error?: string;

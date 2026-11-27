@@ -76,7 +76,7 @@ export function registerDiscover(app: FastifyInstance<any, any, any, any>, db: D
     const q = SmartQuery.parse(req.query);
     const w = schema.smartWallets;
     // LP Agent sizes the list to you: total profit up to 5× your net worth, never less than 20 SOL.
-    const open = await db.select({ v: schema.positions.currentValueSol }).from(schema.positions).where(and(eq(schema.positions.userId, req.userId!), inArray(schema.positions.state, ["ACTIVE", "OPENING", "FLIPPING", "HOLDING"])));
+    const open = await db.select({ v: schema.positions.currentValueSol }).from(schema.positions).where(and(eq(schema.positions.userId, req.userId!), eq(schema.positions.dryRun, false), inArray(schema.positions.state, ["ACTIVE", "OPENING", "FLIPPING", "HOLDING"])));
     const [agent] = await db.select().from(schema.agentWallets).where(eq(schema.agentWallets.userId, req.userId!));
     const bal = agent ? await balance(config.SOLANA_RPC_URL, agent.publicKey).catch(() => 0) : 0;
     const netWorth = open.reduce((s, r) => s + Number(r.v ?? 0), 0) + bal;
