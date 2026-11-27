@@ -24,7 +24,15 @@ export interface FlipProgress {
   signatures: string[];
   remove?: StepRecord;
   add?: StepRecord;
-  withdraw?: { from: number; to: number };
+  /** What the remove takes out: token (x, down flips) or SOL (y, back flip), and where it goes back in. */
+  withdraw?: FlipTarget;
+}
+
+export interface FlipTarget {
+  from: number;
+  to: number;
+  side?: "x" | "y";
+  ask?: { from: number; to: number };
 }
 
 export type StepOutcome = "landed" | "not_landed" | "uncertain" | "partial";
@@ -51,12 +59,12 @@ export interface FlipDeps {
   /** Persist progress (txs.plan). */
   save(p: FlipProgress): Promise<void>;
   statuses(sigs: string[]): Promise<SigStatus[]>;
-  /** Raw token our wallet received (positive) or spent (negative) in these confirmed transactions. */
-  tokenDelta(sigs: string[]): Promise<bigint>;
-  /** Is the flip still wanted at the current price? Asked only before a (new) remove. Returns the bins to withdraw. */
-  decide(): Promise<{ from: number; to: number } | null>;
-  buildRemove(w: { from: number; to: number }): Promise<BuiltLike>;
-  buildAdd(received: bigint, w: { from: number; to: number } | undefined): Promise<BuiltLike>;
+  /** What our wallet received in these confirmed txs: raw token (side x) or SOL lamports (side y). */
+  tokenDelta(sigs: string[], side: "x" | "y"): Promise<bigint>;
+  /** Is the flip still wanted at the current price? Asked only before a (new) remove. Returns what to withdraw. */
+  decide(): Promise<FlipTarget | null>;
+  buildRemove(w: FlipTarget): Promise<BuiltLike>;
+  buildAdd(received: bigint, w: FlipTarget | undefined): Promise<BuiltLike>;
   send(tx: unknown, extra: unknown[], onSignature: (sig: string) => Promise<void>): Promise<void>;
   now(): number;
 }
@@ -85,7 +93,7 @@ export async function runFlip(progress: FlipProgress, deps: FlipDeps): Promise<F
       if (o === "uncertain") return { waiting: "remove" };
       if (o === "partial") return { review: "Flip çekiminin bir kısmı zincire geçti, bir kısmı geçmedi" };
       if (o === "landed") {
-        progress.received = (await deps.tokenDelta(progress.remove.sigs)).toString();
+        progress.received = (await deps.tokenDelta(progress.remove.sigs, progress.withdraw?.side ?? "x")).toString();
         progress.stage = "removed";
         await deps.save(progress);
       } else delete progress.remove; // nothing happened: decide again below
@@ -95,7 +103,7 @@ export async function runFlip(progress: FlipProgress, deps: FlipDeps): Promise<F
       if (!w) return { skipped: "stale" };
       progress.withdraw = w;
       await sendStep("remove", await deps.buildRemove(w));
-      progress.received = (await deps.tokenDelta(progress.remove!.sigs)).toString();
+      progress.received = (await deps.tokenDelta(progress.remove!.sigs, w.side ?? "x")).toString();
       progress.stage = "removed";
       await deps.save(progress);
     }

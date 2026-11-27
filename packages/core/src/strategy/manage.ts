@@ -67,11 +67,20 @@ export type Decision =
   | { do: "close"; reason: "take_profit" | "stop_loss" | "trailing_stop"; pnlBps: number; valueY: number }
   | {
       do: "flip";
-      kind: "staged" | "bottom";
-      /** Bins to withdraw (token-only bins). */
+      /**
+       * staged / bottom: the price fell; token-only bins move ABOVE the price (side x).
+       * back: the price came back up to where the last flip started; the SOL those asks turned into
+       *       goes back BELOW the price in the same bins, in the original bid-ask shape (side y).
+       */
+      kind: "staged" | "bottom" | "back";
+      /** x = token moves (down flips), y = SOL moves (back flip). */
+      side: "x" | "y";
+      /** Bins to withdraw (token-only bins for x, SOL-only bins for y). */
       withdraw: { from: number; to: number };
       tokenAmount: number;
-      /** Where the token goes back in, above price. */
+      /** SOL (lamports) a back flip moves. */
+      solAmount?: number;
+      /** Where it goes back in: above price for x, below price for y. */
       ask: { from: number; to: number; shape: Shape };
       dropBps: number;
       pnlBps: number;
@@ -109,6 +118,32 @@ export function decide(s: ManagedPosition, mode: ManagementMode, exits: ExitRule
     }
   }
 
+  // Back flip (both flip modes): the price rose again by the same threshold from the last flip, i.e. it is back
+  // where that flip started. The asks it passed are SOL again; put that SOL back below the price in the
+  // original shape, so the position looks like before the flip and can flip down again.
+  if ((mode === "staged_flip" || mode === "bottom_flip") && s.lastFlipActiveId !== null) {
+    const needed = binsForDrop(flip.thresholdBps, s.binStep);
+    if (s.activeId - s.lastFlipActiveId >= needed) {
+      const solBins = s.bins.filter((b) => b.id > s.lastFlipActiveId! && b.id < s.activeId && b.y > 0 && b.x === 0);
+      if (solBins.length) {
+        const from = solBins[0]!.id;
+        const to = solBins[solBins.length - 1]!.id;
+        return {
+          do: "flip",
+          kind: "back",
+          side: "y",
+          withdraw: { from, to },
+          tokenAmount: 0,
+          solAmount: solBins.reduce((sum, b) => sum + b.y, 0),
+          ask: { from, to, shape: "bid_ask" },
+          dropBps: Math.round((Math.pow(1 + s.binStep / 10_000, s.activeId - s.lastFlipActiveId) - 1) * 10_000),
+          pnlBps: pnl,
+          valueY,
+        };
+      }
+    }
+  }
+
   if (mode === "bottom_flip" && s.activeId < s.lowerBinId) {
     // Out of range below: everything is token. Withdraw all, re-add above with 0 spread.
     const tokenBins = s.bins.filter((b) => b.x > 0);
@@ -132,6 +167,7 @@ function flipDecision(kind: "staged" | "bottom", s: ManagedPosition, tokenBins: 
   return {
     do: "flip",
     kind,
+    side: "x",
     withdraw: { from, to },
     tokenAmount: tokenBins.reduce((sum, b) => sum + b.x, 0),
     // 0 spread: start right above the active bin and go up.
@@ -144,10 +180,15 @@ function flipDecision(kind: "staged" | "bottom", s: ManagedPosition, tokenBins: 
 
 /** Apply a flip to a virtual position (dry-run and simulations). SOL bins below are untouched. */
 export function applyFlip(s: ManagedPosition, d: Extract<Decision, { do: "flip" }>): ManagedPosition {
+  const inRange = (b: Bin) => b.id >= d.withdraw.from && b.id <= d.withdraw.to;
   const withdrawn = (b: Bin) =>
-    d.kind === "bottom" ? b.x > 0 : b.id >= d.withdraw.from && b.id <= d.withdraw.to && b.x > 0 && b.y === 0;
+    d.kind === "bottom" ? b.x > 0 : d.kind === "back" ? inRange(b) && b.y > 0 && b.x === 0 : inRange(b) && b.x > 0 && b.y === 0;
   const remaining = s.bins.filter((b) => !withdrawn(b));
-  const ask = distribute(d.tokenAmount, d.ask.from, d.ask.to, d.ask.shape, "x", d.ask.from);
+  // Back flip: SOL below the price, more of it far from the price (bid-ask, near = the active bin).
+  const ask =
+    d.side === "y"
+      ? distribute(d.solAmount ?? 0, d.ask.from, d.ask.to, d.ask.shape, "y", s.activeId)
+      : distribute(d.tokenAmount, d.ask.from, d.ask.to, d.ask.shape, "x", d.ask.from);
   const bins = mergeBins(remaining, ask);
   return {
     ...s,

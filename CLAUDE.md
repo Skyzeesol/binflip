@@ -576,3 +576,11 @@ GitHub erişimi verilen bir geliştiricinin 9 maddelik raporu; hepsi kodda doğr
 6–7. **Net varlık:** sadece canlı pozisyonlar (`accountTotals`; deneme değeri ayrı, Smart LP boyutlamasında da). Cüzdan okunamazsa `netWorth: null` + son tam değer ve saati; panel "Bakiye alınamadı" ya da "(HH:MM itibarıyla)".
 8. **Bilinmeyen PnL:** `history` sadece bilinen değerleri toplar, `missing` sayar; hepsi eksikse `value: null` → grafikte kesikli kutu, takvimde "Veri eksik".
 9. **Fee geçmişi** etiketi "FEES OF CLOSED POSITIONS" + açıklama (fee kapanış gününe yazılır). Günlük claim görünümü eklenmedi.
+
+## 33. Geri flip (27 Kasım 2026)
+
+Kullanıcı: "Fiyat %10 aşağı düştü flip yaptı, tekrar aynı yerine döndüğünde yeniden flip yapıp ilk haline dönmesi lazım."
+- **Karar** (`decide`, Kademeli flip ve Dipte flip): `lastFlipActiveId` varken fiyat ondan aynı eşik kadar (aynı bin sayısı, `binsForDrop`) yükselirse ve son flip seviyesi ile aktif bin arasında tamamen SOL'e dönmüş bin'ler varsa → `{ do: "flip", kind: "back", side: "y" }`. Bu SOL bin'leri çekilir, aynı bin'lere fiyatın altına **Bid-Ask** (fiyattan uzakta daha çok) olarak geri konur; `lastFlipActiveId` = şimdiki seviye, sonraki %10 düşüş yine normal flip (ping-pong). Swap yok. Aşağı flip'lerde `side: "x"`.
+- **Deneme:** `applyFlip` her iki yönü uygular (test: değer korunuyor, dokunulmamış SOL aynı, şekil Bid-Ask, sonrası tekrar flip yapabiliyor).
+- **Canlı:** `flipSteps` artık taraf bilir; geri flip'te çekimden gelen SOL işlemden okunur (lamport farkı + ödenen fee + WSOL farkı), `builder.add` ile aynı bin'lere (şimdiki fiyatın altına kırpılarak) Bid-Ask eklenir. Kesinti/uzlaştırma kuralları aynı. Mainnet simülasyonu: SOL bin'lerinden çekim 74k CU, aynı bin'lere Bid-Ask ekleme 279k CU.
+- Reason `back_flip`; Telegram: "geri flip yapıldı … SOL fiyatın altına ilk şekliyle (Bid-Ask) geri kondu".

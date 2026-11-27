@@ -283,6 +283,9 @@ const shapeOf = (s: string | null): Shape => (s === "spot" || s === "curve" || s
 const reasonTr = (r: string) => ({ take_profit: "TP", stop_loss: "SL", trailing_stop: "trailing stop" })[r] ?? r;
 
 function describeFlip(label: string, pool: string, d: Extract<Decision, { do: "flip" }>, thresholdBps: number) {
+  if (d.kind === "back") {
+    return `[DENEME] ${label}: geri flip ${pool.slice(0, 6)}… → fiyat son flip'ten %${(d.dropBps / 100).toFixed(1)} yükseldi (flip öncesi seviye); ${d.withdraw.from}..${d.withdraw.to} bin'lerine dönen SOL çekilip aynı bin'lere fiyatın altına Bid-Ask (ilk şekil) olarak konurdu. PnL %${(d.pnlBps / 100).toFixed(2)}`;
+  }
   const kind = d.kind === "staged" ? `kademeli flip (eşik %${thresholdBps / 100})` : "dipte flip";
   return `[DENEME] ${label}: ${kind} ${pool.slice(0, 6)}… → fiyat %${(-d.dropBps / 100).toFixed(1)} düştü; ${d.withdraw.from}..${d.withdraw.to} bin'lerindeki token çekilip ${d.ask.from}..${d.ask.to} aralığına (fiyatın üstü, ${d.ask.shape}) konurdu. Aşağıdaki SOL bin'lerine dokunulmaz. PnL %${(d.pnlBps / 100).toFixed(2)}`;
 }

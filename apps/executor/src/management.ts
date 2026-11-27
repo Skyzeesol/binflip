@@ -176,26 +176,42 @@ export function startManagement(p: {
         await save({ plan: pr as never, ...(pr.signatures.length ? { status: "submitted", signature: pr.signatures[pr.signatures.length - 1] } : {}) });
       },
       statuses: (sigs) => Promise.all(sigs.map((s) => sender.status(s).catch(() => "unknown" as const))),
-      tokenDelta: async (sigs) => {
+      tokenDelta: async (sigs, side) => {
         let delta = 0n;
         for (const s of sigs) {
           const tx = await builder.connection.getTransaction(s, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as 0 });
           if (!tx?.meta) throw new Error(`flip: transaction ${s} not readable yet`);
+          const mint = side === "x" ? tokenMint : WSOL_MINT;
           const bal = (list: typeof tx.meta.postTokenBalances) =>
-            (list ?? []).filter((b) => b.owner === owner && b.mint === tokenMint).reduce((t, b) => t + BigInt(b.uiTokenAmount.amount), 0n);
+            (list ?? []).filter((b) => b.owner === owner && b.mint === mint).reduce((t, b) => t + BigInt(b.uiTokenAmount.amount), 0n);
           delta += bal(tx.meta.postTokenBalances) - bal(tx.meta.preTokenBalances);
+          if (side === "y") {
+            // SOL out of the position = our lamports change + the fee we paid (we are the fee payer, account 0).
+            const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta.loadedAddresses });
+            const i = keys.staticAccountKeys.findIndex((k) => k.toBase58() === owner);
+            if (i >= 0) delta += BigInt(tx.meta.postBalances[i]! - tx.meta.preBalances[i]!) + (i === 0 ? BigInt(tx.meta.fee) : 0n);
+          }
         }
         return delta;
       },
       decide: async () => {
         const now = d ?? decideNow();
-        return now.do === "flip" ? now.withdraw : null;
+        return now.do === "flip" ? { ...now.withdraw, side: now.side, ask: { from: now.ask.from, to: now.ask.to } } : null;
       },
       buildRemove: (w) => builder.removeRange({ pool: pos.pool, position: pos.ourPosition!, fromBinId: w.from, toBinId: w.to, bps: 10_000 }),
       buildAdd: async (amount, w) => {
-        // Same width as decided (= bins withdrawn, min 10); the ask range starts right above the CURRENT price.
-        const n = flip.askBins ?? Math.max(10, w ? w.to - w.from + 1 : 10);
         const px = (await builder.poolInfo(pos.pool)).activeBinId;
+        if (w?.side === "y") {
+          // Back flip: the SOL goes back below the CURRENT price into the bins it came from, bid-ask shaped
+          // (more SOL far from the price), like the position before the flip.
+          const width = (w.ask?.to ?? w.to) - (w.ask?.from ?? w.from) + 1;
+          let lo = w.ask?.from ?? w.from;
+          let hi = Math.min(w.ask?.to ?? w.to, px - 1);
+          if (hi < lo) [lo, hi] = [px - width, px - 1];
+          return builder.add({ pool: pos.pool, position: pos.ourPosition!, lowerBinId: lo, upperBinId: hi, amountSol: amount, strategy: "bid_ask", slippagePct: 1 });
+        }
+        // Down flip: same width as decided (= bins withdrawn, min 10); the ask range starts right above the CURRENT price.
+        const n = flip.askBins ?? Math.max(10, w ? w.to - w.from + 1 : 10);
         return builder.addToken({ pool: pos.pool, position: pos.ourPosition!, fromBinId: px + 1, toBinId: px + n, amount, strategy: flip.askShape, slippagePct: 1 });
       },
       send: (tx, extra, onSig) => sender.send(tx as never, extra as never, opts(onSig)).then(() => undefined),
@@ -218,7 +234,13 @@ export function startManagement(p: {
       .update(schema.positions)
       .set({ lastFlipBinId: nowActive, lowerBinId: chain.lower, upperBinId: chain.upper })
       .where(eq(schema.positions.id, pos.id));
-    await notify(pos.userId, `[CANLI] ${label}: ${j.reason.replace("_", " ")} yapıldı (${progress.signatures.length} işlem); token fiyatın üstüne kondu.`);
+    const back = progress.withdraw?.side === "y";
+    await notify(
+      pos.userId,
+      back
+        ? `[CANLI] ${label}: geri flip yapıldı (${progress.signatures.length} işlem); fiyat flip öncesi seviyeye döndü, SOL fiyatın altına ilk şekliyle (Bid-Ask) geri kondu.`
+        : `[CANLI] ${label}: ${j.reason.replace("_", " ")} yapıldı (${progress.signatures.length} işlem); token fiyatın üstüne kondu.`,
+    );
     return { flipped: true };
   }
 

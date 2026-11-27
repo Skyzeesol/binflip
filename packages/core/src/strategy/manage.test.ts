@@ -97,6 +97,35 @@ describe("staged flip (default 10%)", () => {
     expect(totalX(rebounded.bins)).toBe(0); // all token sold back into SOL
   });
 
+  it("back flip: when the price returns to where the flip started, the SOL goes back below in the original shape", () => {
+    let s = move(fresh(), -11);
+    const down = decide(s, "staged_flip", NO_EXITS);
+    if (down.do !== "flip") throw new Error();
+    s = applyFlip(s, down); // token now above -11
+    const solBelowBefore = totalY(s.bins.filter((b) => b.id < -11));
+    // Price comes back up: not yet the full threshold → hold
+    expect(decide(move(s, -3), "staged_flip", NO_EXITS).do).toBe("hold");
+    const back = move(s, 0); // 11 bins up from the flip = where it started
+    const d = decide(back, "staged_flip", NO_EXITS);
+    expect(d).toMatchObject({ do: "flip", kind: "back", side: "y" });
+    if (d.do !== "flip") throw new Error();
+    expect(d.withdraw.from).toBeGreaterThan(-11);
+    expect(d.withdraw.to).toBeLessThan(0);
+    const after = applyFlip(back, d);
+    // SOL is back below the price, value kept, the SOL that never moved is untouched;
+    // token is only where the price hasn't reached yet (active bin and above)
+    expect(after.bins.filter((b) => b.id < 0).every((b) => b.x === 0)).toBe(true);
+    expect(after.bins.every((b) => b.id < 0 || b.y === 0 || b.id === 0)).toBe(true);
+    expect(valueInY(after.bins, 0, 100)).toBeCloseTo(valueInY(back.bins, 0, 100), -2);
+    expect(totalY(after.bins.filter((b) => b.id < -11))).toBeCloseTo(solBelowBefore, 0);
+    // bid-ask again: the refilled bins have more SOL far from the price
+    const refill = after.bins.filter((b) => b.id >= d.ask.from && b.id <= d.ask.to);
+    expect(refill[0]!.y).toBeGreaterThan(refill[refill.length - 1]!.y);
+    // and it can flip down again from here
+    expect(after.lastFlipActiveId).toBe(0);
+    expect(decide(move(after, -11), "staged_flip", NO_EXITS).do).toBe("flip");
+  });
+
   it("mirror mode never flips", () => {
     expect(decide(move(fresh(), -30), "mirror", NO_EXITS).do).toBe("hold");
   });

@@ -58,6 +58,7 @@ export const REASONS: Record<string, string> = {
   trailing_stop: "Trailing stop",
   staged_flip: "Staged Flip",
   bottom_flip: "Bottom Flip",
+  back_flip: "Back Flip (flip öncesine dönüş)",
   rl_reshape: "Precision Hybrid reshape",
   auto_compound: "Auto-compound",
 };
