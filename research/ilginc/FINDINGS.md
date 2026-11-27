@@ -108,3 +108,40 @@ Fiyatın hemen yanında, `w = round(100/bin_step)` binlik **tek taraflı** bir p
 3. **Lot kademesi** (1 / 2 / 7 SOL) → giriş anındaki havuz metrikleriyle.
 4. **SOL ek yatırma formülü** → pozisyon bazında muhasebe (claim + fee satışı dahil).
 5. **Döngü süresi** → canlı kayıtta uzaklık 2'ye ulaşma anı ile rebalance anı arasındaki gecikme.
+
+---
+
+## Güncelleme 27 Kasım: giriş, çıkış ve lot (dakikalık veri) + gölge motor
+
+Kaynak: GeckoTerminal 1 dk mumları (323 havuz, 644 istek), `features.mjs`. Her karar için karar dakikasından **önceki** dakikalar kullanıldı. Kontrol = aynı havuzda açılıştan 2 saat önce (pozisyon yokken). `spike5` = son 5 dk hacmi / saatin 5 dk ortalaması (tavanı 12: saatin bütün hacmi son 5 dk'daysa).
+
+### Giriş (1.340 açılış / 827 kontrol) — **GÜÇLÜ**
+
+| Ölçüt | Açılış medyan (q25–q75) | Kontrol medyan (q25–q75) |
+|---|---|---|
+| 5 dk hacim ($) | 1.346 (83–6.002) | 123 (0–1.187) |
+| spike5 | **2,9** (0,92–12) | 0,57 (0,1–1,3) |
+| 15 dk fiyat aralığı % | 11,6 (2,0–32) | 7,2 (3,1–14,5) |
+| Son 15 dk işlem olan dakika | 10 | 6 |
+| 5 dk fiyat değişimi q10/q90 | −14,5 / +14,7 | −4,5 / +4,4 |
+
+→ Açılışlar bir **hareket/hacim patlamasının hemen arkasından** geliyor, yön fark etmiyor (5 dk fiyat değişimi medyanı 0, kuyruklar iki yönde de kalın). Açılışların ~%75'inde spike5 ≥ 0,9; kontrolün %75'inde ≤ 1,3. Kesin eşik ve ikinci koşul için canlı evren kaydı (girmediği havuzlar) gerekiyor.
+
+### Lot kademesi — **GÜÇLÜ aday kural: volatiliteye ters**
+
+| Lot | n | 15 dk fiyat aralığı medyan | 1 saat hacim medyan | Launchpad |
+|---|---|---|---|---|
+| **7 SOL** | 292 | **%1,2** | $123 | %84 launchpad'siz (LST: strongSOL, xSOL; tokenize: QNT, LTC, LLY, WLFI…) |
+| 2 SOL | 191 | %29,6 | $27k | çoğu pump.fun |
+| 1 SOL | 711 | %20,4 | $18,5k | çoğu pump.fun |
+
+→ Sakin (düşük volatiliteli) tokenlara büyük lot, volatil memecoin'lere küçük lot. Aynı havuz (GMEx, NEURALINK) farklı zamanlarda farklı kademe alabiliyor → kademe havuz tipinden çok **açılış anındaki volatiliteye** bağlı olabilir. Eşik testi sırada.
+
+### Çıkış (1.329 kapanış / 1.089 pozisyon ortası) — **AÇIK**
+
+Fiyat ve hacim kapanışı açıklamıyor: spike5 0,62 vs 0,46, 15 dk aralık %19,3 vs %17,4, 5 dk fiyat değişimi kuyrukları benzer. Tutma süresi medyan 56 dk; tutarken fiyat değişimi q25/q75 −%5,9 / +%5,9 (simetrik). → Sıradaki aday: **pozisyon bazında kâr/zarar** (envanter kaybı, fee/kayıp oranı) ve süre. Pozisyon muhasebesi yazılacak.
+
+### Gölge motor (WebSocket + processed, 406 karşılaştırma, ~8 saat)
+
+Birebir %85,7 · doğru taraf %93,3 · görmeden kaçırma %5,2 (çoğu tam +2) · yanlış taraf %1,2 · kural farkı %0,2 · karar gecikmesi medyan 0 sn. Önceki sürüm (2 sn okuma, confirmed): birebir %70, görmeden kaçırma %19,5.
+Bilinen sorun: public RPC WebSocket'i saatte ~37 kez kopuyor (1006); boşlukları 2 sn'lik okuma dolduruyor. Yanlış taraf vakaları incelenecek (aday: processed seviyesinde sonradan geri alınan durum).
