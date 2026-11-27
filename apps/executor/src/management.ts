@@ -22,12 +22,7 @@ import {
 } from "@binflip/core";
 import { schema, type Db } from "@binflip/db";
 import type { startSwapBack } from "./swapback.js";
-
-interface FlipProgress {
-  stage: "planned" | "removed" | "added";
-  received?: string;
-  signatures: string[];
-}
+import { runFlip, type FlipProgress } from "./flipSteps.js";
 
 /**
  * Executes manager decisions on live positions. Every job re-reads the
@@ -86,9 +81,20 @@ export function startManagement(p: {
     if (pos.protocol === "damm_v2") return dammExit(pos, label, key, j);
     if (pos.state !== "ACTIVE" || !pos.ourPosition || pos.dryRun) return { skipped: `state_${pos.state}` };
 
-    const [existing] = await db.select().from(schema.txs).where(and(eq(schema.txs.userId, pos.userId), eq(schema.txs.idempotencyKey, key)));
+    let [existing] = await db.select().from(schema.txs).where(and(eq(schema.txs.userId, pos.userId), eq(schema.txs.idempotencyKey, key)));
     if (existing?.status === "confirmed") return { done: true };
+    if (!existing && j.kind === "flip") {
+      // A flip of this position that never finished (other job id, e.g. a later tick at another bin):
+      // finish THAT one first, from its recorded signatures, instead of starting a second remove.
+      const [open] = await db
+        .select()
+        .from(schema.txs)
+        .where(and(eq(schema.txs.positionId, pos.id), eq(schema.txs.kind, "flip"), sql`${schema.txs.status} in ('planned', 'submitted')`, sql`${schema.txs.plan} ? 'remove'`));
+      if (open) existing = open;
+    }
     const progress: FlipProgress = (existing?.plan as unknown as FlipProgress) ?? { stage: "planned", signatures: [] };
+    // A flip with a recorded step resumes from the chain, not from a new decision.
+    const resumingFlip = j.kind === "flip" && (progress.stage !== "planned" || !!progress.remove);
 
     // Re-check on chain unless we are resuming a flip whose token is already out.
     const exits: ExitRules = pos.exitRulesSaved
@@ -97,7 +103,8 @@ export function startManagement(p: {
     const own = pos.origin === "panel" || pos.origin === "telegram";
     const flip = flipParamsFrom(own ? (pos.managementParams ?? cs?.managementParams) : cs?.managementParams);
     const { state, activeId, binStep, feeX, feeY } = await readLivePosition(builder, pos);
-    const d = progress.stage === "removed" ? null : decide(state, own ? pos.managementMode : (cs?.managementMode ?? pos.managementMode), exits, flip);
+    const decideNow = () => decide(state, own ? pos.managementMode : (cs?.managementMode ?? pos.managementMode), exits, flip);
+    const d = resumingFlip ? null : decideNow();
     if (j.kind === "compound") {
       // Exits and flips win over compounding; and fees must still be worth it.
       const c = shouldCompound({ feeX, feeY, activeId, binStep, lastCompoundAt: pos.lastCompoundAt, openedAt: pos.openedAt, intervalMinutes: own ? pos.compoundMinutes : (cs?.compoundIntervalMinutes ?? null), minLamports: BigInt(config.COMPOUND_MIN_LAMPORTS) });
@@ -162,30 +169,54 @@ export function startManagement(p: {
       return { reshaped: true };
     }
 
-    // ── flip ──
-    if (progress.stage === "planned") {
-      if (!d || d.do !== "flip") return { skipped: "stale" };
-      const before = await builder.tokenBalance(tokenMint);
-      await sendAll(await builder.removeRange({ pool: pos.pool, position: pos.ourPosition, fromBinId: d.withdraw.from, toBinId: d.withdraw.to, bps: 10_000 }));
-      progress.stage = "removed";
-      progress.received = ((await builder.tokenBalance(tokenMint)) - before).toString();
-      await save({ plan: { ...progress, ask: d.ask, withdraw: d.withdraw } as never });
+    // ── flip: remove the token bins, then add exactly what came out above the price (see flipSteps.ts) ──
+    const owner = builder.owner.toBase58();
+    const r = await runFlip(progress, {
+      save: async (pr) => {
+        await save({ plan: pr as never, ...(pr.signatures.length ? { status: "submitted", signature: pr.signatures[pr.signatures.length - 1] } : {}) });
+      },
+      statuses: (sigs) => Promise.all(sigs.map((s) => sender.status(s).catch(() => "unknown" as const))),
+      tokenDelta: async (sigs) => {
+        let delta = 0n;
+        for (const s of sigs) {
+          const tx = await builder.connection.getTransaction(s, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as 0 });
+          if (!tx?.meta) throw new Error(`flip: transaction ${s} not readable yet`);
+          const bal = (list: typeof tx.meta.postTokenBalances) =>
+            (list ?? []).filter((b) => b.owner === owner && b.mint === tokenMint).reduce((t, b) => t + BigInt(b.uiTokenAmount.amount), 0n);
+          delta += bal(tx.meta.postTokenBalances) - bal(tx.meta.preTokenBalances);
+        }
+        return delta;
+      },
+      decide: async () => {
+        const now = d ?? decideNow();
+        return now.do === "flip" ? now.withdraw : null;
+      },
+      buildRemove: (w) => builder.removeRange({ pool: pos.pool, position: pos.ourPosition!, fromBinId: w.from, toBinId: w.to, bps: 10_000 }),
+      buildAdd: async (amount, w) => {
+        // Same width as decided (= bins withdrawn, min 10); the ask range starts right above the CURRENT price.
+        const n = flip.askBins ?? Math.max(10, w ? w.to - w.from + 1 : 10);
+        const px = (await builder.poolInfo(pos.pool)).activeBinId;
+        return builder.addToken({ pool: pos.pool, position: pos.ourPosition!, fromBinId: px + 1, toBinId: px + n, amount, strategy: flip.askShape, slippagePct: 1 });
+      },
+      send: (tx, extra, onSig) => sender.send(tx as never, extra as never, opts(onSig)).then(() => undefined),
+      now: () => Date.now(),
+    });
+    if ("skipped" in r) {
+      await save({ status: "skipped", reason: "stale" });
+      return r;
     }
-    const received = BigInt(progress.received ?? "0");
-    if (received > 0n) {
-      // Same width as decided (= bins withdrawn, min 10), from this run's decision or the saved one on resume.
-      const saved = (existing?.plan as { withdraw?: { from: number; to: number } } | undefined)?.withdraw;
-      const w = d && d.do === "flip" ? d.withdraw : saved;
-      const n = flip.askBins ?? Math.max(10, w ? w.to - w.from + 1 : 10);
-      // Recompute the ask range from the CURRENT price: 0 spread, right above it.
-      await sendAll(await builder.addToken({ pool: pos.pool, position: pos.ourPosition, fromBinId: activeId + 1, toBinId: activeId + n, amount: received, strategy: flip.askShape, slippagePct: 1 }));
+    if ("waiting" in r) throw new Error(`flip ${r.waiting} adımı hâlâ zincirde bekliyor; yeni işlem üretilmedi, tekrar bakılacak`);
+    if ("review" in r) {
+      await save({ status: "failed", reason: "partial_needs_review" });
+      await notify(pos.userId, `⚠️ ${label}: ${r.review}. Yeni işlem gönderilmedi; pozisyonu Solscan'den kontrol edin. İmzalar: ${progress.signatures.join(", ")}`);
+      return r;
     }
-    progress.stage = "added";
     await save({ status: "confirmed", plan: progress as never });
     const chain = await builder.positionBins(pos.pool, pos.ourPosition);
+    const nowActive = (await builder.poolInfo(pos.pool)).activeBinId;
     await db
       .update(schema.positions)
-      .set({ lastFlipBinId: activeId, lowerBinId: chain.lower, upperBinId: chain.upper })
+      .set({ lastFlipBinId: nowActive, lowerBinId: chain.lower, upperBinId: chain.upper })
       .where(eq(schema.positions.id, pos.id));
     await notify(pos.userId, `[CANLI] ${label}: ${j.reason.replace("_", " ")} yapıldı (${progress.signatures.length} işlem); token fiyatın üstüne kondu.`);
     return { flipped: true };
