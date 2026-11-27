@@ -200,6 +200,29 @@ describe("planCopy", () => {
     expect(p).not.toHaveProperty("swapSol");
   });
 
+  it("held tokens count against the add cap (100% ratio, 10 lamport cap, 100 tokens at 1 lamport)", () => {
+    const readd = action({ added: { x: 100n, y: 0n } });
+    const p = planCopy(readd, settings({ tokenPriceLamports: 1, heldTokens: 100n, maxSolPerTx: 10n }), ours({ depositedSol: SOL, ratioPpm: 1_000_000n, fundedAt: new Date() }));
+    expect(p).toMatchObject({ do: "add", tokenFromHold: 10n, heldValue: 10n, amountSol: 0n });
+  });
+
+  it("with SOL and token, new SOL + reused token value stay within the cap", () => {
+    // Leader adds 100 lamports SOL + 100 tokens (price 1): value 200. 100% ratio, capped to 50.
+    const readd = action({ added: { x: 100n, y: 100n } });
+    const p = planCopy(readd, settings({ tokenPriceLamports: 1, heldTokens: 1_000n, maxSolPerTx: 50n }), ours({ depositedSol: SOL, ratioPpm: 1_000_000n, fundedAt: new Date() })) as {
+      do: string; amountSol: bigint; tokenFromHold: bigint; heldValue: bigint;
+    };
+    expect(p.do).toBe("add");
+    expect(p.tokenFromHold).toBe(25n);
+    expect(p.amountSol + p.heldValue).toBeLessThanOrEqual(50n);
+  });
+
+  it("without a token price nothing held is reused", () => {
+    const readd = action({ added: { x: 100n, y: 100n } });
+    const p = planCopy(readd, settings({ heldTokens: 1_000n }), ours({ depositedSol: SOL, ratioPpm: 1_000_000n, fundedAt: new Date() }));
+    expect(p).not.toHaveProperty("tokenFromHold");
+  });
+
   it("DAMM V2 respects the pool-type toggle", () => {
     const a = action({ protocol: "damm_v2", kind: "open", created: true, added: { x: 0n, y: SOL } });
     expect(planCopy(a, settings({ copyDammV2: false }), null)).toMatchObject({ reason: "pool_type_not_copied" });

@@ -75,8 +75,8 @@ export type SkipReason =
 export type Plan =
   | { do: "skip"; kind: ActionKind; reason: SkipReason }
   /** swapSol: part of amountSol to swap into the token first, so our deposit has the leader's ratio (LP Agent zap). */
-  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint; tokenFromHold?: bigint }
-  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint; tokenFromHold?: bigint }
+  | { do: "open"; amountSol: bigint; ratioPpm: bigint | null; capped: string | null; empty: boolean; swapSol?: bigint; tokenFromHold?: bigint; heldValue?: bigint }
+  | { do: "add"; amountSol: bigint; ratioPpm: bigint; capped: string | null; firstFunding: boolean; swapSol?: bigint; tokenFromHold?: bigint; heldValue?: bigint }
   /**
    * bps applies to the whole position when `ranges` is absent (an explicit full-range remove);
    * with `ranges`, only those bins are touched, each with its own share.
@@ -179,16 +179,23 @@ export function planCopy(a: LeaderAction, s: PlannerSettings, ours: OurPosition 
   let swapSol = tokenValue > 0n ? (amount * tokenValue) / leaderValue : 0n;
   let amountSol = amount;
   let tokenFromHold = 0n;
-  if (reusingHeld) {
-    // Our share of the leader's token comes from what we kept, not from a new buy.
-    const wanted = (side.token * ratioPpm) / PPM;
+  let heldValue = 0n;
+  if (reusingHeld && price !== null && price > 0) {
+    // Our share of the leader's token comes from what we kept, not from a new buy — but only up to the
+    // token part of the (capped) budget: swapSol is that part in lamports. Without a price we can't
+    // value the token, so nothing held is reused.
+    const byRatio = (side.token * ratioPpm) / PPM;
+    const byBudget = BigInt(Math.floor(Number(swapSol) / price));
+    const wanted = byRatio < byBudget ? byRatio : byBudget;
     tokenFromHold = held < wanted ? held : wanted;
-    const covered = price !== null ? BigInt(Math.floor(Number(tokenFromHold) * price)) : swapSol;
-    const fromHoldValue = covered < swapSol ? covered : swapSol;
-    swapSol -= fromHoldValue;
-    amountSol -= fromHoldValue;
+    const covered = BigInt(Math.floor(Number(tokenFromHold) * price));
+    heldValue = covered < swapSol ? covered : swapSol;
+    swapSol -= heldValue;
+    amountSol -= heldValue;
   }
-  const extra = { ...(swapSol > 0n ? { swapSol } : {}), ...(tokenFromHold > 0n ? { tokenFromHold } : {}) };
+  // New SOL spent (amountSol, incl. swapSol) and the value of reused token (heldValue) are kept apart;
+  // together they never exceed the capped amount.
+  const extra = { ...(swapSol > 0n ? { swapSol } : {}), ...(tokenFromHold > 0n ? { tokenFromHold, heldValue } : {}) };
   if (a.kind === "open") return { do: "open", amountSol, ratioPpm, capped, empty: false, ...extra };
   return { do: "add", amountSol, ratioPpm, capped, firstFunding, ...extra };
 }
