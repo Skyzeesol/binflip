@@ -83,16 +83,26 @@ export function bucketOf(d: Date, g: Group): string {
   return day.toISOString().slice(0, 10);
 }
 
-export function history(rows: Array<{ at: Date; value: number }>, g: Group): Array<{ bucket: string; value: number; count: number }> {
-  const m = new Map<string, { value: number; count: number }>();
+/**
+ * Per day/week/month totals. Only KNOWN values are summed: a position closed without a known PnL is
+ * counted in `missing`, never as 0. A bucket where every value is missing has value null ("Veri eksik").
+ */
+export function history(rows: Array<{ at: Date; value: number | null }>, g: Group): Array<{ bucket: string; value: number | null; count: number; missing: number }> {
+  const m = new Map<string, { value: number; known: number; count: number; missing: number }>();
   for (const r of rows) {
     const k = bucketOf(r.at, g);
-    const e = m.get(k) ?? { value: 0, count: 0 };
-    e.value += r.value;
+    const e = m.get(k) ?? { value: 0, known: 0, count: 0, missing: 0 };
     e.count += 1;
+    if (r.value === null || !Number.isFinite(r.value)) e.missing += 1;
+    else {
+      e.value += r.value;
+      e.known += 1;
+    }
     m.set(k, e);
   }
-  return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([bucket, e]) => ({ bucket, ...e }));
+  return [...m.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([bucket, e]) => ({ bucket, value: e.known ? e.value : null, count: e.count, missing: e.missing }));
 }
 
 /** Range bounds as % from the pool price, and whether the price is inside. */

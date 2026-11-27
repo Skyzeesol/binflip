@@ -564,3 +564,15 @@ Kullanıcı: "dashboard'u public erişime aç, sadece ben, mobil + web, kullanı
 ## 31. Deneme geçmişini silme (25 Kasım 2026)
 
 Kullanıcı: "dry run geçmişini silelim, artık live kalacak sadece". CLI `data:purge-dry-run [--yes]`: `positions.dry_run = true` (PnL snapshot'ları cascade ile) ve `txs.dry_run = true` satırlarını tek transaction'da siler; önce silinecek/kalacak sayıları gösterir, "DELETE" yazılmadan silmez. Canlı veriye dokunmaz. Sunucuda önce `deploy/backup.sh` ile yedek alınır.
+
+## 32. Dış teknik inceleme (27 Kasım 2026, `b47123d`) ve düzeltmeler
+
+GitHub erişimi verilen bir geliştiricinin 9 maddelik raporu; hepsi kodda doğrulandı ve düzeltildi:
+1. **DAMM V2 kısmi çekim oranı:** kalan likidite okunamazsa 0 sayılıp %100 çekim oluyordu. `DammTxBuilder.positionLiquidity` → ok / missing / error; `dammRemoveShare` sadece başarılı okumadan oran verir. Hata: olay işlenmeden atılır (hiçbir şey yazılmaz/imzalanmaz), kuyruk 5 kez dener, sonda bildirim. Hesap yoksa `leader_position_gone` (çıkış kapanış olayıyla). Olay anına ait likidite olayda yok (EvtLiquidityChange'de pozisyon likiditesi yok), işleme anında okunuyor.
+2. **DLMM aralıklı çekim:** plan artık liderin çektiği aralıkları (`ranges`, her biri kendi bps'iyle, kopyanın bin'lerine kırpılmış) taşıyor; executor sadece o bin'lerden `removeRange` yapıyor (mainnet simülasyonu: 10 bin'lik dilim, 81k CU). Sınırsız aralık (remove_all, DAMM payı) tüm pozisyona. Okunamayan çekim `remove_unresolved` ile atlanıyor (eskiden %100). Çözücü DLMM `remove_liquidity`/`remove_liquidity2` bin bazlı çekimi de okuyor.
+3. **Rebalance yedek yolu:** kapat-yeniden aç sadece SOL = Y havuzlarda; değilse eski pozisyon kapatılmadan durur (`rebalanceFallbackSupported`).
+4. **Ekleme sınırı + elde tutulan token:** yeniden kullanılan token, sınırlanmış bütçenin token payını aşamaz; yeni SOL (`amountSol`) ve token değeri (`heldValue`) ayrı, toplamı sınırı aşmaz; fiyat yoksa yeniden kullanım yok.
+5. **Flip kesintisi:** `apps/executor/src/flipSteps.ts` — çekim/ekleme adımları ilk işlemden önce kaydedilir, imzalar anında yazılır; yeniden başlarken imzalar zincirle uzlaştırılır (landed → tekrar yok, alınan token işlemden okunur; uncertain → bekle; partial → elle kontrol). Aynı pozisyonun bitmemiş flip'i varsa yeni iş onu tamamlar. Sahte zincir testleri: çekimden ve eklemeden sonra kesinti → toplam 1 çekim + 1 ekleme.
+6–7. **Net varlık:** sadece canlı pozisyonlar (`accountTotals`; deneme değeri ayrı, Smart LP boyutlamasında da). Cüzdan okunamazsa `netWorth: null` + son tam değer ve saati; panel "Bakiye alınamadı" ya da "(HH:MM itibarıyla)".
+8. **Bilinmeyen PnL:** `history` sadece bilinen değerleri toplar, `missing` sayar; hepsi eksikse `value: null` → grafikte kesikli kutu, takvimde "Veri eksik".
+9. **Fee geçmişi** etiketi "FEES OF CLOSED POSITIONS" + açıklama (fee kapanış gününe yazılır). Günlük claim görünümü eklenmedi.

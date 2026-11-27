@@ -28,7 +28,8 @@ export function FeeHistory(p: {
   feeDays: PfBucket[];
 }) {
   const [view, setView] = useState<"chart" | "calendar">("calendar");
-  const total = p.series.reduce((s, b) => s + b.value, 0);
+  const total = p.series.reduce((s, b) => s + (b.value ?? 0), 0);
+  const missing = p.series.reduce((s, b) => s + (b.missing ?? 0), 0);
   return (
     <div className="pf-history">
       <div className="pf-history-bar">
@@ -63,8 +64,9 @@ export function FeeHistory(p: {
       </div>
       {view === "chart" ? <Bars series={p.series} /> : <Calendar days={p.metric === "pnl" ? p.days : p.feeDays} />}
       <div className="pf-history-foot">
-        <span className="muted">{p.metric === "pnl" ? "Total profit" : "Total fee"}</span>{" "}
+        <span className="muted" title={p.metric === "fee" ? "Kapanan pozisyonların toplam fee'si; her pozisyonun fee'si kapandığı güne yazılır" : undefined}>{p.metric === "pnl" ? "Total profit" : "Total fee (closed positions)"}</span>{" "}
         <Amount sol={total} d={2} className={total >= 0 ? "pos" : "neg"} />
+        {missing > 0 && <span className="small muted" title="Kapanış değeri bilinmeyen pozisyonlar toplama 0 olarak katılmaz"> · {missing} pozisyonun değeri eksik</span>}
       </div>
     </div>
   );
@@ -74,7 +76,7 @@ function Bars({ series }: { series: PfBucket[] }) {
   const { cur, solUsd } = useCurrency();
   if (!series.length) return <div className="empty small">Bu aralıkta kapanan pozisyon yok.</div>;
   const k = cur === "usd" && solUsd ? solUsd : 1;
-  const vals = series.map((s) => s.value * k);
+  const vals = series.map((s) => (s.value ?? 0) * k);
   const max = Math.max(0, ...vals);
   const min = Math.min(0, ...vals);
   const W = 640, H = 240, P = 30;
@@ -90,9 +92,15 @@ function Bars({ series }: { series: PfBucket[] }) {
         const x = P + i * ((W - P - 8) / series.length) + 2;
         return (
           <g key={s.bucket}>
-            <rect x={x} y={Math.min(y(v), y(0))} width={bw} height={Math.max(1, Math.abs(y(v) - y(0)))} rx="2" fill={v >= 0 ? "var(--pos)" : "var(--neg)"}>
-              <title>{`${s.bucket}: ${v.toFixed(4)} (${s.count} pozisyon)`}</title>
-            </rect>
+            {s.value === null ? (
+              <rect x={x} y={y(0) - 6} width={bw} height={12} rx="2" fill="none" stroke="var(--muted)" strokeDasharray="2 2">
+                <title>{`${s.bucket}: Veri eksik (${s.count} pozisyonun değeri bilinmiyor)`}</title>
+              </rect>
+            ) : (
+              <rect x={x} y={Math.min(y(v), y(0))} width={bw} height={Math.max(1, Math.abs(y(v) - y(0)))} rx="2" fill={v >= 0 ? "var(--pos)" : "var(--neg)"}>
+                <title>{`${s.bucket}: ${v.toFixed(4)} (${s.count} pozisyon${s.missing ? `, ${s.missing} tanesinin değeri eksik` : ""})`}</title>
+              </rect>
+            )}
             {(i === 0 || i === series.length - 1) && <text x={x + bw / 2} y={H - 8} fontSize="10" fill="var(--muted)" textAnchor="middle">{s.bucket.slice(5)}</text>}
           </g>
         );
@@ -104,7 +112,7 @@ function Bars({ series }: { series: PfBucket[] }) {
 function Calendar({ days }: { days: PfBucket[] }) {
   const now = new Date();
   const [ym, setYm] = useState({ y: now.getUTCFullYear(), m: now.getUTCMonth() });
-  const byDay = useMemo(() => new Map(days.map((d) => [d.bucket, d.value])), [days]);
+  const byDay = useMemo(() => new Map(days.map((d) => [d.bucket, d])), [days]);
   const first = new Date(Date.UTC(ym.y, ym.m, 1));
   const n = new Date(Date.UTC(ym.y, ym.m + 1, 0)).getUTCDate();
   const cells: Array<number | null> = [...Array(first.getUTCDay()).fill(null), ...Array.from({ length: n }, (_, i) => i + 1)];
@@ -121,11 +129,14 @@ function Calendar({ days }: { days: PfBucket[] }) {
         {cells.map((d, i) => {
           if (d === null) return <div key={`e${i}`} />;
           const key = `${ym.y}-${String(ym.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-          const v = byDay.get(key);
+          const b = byDay.get(key);
+          const v = b?.value ?? null;
           return (
-            <div key={key} className={`cal-day ${v === undefined ? "" : v >= 0 ? "up" : "down"}`}>
+            <div key={key} className={`cal-day ${!b || v === null ? "" : v >= 0 ? "up" : "down"}`} title={b?.missing ? `${b.missing} pozisyonun değeri eksik` : undefined}>
               <span>{d}</span>
-              {v !== undefined && <Amount sol={v} d={4} className={v >= 0 ? "pos" : "neg"} />}
+              {b && v !== null && <Amount sol={v} d={4} className={v >= 0 ? "pos" : "neg"} />}
+              {b && v === null && <span className="small muted">Veri eksik</span>}
+              {b && v !== null && !!b.missing && <span className="small muted">+{b.missing} eksik</span>}
             </div>
           );
         })}

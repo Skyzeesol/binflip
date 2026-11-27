@@ -46,9 +46,17 @@ describe("portfolio math (LP Agent definitions)", () => {
     expect(bucketOf(new Date("2026-11-22T10:00:00Z"), "week")).toBe("2026-11-16"); // Sunday → previous Monday
     expect(bucketOf(d, "month")).toBe("2026-11-01");
     expect(history([{ at: d, value: 1 }, { at: new Date("2026-11-24T00:00:00Z"), value: 2 }, { at: new Date("2026-11-01T00:00:00Z"), value: -1 }], "week")).toEqual([
-      { bucket: "2026-10-26", value: -1, count: 1 },
-      { bucket: "2026-11-23", value: 3, count: 2 },
+      { bucket: "2026-10-26", value: -1, count: 1, missing: 0 },
+      { bucket: "2026-11-23", value: 3, count: 2, missing: 0 },
     ]);
+  });
+
+  it("unknown PnL is not zero: counted as missing, never summed", () => {
+    const day = new Date("2026-11-26T10:00:00Z");
+    // one closed at 0 SOL profit, one closed without a known value
+    expect(history([{ at: day, value: 0 }, { at: day, value: null }], "day")).toEqual([{ bucket: "2026-11-26", value: 0, count: 2, missing: 1 }]);
+    // only the unknown one: no number at all
+    expect(history([{ at: day, value: null }], "day")).toEqual([{ bucket: "2026-11-26", value: null, count: 1, missing: 1 }]);
   });
 
   it("range vs price", () => {

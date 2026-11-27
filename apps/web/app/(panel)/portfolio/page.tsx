@@ -132,7 +132,7 @@ export default function PortfolioPage() {
           <Kpi label="EXPECTED VALUE (EV)" v={<Amount sol={s?.expectedValue ?? null} d={2} />} cls={tone(s?.expectedValue)} title="(kazanma oranı × ort. kazanç) + (kaybetme oranı × ort. kayıp)" />
         </div>
         <div className="pf-chart">
-          <div className="kpi-label">{metric === "pnl" ? "PROFIT HISTORY" : "FEE HISTORY"}</div>
+          <div className="kpi-label" title={metric === "pnl" ? "Kapanan pozisyonların kâr/zararı, kapanış gününe göre" : "Kapanan pozisyonların toplam fee'si, pozisyonun kapandığı güne yazılır (açık pozisyondan o gün claim edilen fee burada görünmez)"}>{metric === "pnl" ? "PROFIT HISTORY (CLOSED)" : "FEES OF CLOSED POSITIONS"}</div>
           {pf && (
             <FeeHistory
               metric={metric} setMetric={setMetric} group={group} setGroup={setGroup} range={range} setRange={setRange} proto={proto} setProto={setProto}

@@ -123,11 +123,11 @@ export function registerPortfolio(app: FastifyInstance<any, any, any, any>, db: 
       openValue: open.reduce((s, v) => s + (v.m.value ?? 0), 0),
       openUnclaimed: open.reduce((s, v) => s + (v.m.unclaimedFee ?? 0), 0),
       history: {
-        pnl: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.pnl ?? 0 })), q.group as Group),
+        pnl: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.pnl })), q.group as Group),
         fee: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.totalFee })), q.group as Group),
       },
       // Calendar: one value per day over the range, PnL of positions closed that day.
-      days: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.pnl ?? 0 })), "day"),
+      days: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.pnl })), "day"),
       feeDays: history(inRange.map((v) => ({ at: v.p.closedAt!, value: v.m.totalFee })), "day"),
       from,
     };

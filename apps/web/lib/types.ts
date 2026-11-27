@@ -148,8 +148,11 @@ export interface PfSummary {
 
 export interface PfBucket {
   bucket: string;
-  value: number;
+  /** null = every position in this bucket closed without a known value ("Veri eksik"). */
+  value: number | null;
   count: number;
+  /** Positions in this bucket whose value is unknown (not counted as 0). */
+  missing?: number;
 }
 
 export interface Portfolio {
