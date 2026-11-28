@@ -25,7 +25,12 @@ export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 100
   d.watcher?.setAddresses(pools);
   // Live housekeeping starts FIRST and runs alongside the pool read: CLOSE_ALL intents are persisted
   // at its very start, so neither a slow nor a hung price read can keep them from disk.
-  const housekeeping = d.live ? d.live.checkIdle(now) : Promise.resolve();
+  // The rejection handler is attached NOW (not after the read): a housekeeping error while the read
+  // is pending must never become an unhandledRejection; it is rethrown to the loop below.
+  const housekeeping: Promise<unknown> = (d.live ? d.live.checkIdle(now) : Promise.resolve()).then(
+    () => null,
+    (err: unknown) => ({ housekeepingError: err }),
+  );
   let readError: unknown;
   if (pools.length) {
     try {
@@ -45,6 +50,7 @@ export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 100
     }
   }
   for (const p of d.book.checkExits(now)) d.write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });
-  await housekeeping;
+  const hk = (await housekeeping) as { housekeepingError: unknown } | null;
+  if (hk) throw hk.housekeepingError; // the loop logs it ("loop error")
   if (readError) throw readError;
 }

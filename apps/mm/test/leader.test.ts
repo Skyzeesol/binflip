@@ -262,3 +262,25 @@ describe("B4 stale observations", () => {
     expect(new SlotGate().accept("POOL", undefined)).toBe(false);
   });
 });
+
+describe("service tick: housekeeping errors while the price read waits", () => {
+  it("are not unhandled rejections and reach the loop", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let release!: () => void;
+      const slowRead = () => new Promise<Map<string, { activeId: number; slot?: number }>>((r) => (release = () => r(new Map([["POOL", { activeId: 1, slot: 5 }]]))));
+      const live = { pools: () => ["POOL"], onTick: () => {}, checkIdle: async () => { throw new Error("ENOSPC: disk full"); } };
+      const run = serviceTick({ book: { pools: () => [], onTick: () => [], checkExits: () => [] }, live, watcher: null, write: () => {}, readPools: slowRead });
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); // the housekeeping rejects while the read waits
+      release();
+      await expect(run).rejects.toThrow("ENOSPC: disk full");
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
+
