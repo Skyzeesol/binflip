@@ -30,6 +30,7 @@ class FakeHistory {
         if (o.until) { const i = list.findIndex((s) => s.signature === o.until); if (i >= 0) list = list.slice(0, i); }
         return list.slice(0, o.limit);
       },
+      health: async () => { if (this.down) throw new Error("503"); },
       getTransaction: async (sig: string) => {
         if (this.down || this.throwOn.has(sig)) throw new Error("503");
         const s = this.sigs.find((x) => x.signature === sig)!;
@@ -128,6 +129,27 @@ describe("B3 leader feed: downtime, >200 events, a broken tx and replay, in one 
     await f.poll();
     expect(seen).toEqual(h.sigs.slice(2).map((x) => x.signature));
     expect(f.state.retry[0]).toMatchObject({ signature: bad, error: "handler: decode failed" });
+  });
+
+  it("three bad signatures in a row, then a healthy close: the three stay parked, the close is handled (also after a restart)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
+    const file = path.join(dir, "f.json");
+    const h = new FakeHistory();
+    h.push(1);
+    const seen: string[] = [];
+    const mk = () => new LeaderFeed(h.rpc(), LEADER, file, async (_tx, i) => { seen.push(i.signature); }, { maxTries: 10 });
+    await mk().poll();
+    h.push(4);
+    const bad = h.sigs.slice(1, 4).map((x) => x.signature), close = h.sigs[4]!.signature;
+    for (const b of bad) h.throwOn.add(b);
+    await mk().poll();
+    expect(seen).toEqual([close]);
+    expect(mk().state.retry.map((r) => r.signature)).toEqual(bad);
+    await mk().poll(); // restart: still parked, nothing lost, close not repeated
+    expect(seen).toEqual([close]);
+    h.throwOn.clear();
+    await mk().poll();
+    expect(seen).toEqual([close, ...bad]);
   });
 
   it("a provider outage (every read fails) stops the poll without parking or skipping anything", async () => {

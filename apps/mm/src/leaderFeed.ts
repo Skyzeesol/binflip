@@ -10,6 +10,8 @@ export interface FeedRpc {
   getSignaturesForAddress(address: string, opts: { limit: number; before?: string; until?: string }): Promise<SigInfo[]>;
   /** null (not visible yet) or a tx without meta are both "unreadable for now". */
   getTransaction(signature: string): Promise<{ meta: unknown | null; slot: number; blockTime?: number | null } | null>;
+  /** A cheap provider-wide check (e.g. getSlot); throws when the provider itself is down. */
+  health?(): Promise<void>;
 }
 export interface FeedState {
   /** Newest signature fully handled; scanning resumes after it (persisted). */
@@ -117,7 +119,18 @@ export class LeaderFeed {
         } catch (err) {
           failed = `rpc: ${(err as Error).message}`;
           streak.push({ signature: s.signature, cursorBefore: this.state.cursor });
+          // Several in a row: is it the PROVIDER, or just these signatures? Ask the provider itself.
+          let providerDown = false;
           if (streak.length >= (this.opts.outageAfter ?? 3)) {
+            try {
+              if (this.rpc.health) await this.rpc.health();
+              else providerDown = true; // no way to tell: be safe, treat as an outage
+            } catch {
+              providerDown = true;
+            }
+            if (!providerDown) streak = []; // the provider answers: these signatures are parked, go on
+          }
+          if (providerDown) {
             const first = streak[0]!;
             const back = new Set(streak.map((x) => x.signature));
             this.state.retry = this.state.retry.filter((r) => !back.has(r.signature));

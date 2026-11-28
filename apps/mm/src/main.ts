@@ -162,6 +162,7 @@ await runService("mm", async ({ config, log }) => {
     {
       getSignaturesForAddress: (a, o) => rpc.getSignaturesForAddress(a, o) as never,
       getTransaction: (sig) => rpc.getTransaction(sig) as never,
+      health: async () => { await rpc.call("getSlot", [{ commitment: "confirmed" }]); },
     },
     LEADER,
     path.join(OUT_DIR, "leader-feed.json"),
