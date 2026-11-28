@@ -53,8 +53,24 @@ interface OurPosition {
   closing?: boolean;
 }
 
+/**
+ * An open that has been (or is about to be) broadcast but whose outcome we have not seen yet.
+ * Persisted BEFORE the first broadcast (position address + every signature as it is produced +
+ * a pending close intent), so a lost RPC reply or a restart cannot leave a position untracked.
+ */
+interface OpeningRecord extends OurPosition {
+  sigs: string[];
+  sentAt: number;
+  closeRequested?: boolean;
+  closeReason?: string;
+}
+
+/** After this long with no position account on chain and no landed signature, the open is dropped. */
+const OPEN_RESOLVE_SEC = 180;
+
 export class LiveMm {
   private readonly ours = new Map<string, OurPosition>(); // by leader position
+  private readonly opening = new Map<string, OpeningRecord>(); // broadcast, outcome unknown (persisted)
   private readonly busy = new Set<string>(); // our positions with an action in flight
   private readonly jupiter = new JupiterClient();
 
@@ -67,8 +83,11 @@ export class LiveMm {
     private readonly record: (kind: string, obj: Record<string, unknown>) => void,
   ) {
     if (fs.existsSync(opts.stateFile)) {
-      for (const p of JSON.parse(fs.readFileSync(opts.stateFile, "utf8")) as OurPosition[]) this.ours.set(p.leaderPosition, { ...p, closing: false });
-      log.warn({ positions: this.ours.size }, "live: restored open positions from state file");
+      const raw = JSON.parse(fs.readFileSync(opts.stateFile, "utf8")) as OurPosition[] | { positions: OurPosition[]; opening: OpeningRecord[] };
+      const st = Array.isArray(raw) ? { positions: raw, opening: [] } : raw;
+      for (const p of st.positions) this.ours.set(p.leaderPosition, { ...p, closing: false });
+      for (const o of st.opening ?? []) this.opening.set(o.leaderPosition, o);
+      log.warn({ positions: this.ours.size, opening: this.opening.size }, "live: restored state (opens with unknown outcome are resolved from chain)");
     }
   }
 
@@ -77,19 +96,20 @@ export class LiveMm {
   }
 
   get openCount(): number {
-    return this.ours.size + this.pending.size;
+    return this.ours.size + this.inFlight();
   }
 
   private save(): void {
-    fs.writeFileSync(this.opts.stateFile + ".tmp", JSON.stringify([...this.ours.values()], null, 1));
+    const st = { positions: [...this.ours.values()], opening: [...this.opening.values()] };
+    fs.writeFileSync(this.opts.stateFile + ".tmp", JSON.stringify(st, null, 1));
     fs.renameSync(this.opts.stateFile + ".tmp", this.opts.stateFile);
   }
 
-  private async sendBuilt(built: BuiltTxs): Promise<string[]> {
+  private async sendBuilt(built: BuiltTxs, onSignature?: (sig: string) => Promise<void>): Promise<string[]> {
     const sigs: string[] = [];
     for (let i = 0; i < built.txs.length; i++) {
       const tx = built.txs[i] as Transaction;
-      const r = await this.sender.send(tx, built.extraSigners.get(i) ?? [], { priorityMicroLamports: this.opts.priorityMicroLamports });
+      const r = await this.sender.send(tx, built.extraSigners.get(i) ?? [], { priorityMicroLamports: this.opts.priorityMicroLamports, onSignature });
       sigs.push(r.signature);
     }
     return sigs;
@@ -105,14 +125,23 @@ export class LiveMm {
   private readonly pending = new Map<string, { closeRequested: boolean; reason?: string; sent: boolean }>();
 
   get pendingCount(): number {
-    return this.pending.size;
+    return this.inFlight();
+  }
+
+  /** Opens not yet in `ours`: being prepared (memory) or broadcast with unknown outcome (persisted). */
+  private inFlight(): number {
+    return new Set([...this.pending.keys(), ...this.opening.keys()]).size;
+  }
+
+  private stopped(): boolean {
+    return fs.existsSync(this.opts.killFile) || fs.existsSync(this.opts.closeAllFile);
   }
 
   async onLeaderOpen(e: { leaderPosition: string; pool: string; t: number }): Promise<void> {
-    if (this.ours.has(e.leaderPosition) || this.pending.has(e.leaderPosition)) return; // duplicate
+    if (this.ours.has(e.leaderPosition) || this.pending.has(e.leaderPosition) || this.opening.has(e.leaderPosition)) return; // duplicate
     const skip = (reason: string, extra: Record<string, unknown> = {}) => this.record("live", { ...e, kind: "open_skipped", reason, ...extra });
-    if (fs.existsSync(this.opts.killFile) || fs.existsSync(this.opts.closeAllFile)) return skip("kill_file");
-    if (this.ours.size + this.pending.size >= this.opts.maxPositions) return skip("max_positions");
+    if (this.stopped()) return skip("kill_file");
+    if (this.ours.size + this.inFlight() >= this.opts.maxPositions) return skip("max_positions");
     const slot = { closeRequested: false, sent: false } as { closeRequested: boolean; reason?: string; sent: boolean };
     this.pending.set(e.leaderPosition, slot); // reservation: from here on every exit path must release it
     try {
@@ -121,30 +150,76 @@ export class LiveMm {
       const w = mmWidth(info.binStep);
       if (w > 70) return skip("too_wide", { width: w });
       // Budget: our lot plus the lots of the other opens still in flight (not yet in the balance).
-      const others = BigInt(this.pending.size - 1);
+      const others = BigInt(this.inFlight() - 1);
       const bal = BigInt(await this.builder.connection.getBalance(this.owner, "confirmed"));
       if (bal < this.opts.lotLamports * (others + 1n) + this.opts.reserveLamports) return skip("low_balance", { balance: bal.toString(), inFlight: Number(others) });
       if (slot.closeRequested) return skip("leader_closed_before_open");
 
       const range = mmPlace("sol", info.activeBinId, info.binStep);
       const built = await this.builder.open({ pool: e.pool, lowerBinId: range.lower, upperBinId: range.upper, amountSol: this.opts.lotLamports, strategy: "spot", slippagePct: 1 });
-      if (slot.closeRequested) return skip("leader_closed_before_open"); // last point before anything is signed
-      slot.sent = true;
-      const sigs = await this.sendBuilt(built);
+      // Last point before anything is signed: the leader may have closed, or STOP / CLOSE_ALL may
+      // have appeared while we were waiting on RPC.
+      if (slot.closeRequested) return skip("leader_closed_before_open");
+      if (this.stopped()) return skip("kill_file_before_send");
       const now = Math.floor(Date.now() / 1000);
-      const p: OurPosition = { leaderPosition: e.leaderPosition, pool: e.pool, position: built.position!, mintX: info.mintX, binStep: info.binStep, range, openedAt: now, lastMoveAt: now };
-      this.ours.set(e.leaderPosition, p);
-      this.pending.delete(e.leaderPosition);
-      this.save();
-      this.record("live", { t: now, kind: "open", ...p, lamports: this.opts.lotLamports.toString(), sigs });
-      this.log.info({ pool: e.pool, position: p.position, range }, "live: opened");
-      if (slot.closeRequested) await this.close(p, slot.reason ?? "leader_closed"); // leader closed while we were landing
+      const rec: OpeningRecord = { leaderPosition: e.leaderPosition, pool: e.pool, position: built.position!, mintX: info.mintX, binStep: info.binStep, range, openedAt: now, lastMoveAt: now, sigs: [], sentAt: now };
+      this.opening.set(e.leaderPosition, rec);
+      this.save(); // position address persisted before the first broadcast
+      slot.sent = true;
+      try {
+        await this.sendBuilt(built, async (sig) => { rec.sigs.push(sig); this.save(); });
+      } catch (err) {
+        // Outcome uncertain (lost reply, timeout, failure): the chain decides, not the error.
+        this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_uncertain", position: rec.position, sigs: rec.sigs, error: String((err as Error).message).slice(0, 300) });
+        this.log.warn({ err: (err as Error).message, pool: e.pool, position: rec.position }, "live: open outcome uncertain, resolving from chain");
+      }
+      if (slot.closeRequested) { rec.closeRequested = true; rec.closeReason = slot.reason; }
+      await this.resolveOpening(rec, true);
     } catch (err) {
       this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_failed", sent: slot.sent, error: String((err as Error).message).slice(0, 300) });
       this.log.warn({ err: (err as Error).message, pool: e.pool, sent: slot.sent }, "live: open failed");
     } finally {
       this.pending.delete(e.leaderPosition);
     }
+  }
+
+  /**
+   * Decide a broadcast open from the chain: position account exists → adopt it (and close it if
+   * the leader already closed); every signature failed, or nothing landed within OPEN_RESOLVE_SEC
+   * → drop; otherwise keep the record and look again on the next tick (and after a restart).
+   */
+  private async resolveOpening(rec: OpeningRecord, justSent = false): Promise<"adopted" | "dropped" | "unknown"> {
+    let exists = false;
+    try {
+      exists = (await this.builder.connection.getAccountInfo(new PublicKey(rec.position), "confirmed")) !== null;
+    } catch {
+      return "unknown"; // RPC trouble: try again later
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (exists) {
+      const { sigs, sentAt, closeRequested, closeReason, ...p } = rec;
+      this.opening.delete(rec.leaderPosition);
+      this.ours.set(rec.leaderPosition, p);
+      this.save();
+      this.record("live", { t: now, kind: justSent ? "open" : "open_recovered", ...p, lamports: this.opts.lotLamports.toString(), sigs });
+      this.log.info({ pool: p.pool, position: p.position, range: p.range, recovered: !justSent }, "live: opened");
+      if (closeRequested) await this.close(p, closeReason ?? "leader_closed");
+      return "adopted";
+    }
+    const st = await Promise.all(rec.sigs.map((s) => this.sender.status(s).catch(() => "unknown" as const)));
+    const allFailed = st.length > 0 && st.every((x) => x === "failed");
+    if (allFailed || rec.sigs.length === 0 || now - rec.sentAt > OPEN_RESOLVE_SEC) {
+      this.opening.delete(rec.leaderPosition);
+      this.save();
+      this.record("live", { t: now, kind: "open_dropped", reason: allFailed ? "tx_failed" : rec.sigs.length === 0 ? "never_signed" : "not_landed", leaderPosition: rec.leaderPosition, position: rec.position, sigs: rec.sigs });
+      return "dropped";
+    }
+    return "unknown";
+  }
+
+  /** Resolve persisted opens with an unknown outcome (after a lost reply or a restart). */
+  async recoverOpening(): Promise<void> {
+    for (const rec of [...this.opening.values()]) if (!this.pending.has(rec.leaderPosition)) await this.resolveOpening(rec);
   }
 
   // ── rebalance ─────────────────────────────────────────────────────────────────
@@ -186,7 +261,14 @@ export class LiveMm {
   async onLeaderClose(leaderPosition: string, reason = "leader_closed"): Promise<void> {
     const p = this.ours.get(leaderPosition);
     if (p) return this.close(p, reason);
+    const rec = this.opening.get(leaderPosition);
+    if (rec) {
+      rec.closeRequested = true; // persisted: survives a restart before the open is resolved
+      rec.closeReason = reason;
+      this.save();
+    }
     const inFlight = this.pending.get(leaderPosition);
+    if (rec && !inFlight) this.record("live", { t: Math.floor(Date.now() / 1000), kind: "close_deferred", reason, leaderPosition, sent: true });
     if (inFlight) {
       // Our open has not landed yet: record the intent; onLeaderOpen cancels or closes.
       inFlight.closeRequested = true;
@@ -197,6 +279,7 @@ export class LiveMm {
 
   /** Idle exit as a backstop (e.g. if we missed the leader's close). */
   async checkIdle(now: number): Promise<void> {
+    await this.recoverOpening();
     const closeAll = fs.existsSync(this.opts.closeAllFile);
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
