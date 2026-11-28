@@ -7,7 +7,7 @@ Postgres/Redis kullanmaz. Anahtarı girmek ve canlıya almak **senin** adımın.
 
 - **Giriş:** BviQ (`BviQcBvn…v6eU`) yeni bir pozisyon açınca aynı havuzda kendi pozisyonunu açar. Sabit lot (`MM_LOT_SOL`), sadece SOL, aktif binin hemen altına.
 - **Rebalance:** Kendi kurallarıyla, BviQ'yi beklemeden yapar: aktif bin 2 bin uzaklaşınca tek işlemde taşır, fee'yi toplar. Her işlem göndermeden önce simüle edilir; fiyat kaçtıysa işlem gönderilmez, ücret ödenmez.
-- **Çıkış:** BviQ kapatınca kapatır, ya da 55 dk hareketsizlikte. Kalan token'ı Jupiter ile (yoksa havuzdan) satar.
+- **Çıkış:** BviQ kapatınca kapatır (kapanışı kaçırırsa, liderin pozisyonunun zincirde artık olmamasından anlar). 55 dk hareketsizlik çıkışı varsayılan olarak kapalı (`MM_IDLE_EXIT_MIN`, lider bunu çoğu zaman yapmıyor). Kapanıştan çıkan token'ı Jupiter ile (yoksa havuzdan) satar.
 - **Sınırlar:** en fazla `MM_MAX_POSITIONS` açık pozisyon. Cüzdanda her zaman `MM_RESERVE_SOL` kadar SOL bırakır.
 
 ## 1. Kodu ayrı klasöre al (binflip kullanıcısıyla)

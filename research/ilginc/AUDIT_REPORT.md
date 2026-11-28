@@ -1,6 +1,6 @@
 # Denetim sonrası düzeltilmiş rapor (28 Kasım 2026)
 
-Kapsam: `2a46516` denetimi (Codex). Kod `2d1db96` (`research/ilginc`). Bütün sayılar sunucudaki tam arşivden, ayrı bir worktree'de (`~/ilginc/binflip-report`) üretildi; çalışan gölge servisine ve eski çıktılara dokunulmadı. Çalıştırma: `research/ilginc/report_run.sh`.
+Kapsam: `2a46516` denetimi (Codex). Kod `2d1db96`, H3/H4 güncellemesi `ff9d630` (`research/ilginc`). Bütün sayılar sunucudaki tam arşivden, ayrı bir worktree'de (`~/ilginc/binflip-report`) üretildi; çalışan gölge servisine ve eski çıktılara dokunulmadı. Çalıştırma: `research/ilginc/report_run.sh`.
 
 ## 1. Gölge uyumu: %81,6 yeniden hesaplandı
 
@@ -44,8 +44,9 @@ Eşikler sadece eğitim döneminden (8–19 Kasım) çıkarıldı, test dönemi 
 |---|---|---|---|
 | H1 giriş: hacim sıçramasından sonra açılış (`spike5 ≥ 0,9`) | açılış %68,6 vs kontrol %38,2, AUC 0,735 | %60,4 vs %42,6, AUC 0,641 | **Zayıflıyor**, ama rastgeleden iyi |
 | H2 lot: düşük volatilite → büyük lot | kural %43,8 vs taban %64,5 | %42,4 vs %58,7 | **Reddedildi** (her zaman en sık lotu seçmekten kötü) |
-| H3 çıkış: ~55 dk taşıma yoksa kapat | pasif kapanışların %38,7'si 50–65 dk'da | %42,8 | **Tutuyor** |
-| H4 havuz seçimi (aynı andaki evren, uygun havuzlar arasında yüzdelik) | fee/TVL, hacim, fee ilk %10 civarı; ilk %20'de olma payı 0,71–0,82 | yüzdelik aynı (~0,9), ilk %20 payı 0,54–0,65 | **Sinyal var, zayıflıyor**; TVL, piyasa değeri, holder sinyal değil; seçilen havuzlar genç (yaş yüzdeliği 0,18) |
+| H3 betimleme: pasif kapanışın 50–65 dk'da olması | pasif kapanışların %38,7'si | %42,8 | Kapanma zamanı kümelenmesi olarak tutuyor |
+| H3 **kural olarak**: 55 dk taşıma yoksa kapat | 1.011 tetikten 89'unda lider kapattı, kesinlik **%8,8** | 505 tetikten 94, **%18,6** | **Reddedildi**: lider çoğu zaman açık tutuyor |
+| H4 havuz seçimi (aynı andaki evren; uygun bin step kümesi sadece ÖNCEKİ açılışlardan) | fee/TVL, hacim, fee ilk %10 civarı; ilk %20 payı 0,68–0,81 | yüzdelik aynı (~0,9), ilk %20 payı 0,54–0,65 | **Sinyal var, zayıflıyor**; TVL, piyasa değeri, holder sinyal değil; seçilen havuzlar genç (yaş yüzdeliği 0,18–0,23) |
 
 Uyarılar: H1'de eski mum dosyalarında kapsam bilgisi yok; 461 açılışın hacmi "bilinmiyor" sayıldı (eskiden sıfır sayılıyordu). H4 sadece kayıtçının çalıştığı 26–28 Kasım'dan, 86 açılış.
 
@@ -53,4 +54,5 @@ Uyarılar: H1'de eski mum dosyalarında kapsam bilgisi yok; 461 açılışın ha
 
 - Gölge motoru, slotlu pencerelerde liderin taşımalarının **%76–82'sini birebir ve önceden** veriyor. Eski %81,6 bu ölçüyle ancak bu küçük pencerelerde doğrulanıyor.
 - Liderin gerçekleşen sonucu **+58,1 SOL** (17 gün, %91 kapsam). +90,9 değil.
-- Canlı pilot giriş ve çıkışta lideri izliyor. Bu yüzden pilot sadece mekaniği (taşıma, kapanış, satış) doğrular; liderden bağımsız bir strateji (H1–H4) doğrulanmış olmaz. Bağımsız strateji için H2 bırakılmalı, H1 ve H4 daha uzun bir test penceresiyle yeniden sınanmalı.
+- 55 dk hareketsizlik çıkışı liderin kuralı değil. Canlı takip modunda bu çıkış artık **varsayılan olarak kapalı** (`MM_IDLE_EXIT_MIN`, 0 = kapalı); kaçırılan lider kapanışını zincirdeki lider pozisyonu kontrolü yakalıyor.
+- Canlı pilot giriş ve çıkışta lideri izliyor. Bu yüzden pilot sadece mekaniği (taşıma, kapanış, satış) doğrular; liderden bağımsız bir strateji (H1–H4) doğrulanmış olmaz. Pilotun kabul ölçütü: taşıma, kapanış ve satışın doğru yürütülmesi. Bağımsız strateji için H2 ve H3 kuralı bırakılmalı, H1 ve H4 daha uzun, önceden belirlenmiş bir pencerede yeniden sınanmalı.

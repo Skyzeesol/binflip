@@ -38,6 +38,12 @@ export interface LiveOptions {
   killFile: string;
   /** If this file exists, every open position is closed (and its token sold). */
   closeAllFile: string;
+  /**
+   * Close after this long without a move (seconds). OFF unless set: on the full archive the
+   * leader closed at a 55-min idle only 9–19% of the time (holdout.mjs, H3 rule view), so in
+   * follow mode it would close positions the leader keeps. Missed leader closes are covered by
+   * the on-chain leader position check instead.
+   */
   idleSec?: number;
   /** Min spacing of outcome lookups for a rebalance in flight, from ticks (default 2000 ms). */
   settleEveryMs?: number;
@@ -616,7 +622,7 @@ export class LiveMm {
       }
       if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed"); // restored intent
       else if (closeAll) await this.close(p, "close_all_file");
-      else if (mmIdleExpired(p.lastMoveAt, now, this.opts.idleSec)) await this.close(p, "idle_timeout");
+      else if (this.opts.idleSec && mmIdleExpired(p.lastMoveAt, now, this.opts.idleSec)) await this.close(p, "idle_timeout");
     }
   }
 

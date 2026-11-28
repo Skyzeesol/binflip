@@ -20,6 +20,8 @@ export interface MmConfig {
   priorityMicroLamports: number;
   keepDays: number;
   staleMs: number;
+  /** Live idle exit in seconds; 0 = off (default, see LiveOptions.idleSec). */
+  idleExitSec: number;
 }
 
 export class ConfigError extends Error {}
@@ -78,6 +80,7 @@ export function parseMmConfig(env: NodeJS.ProcessEnv): MmConfig {
     priorityMicroLamports: int("MM_PRIORITY_MICROLAMPORTS", 10_000, 0, 10_000_000),
     keepDays: int("MM_KEEP_DAYS", 14, 1, 365),
     staleMs: int("MM_STALE_MS", 30_000, 5_000, 600_000),
+    idleExitSec: int("MM_IDLE_EXIT_MIN", 0, 0, 1440) * 60,
   };
   if (errors.length) throw new ConfigError(`invalid mm settings (nothing started):\n  ${errors.join("\n  ")}`);
   return cfg;

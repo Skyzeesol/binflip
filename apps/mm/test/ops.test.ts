@@ -73,3 +73,24 @@ describe("stale data stops new opens, not recovery", () => {
     expect(mm.status()).toMatchObject({ open: 0, salesOwed: 0, idle: true });
   });
 });
+
+describe("live idle exit is off unless configured", () => {
+  it("a position idle for hours is NOT closed by default; with MM_IDLE_EXIT_MIN it is", async () => {
+    for (const idleSec of [undefined, 55 * 60]) {
+      const c = new FakeChain();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "idle-"));
+      const recs: Array<Record<string, unknown>> = [];
+      const mm = new LiveMm(c.builder() as never, c.sender() as never, new PublicKey(OWNER), {
+        lotLamports: 100_000_000n, maxPositions: 3, reserveLamports: 150_000_000n, slippageBins: 0, priorityMicroLamports: 0,
+        stateFile: path.join(dir, "s.json"), killFile: path.join(dir, "STOP"), closeAllFile: path.join(dir, "CLOSE_ALL"), idleSec,
+      }, { info() {}, warn() {}, error() {}, debug() {} } as never, (_k, o) => recs.push(o));
+      (mm as unknown as { jupiter: unknown }).jupiter = c.jupiter();
+      await mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: Math.floor(Date.now() / 1000) });
+      await mm.checkIdle(Math.floor(Date.now() / 1000) + 3 * 3600);
+      expect(recs.some((r) => r.kind === "close")).toBe(idleSec !== undefined);
+    }
+    expect(parseMmConfig({}).idleExitSec).toBe(0);
+    expect(parseMmConfig({ MM_IDLE_EXIT_MIN: "55" }).idleExitSec).toBe(3300);
+  });
+});
+

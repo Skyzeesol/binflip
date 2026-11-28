@@ -75,6 +75,7 @@ await runService("mm", async ({ config, log }) => {
       slippageBins: cfg.slippageBins,
       priorityMicroLamports: cfg.priorityMicroLamports,
       stale: () => stale,
+      idleSec: cfg.idleExitSec || undefined,
       stateFile: path.join(OUT_DIR, "live-state.json"),
       killFile: process.env.MM_KILL_FILE ?? path.join(OUT_DIR, "STOP"),
       closeAllFile: process.env.MM_CLOSE_ALL_FILE ?? path.join(OUT_DIR, "CLOSE_ALL"),
