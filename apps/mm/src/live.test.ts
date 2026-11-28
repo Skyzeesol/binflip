@@ -35,12 +35,13 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
   let removeSends = 0;
   const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0, sell: 0, poolSwap: 0, sold: [] as bigint[], rebalance: 0 };
   let poolRoute = false;
-  let jupiterMode: "ok" | "land_then_throw" = "ok";
+  let jupiterMode: "ok" | "land_then_throw" | "land_unseen" = "ok";
+  let opensLanded = 0;
   const gates = { poolInfo: [] as ReturnType<typeof gate>[], send: [] as ReturnType<typeof gate>[], sim: [] as ReturnType<typeof gate>[] };
   let hold = { poolInfo: false, send: false, sim: false };
   const builder = {
     connection: {
-      getBalance: async () => Math.round((o.balanceSol ?? 10) * 1e9),
+      getBalance: async () => Math.round((o.balanceSol ?? 10) * 1e9) - opensLanded * 100_000_000, // landed opens spend their lot
       getBlockHeight: async () => clock.height,
       getAccountInfo: async (pk: PublicKey) => (chain.has(pk.toBase58()) ? { data: Buffer.alloc(0) } : null),
       // only the fields LiveMm reads: our token balance before/after for the mint
@@ -48,7 +49,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
         if (sigStatus.get(sig) !== "confirmed" && sigStatus.get(sig) !== "failed") return null;
         const d = tokenMoves.get(sig) ?? 0n;
         const bal = (n: bigint) => [{ mint: o.mintX ?? "", owner: OWNER, uiTokenAmount: { amount: n.toString() } }];
-        return { meta: { err: sigStatus.get(sig) === "failed" ? {} : null, preTokenBalances: bal(1_000_000n), postTokenBalances: bal(1_000_000n + d) } };
+        return { meta: { err: sigStatus.get(sig) === "failed" ? {} : null, preTokenBalances: bal(1_000_000n), postTokenBalances: bal(1_000_000n + d), preBalances: [1_000_000_000], postBalances: [1_000_000_000 - Number(d)] } };
       },
     },
     async poolInfo() {
@@ -58,6 +59,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     },
     async open() { calls.open++; return { txs: [{}], extraSigners: new Map(), position: posAddr(calls.open) }; },
     async simulateWithdraw() { return { x: 0n, y: 100_000_000n }; },
+    async positionBins() { throw new Error("not modelled in this fake"); }, // chain range unknown: state kept
     async rebalanceOne() { calls.rebalance++; return { txs: [{ rebalance: true }], extraSigners: new Map() }; },
     async remove(r: { position: string }) {
       calls.remove++;
@@ -99,6 +101,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       }
       if (tx.poolSell !== undefined) {
         wallet.tokens -= tx.poolSell;
+        tokenMoves.set(sig, -tx.poolSell);
         calls.sold.push(tx.poolSell);
         sigStatus.set(sig, "confirmed");
         return { signature: sig };
@@ -107,12 +110,14 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       const mode = sendMode;
       if (mode === "fail") { sigStatus.set(sig, "failed"); throw new Error("simulation failed"); }
       chain.add(posAddr(calls.open)); // the open landed
+      opensLanded++;
       sigStatus.set(sig, "confirmed");
       if (mode === "land_then_throw") throw new Error("fetch failed (reply lost)");
       if (mode === "land_then_hang") await new Promise(() => {}); // process "crashes" here
       return { signature: sig };
     },
     async status(sig: string) { return sigStatus.get(sig) ?? "unknown"; },
+    async estimateSpend() { return 100_000_000n; }, // the lot; rent/fees not modelled here (see test/fakeChain.ts)
     // TxSender.resolve semantics on the fake chain (uses status(), so tests may override status)
     async resolve(sig: string, lastValid: number | undefined) {
       const a = await (this as { status(s: string): Promise<string> }).status(sig);
@@ -128,9 +133,10 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       const sig = `jup${calls.sell}`;
       await opts.onSignature?.(sig, LAST_VALID());
       wallet.tokens -= tx.amount;
+      tokenMoves.set(sig, -tx.amount);
       calls.sold.push(tx.amount);
-      sigStatus.set(sig, "confirmed");
-      if (jupiterMode === "land_then_throw") throw new Error("fetch failed (reply lost)");
+      sigStatus.set(sig, jupiterMode === "land_unseen" ? "unknown" : "confirmed"); // land_unseen: landed, RPC cannot find it yet
+      if (jupiterMode !== "ok") throw new Error("fetch failed (reply lost)");
       return { signature: sig };
     },
   };
@@ -187,7 +193,8 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     await tick();
     s.gates.poolInfo.forEach((g) => g.open());
     await Promise.all(ps);
-    expect(s.calls.open).toBeLessThanOrEqual(2);
+    // all three are built (the budget is checked on the simulated tx), exactly two are broadcast
+    expect(s.calls.broadcast).toBe(2);
     expect(kinds(s.records)).toContain("open_skipped:low_balance");
   });
 
@@ -410,19 +417,19 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     const wallet = { tokens: 0n, balanceReadFailures: 0 };
     const s = setup({ mintX: TOKEN, wallet });
     s.poolRoute(true);
-    s.jupiterMode("land_then_throw");
+    s.jupiterMode("land_unseen"); // landed, reply lost, and the RPC does not find it yet
     await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
     await s.mm.onLeaderClose("L1");
     expect(s.calls.poolSwap).toBe(0); // no second sale on the other route
     expect(kinds(s.records).at(-1)).toBe("sell_failed");
-    expect(JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8")).sales[0].inFlight).toMatchObject({ sig: "jup1", route: "jupiter", amount: "1000" });
+    expect(JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8")).sales[0].inFlight).toMatchObject({ sigs: [{ sig: "jup1" }], route: "jupiter", requested: "1000" });
     wallet.tokens += 300n; // more of the same mint arrives meanwhile
-    // restart, then the service tick resolves the in-flight swap from chain
-    const r = setup({ dir: s.dir, chain: s.chain, mintX: TOKEN, wallet });
-    (r.mm as unknown as { sender: { status: (sig: string) => Promise<string> } }).sender.status = async (sig) => (sig === "jup1" ? "confirmed" : "unknown");
+    // restart, then the service tick resolves the in-flight swap from chain (now visible)
+    s.sigStatus.set("jup1", "confirmed");
+    const r = setup({ dir: s.dir, chain: s.chain, mintX: TOKEN, wallet, sigStatus: s.sigStatus, tokenMoves: s.tokenMoves });
     r.poolRoute(true);
     await serviceTick(tickDeps(r.mm));
-    expect(kinds(r.records)).toEqual(["sell_confirmed", "sell_done"]);
+    expect(kinds(r.records)).toEqual(["sell", "sell_done"]); // the recovered swap's real 1000, then done
     expect(s.calls.sold).toEqual([1000n]);
     expect(r.calls.sold).toEqual([]);
     expect(r.calls.poolSwap).toBe(0);
@@ -442,7 +449,7 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     expect(s.calls.poolSwap).toBe(0);
     await serviceTick(tickDeps(s.mm), Math.floor(Date.now() / 1000) + 60); // resolves jupX as failed → pool
     await serviceTick(tickDeps(s.mm), Math.floor(Date.now() / 1000) + 120);
-    expect(kinds(s.records).slice(2)).toEqual(["sell_failed", "sell_not_landed", "sell", "sell_done"]);
+    expect(kinds(s.records).slice(2)).toEqual(["sell_not_landed", "sell", "sell_done"]); // known failed at once; pool only on the next pass
     expect(s.calls.sold).toEqual([1000n]);
     expect(wallet.tokens).toBe(0n);
   });
@@ -451,10 +458,9 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     const wallet = { tokens: 0n, balanceReadFailures: 0 };
     const s = setup({ mintX: TOKEN, wallet });
     s.poolRoute(true);
-    s.jupiterMode("land_then_throw");
+    s.jupiterMode("land_unseen");
     await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
-    await s.mm.onLeaderClose("L1"); // Jupiter sells 1000, reply lost
-    s.sigStatus.set("jup1", "unknown"); // the RPC has not found the landed signature yet
+    await s.mm.onLeaderClose("L1"); // Jupiter sells 1000, reply lost, the RPC has not found it yet
     wallet.tokens += 300n; // same mint arrives
     const t0 = Math.floor(Date.now() / 1000);
     vi.useFakeTimers({ toFake: ["Date"] }); // wall clock too: the old rule used Date.now()
@@ -470,7 +476,7 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     expect(s.calls.sold).toEqual([1000n]);
     s.sigStatus.set("jup1", "confirmed"); // RPC catches up
     await serviceTick(tickDeps(s.mm), t0 + 1200);
-    expect(kinds(s.records).slice(-2)).toEqual(["sell_confirmed", "sell_done"]);
+    expect(kinds(s.records).slice(-2)).toEqual(["sell", "sell_done"]);
     expect(wallet.tokens).toBe(300n);
   });
 

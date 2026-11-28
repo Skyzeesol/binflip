@@ -88,8 +88,11 @@ interface PendingSale {
   amount?: string;
   /** Raw units already sold (confirmed swaps). */
   sold: string;
-  /** A swap that was signed (and maybe broadcast) but whose outcome is not known yet. */
-  inFlight?: { sig: string; lastValid?: number; route: "jupiter" | "pool"; amount: string; sentAt: number };
+  /**
+   * A swap that was signed (and maybe broadcast) whose outcome has not been read yet. What it
+   * sold is read from the confirmed tx itself (token and SOL balance changes), never assumed.
+   */
+  inFlight?: { sigs: SentSig[]; route: "jupiter" | "pool"; requested: string; sentAt: number };
   /** Route for the next attempt; a route is changed only after the previous swap is known NOT to have landed. */
   route?: "jupiter" | "pool";
 }
@@ -112,6 +115,40 @@ const saleBackoffSec = (tries: number) => Math.min(900, 30 * 2 ** Math.max(0, tr
 /** Thrown from onSignature: the open was signed but must not be broadcast (STOP / leader close). */
 class AbortBeforeBroadcast extends Error {}
 
+/** Preparation (RPC reads + SDK build) of one action may not hold a position longer than this. */
+const PREP_TIMEOUT_MS = 45_000;
+/** Sending (sign → broadcast → confirm) of one action; after it the chain decides via the signature rule. */
+const SEND_TIMEOUT_MS = 150_000;
+
+class TimeoutError extends Error {}
+function withTimeout<T>(p: Promise<T>, ms: number, what: string, onTimeout?: () => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const t = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => { onTimeout?.(); rej(new TimeoutError(`${what} took longer than ${ms} ms`)); }, ms);
+  });
+  return Promise.race([p, t]).finally(() => clearTimeout(timer));
+}
+
+/** Older state files stored bare signature strings; convert every place they can occur. */
+function upgradePosition<T extends OurPosition>(p: T): T {
+  return {
+    ...p,
+    closing: false,
+    closeSigs: p.closeSigs?.map(asSentSig),
+    rebalanceInFlight: p.rebalanceInFlight && { ...p.rebalanceInFlight, sigs: p.rebalanceInFlight.sigs.map(asSentSig) },
+  };
+}
+function upgradeSale(x: PendingSale): PendingSale {
+  const f = x.inFlight as (PendingSale["inFlight"] & { sig?: string; lastValid?: number; amount?: string }) | undefined;
+  return {
+    ...x,
+    closeSigs: (x.closeSigs ?? []).map(asSentSig),
+    sold: x.sold ?? "0",
+    nextAt: 0,
+    inFlight: f && (f.sigs ? { ...f, sigs: f.sigs.map(asSentSig) } : { sigs: [{ sig: f.sig!, lastValid: f.lastValid }], route: f.route, requested: f.amount ?? "0", sentAt: f.sentAt }),
+  };
+}
+
 /**
  * An open that has been (or is about to be) broadcast but whose outcome we have not seen yet.
  * Persisted BEFORE the first broadcast (position address + every signature as it is produced +
@@ -129,7 +166,12 @@ export class LiveMm {
   private readonly sales = new Map<string, PendingSale>(); // owed after a confirmed close (persisted), by our position
   private readonly selling = new Set<string>();
   private readonly settleAt = new Map<string, number>(); // our position → next allowed outcome lookup (ms)
-  private readonly busy = new Set<string>(); // our positions with an action in flight
+  /** One action at a time per position: rebalance, close and outcome lookups run in this chain. */
+  private readonly locks = new Map<string, Promise<unknown>>();
+  /** SOL set aside for opens that are being prepared or whose outcome is not known yet, by leader position. */
+  private readonly reservations = new Map<string, bigint>();
+  /** Positions whose range was read back from chain in this process (restart check). */
+  private readonly verified = new Set<string>();
   private readonly jupiter = new JupiterClient();
 
   constructor(
@@ -143,9 +185,9 @@ export class LiveMm {
     if (fs.existsSync(opts.stateFile)) {
       const raw = JSON.parse(fs.readFileSync(opts.stateFile, "utf8")) as OurPosition[] | { positions: OurPosition[]; opening: OpeningRecord[]; sales?: PendingSale[] };
       const st = Array.isArray(raw) ? { positions: raw, opening: [] } : raw;
-      for (const p of st.positions) this.ours.set(p.leaderPosition, { ...p, closing: false });
-      for (const o of st.opening ?? []) this.opening.set(o.leaderPosition, { ...o, sigs: o.sigs.map(asSentSig) });
-      for (const x of ("sales" in st ? st.sales : undefined) ?? []) this.sales.set(x.position, { ...x, closeSigs: (x.closeSigs ?? []).map(asSentSig), sold: x.sold ?? "0", nextAt: 0 }); // older state files lack the new fields
+      for (const p of st.positions) this.ours.set(p.leaderPosition, upgradePosition(p));
+      for (const o of st.opening ?? []) this.opening.set(o.leaderPosition, { ...upgradePosition(o), sigs: o.sigs.map(asSentSig) });
+      for (const x of ("sales" in st ? st.sales : undefined) ?? []) this.sales.set(x.position, upgradeSale(x));
       log.warn({ positions: this.ours.size, opening: this.opening.size, sales: this.sales.size }, "live: restored state (opens with unknown outcome are resolved from chain)");
     }
   }
@@ -162,6 +204,43 @@ export class LiveMm {
     const st = { positions: [...this.ours.values()], opening: [...this.opening.values()], sales: [...this.sales.values()] };
     fs.writeFileSync(this.opts.stateFile + ".tmp", JSON.stringify(st, null, 1));
     fs.renameSync(this.opts.stateFile + ".tmp", this.opts.stateFile);
+  }
+
+  /**
+   * Run `fn` as the only action on `key`: callers queue behind each other (no timeout fall-through).
+   * The lock is taken synchronously, so a caller that checks `locks.has` right after sees it.
+   */
+  private exclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(key);
+    const run = (async () => {
+      if (prev) await prev.catch(() => undefined);
+      return fn();
+    })();
+    const tail = run.catch(() => undefined);
+    this.locks.set(key, tail);
+    void tail.then(() => { if (this.locks.get(key) === tail) this.locks.delete(key); });
+    return run;
+  }
+
+  /** Read our position's range back from chain (the truth after an open, a rebalance or a restart). */
+  private async chainRange(p: OurPosition): Promise<{ lower: number; upper: number } | undefined> {
+    try {
+      const b = await this.builder.positionBins(p.pool, p.position);
+      return { lower: b.lower, upper: b.upper };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async syncRange(p: OurPosition, why: string): Promise<void> {
+    const r = await this.chainRange(p);
+    if (!r) return;
+    this.verified.add(p.position);
+    if (r.lower !== p.range.lower || r.upper !== p.range.upper) {
+      this.record("live", { t: Math.floor(Date.now() / 1000), kind: "range_from_chain", why, position: p.position, was: { lower: p.range.lower, upper: p.range.upper }, now: r });
+      p.range = { ...p.range, ...r };
+      this.save();
+    }
   }
 
   private async sendBuilt(built: BuiltTxs, onSignature?: (sig: string, lastValid: number) => Promise<void>): Promise<string[]> {
@@ -204,18 +283,25 @@ export class LiveMm {
     const slot = { closeRequested: false, sent: false } as { closeRequested: boolean; reason?: string; sent: boolean };
     this.pending.set(e.leaderPosition, slot); // reservation: from here on every exit path must release it
     try {
-      const info = await this.builder.poolInfo(e.pool);
+      const info = await withTimeout(this.builder.poolInfo(e.pool), PREP_TIMEOUT_MS, "pool read");
       if (!info.solIsY) return skip("sol_not_y");
       const w = mmWidth(info.binStep);
       if (w > 70) return skip("too_wide", { width: w });
-      // Budget: our lot plus the lots of the other opens still in flight (not yet in the balance).
-      const others = BigInt(this.inFlight() - 1);
-      const bal = BigInt(await this.builder.connection.getBalance(this.owner, "confirmed"));
-      if (bal < this.opts.lotLamports * (others + 1n) + this.opts.reserveLamports) return skip("low_balance", { balance: bal.toString(), inFlight: Number(others) });
       if (slot.closeRequested) return skip("leader_closed_before_open");
 
-      const range = mmPlace("sol", info.activeBinId, info.binStep);
-      const built = await this.builder.open({ pool: e.pool, lowerBinId: range.lower, upperBinId: range.upper, amountSol: this.opts.lotLamports, strategy: "spot", slippagePct: 1 });
+      const planned = mmPlace("sol", info.activeBinId, info.binStep);
+      const built = await withTimeout(this.builder.open({ pool: e.pool, lowerBinId: planned.lower, upperBinId: planned.upper, amountSol: this.opts.lotLamports, strategy: "spot", slippagePct: 1 }), PREP_TIMEOUT_MS, "open build");
+      // The range the SDK actually built for (it clips a SOL-only range to the active bin it sees).
+      const range: MmRange = { ...planned, ...(built.range ?? {}) };
+      if (range.lower > range.upper) return skip("range_clipped_away", { planned, built: built.range });
+      // Budget: what THIS tx takes from the wallet (simulated: lot + rent + fees + priority), on top
+      // of the reserve and of what other opens in flight have set aside. Checked and reserved in one
+      // synchronous step, so concurrent opens queue for the money instead of all failing.
+      const spend = await withTimeout(this.sender.estimateSpend(built.txs[0] as Transaction, { priorityMicroLamports: this.opts.priorityMicroLamports }), PREP_TIMEOUT_MS, "open simulation");
+      const bal = BigInt(await withTimeout(this.builder.connection.getBalance(this.owner, "confirmed"), PREP_TIMEOUT_MS, "balance read"));
+      const held = this.reservedTotal();
+      if (bal - held < spend + this.opts.reserveLamports) return skip("low_balance", { balance: bal.toString(), spend: spend.toString(), reservedForOthers: held.toString() });
+      this.reservations.set(e.leaderPosition, spend);
       // Last point before anything is signed: the leader may have closed, or STOP / CLOSE_ALL may
       // have appeared while we were waiting on RPC.
       if (slot.closeRequested) return skip("leader_closed_before_open");
@@ -225,22 +311,24 @@ export class LiveMm {
       this.opening.set(e.leaderPosition, rec);
       this.save(); // position address persisted before the first broadcast
       slot.sent = true;
+      let timedOut = false;
       try {
-        await this.sendBuilt(built, async (sig, lastValid) => {
+        await withTimeout(this.sendBuilt(built, async (sig, lastValid) => {
           // Runs after the sender's simulation and signing, right before the FIRST broadcast:
           // the last chance to honour STOP / CLOSE_ALL / a leader close that arrived meanwhile.
           if (rec.sigs.length === 0) {
+            if (timedOut) throw new AbortBeforeBroadcast("send_timeout_before_broadcast");
             if (slot.closeRequested) throw new AbortBeforeBroadcast("leader_closed_before_broadcast");
             if (this.stopped()) throw new AbortBeforeBroadcast("kill_file_before_broadcast");
           }
           rec.sigs.push({ sig, lastValid });
           this.save();
-        });
+        }), SEND_TIMEOUT_MS, "open send", () => (timedOut = true));
       } catch (err) {
-        if (err instanceof AbortBeforeBroadcast) {
+        if (err instanceof AbortBeforeBroadcast || (err instanceof TimeoutError && rec.sigs.length === 0)) {
           this.opening.delete(e.leaderPosition); // nothing was broadcast: nothing to resolve
           this.save();
-          return skip(err.message);
+          return skip(err instanceof AbortBeforeBroadcast ? err.message : "send_timeout_before_broadcast");
         }
         // Outcome uncertain (lost reply, timeout, failure): the chain decides, not the error.
         this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_uncertain", position: rec.position, sigs: rec.sigs.map((x) => x.sig), error: String((err as Error).message).slice(0, 300) });
@@ -253,7 +341,17 @@ export class LiveMm {
       this.log.warn({ err: (err as Error).message, pool: e.pool, sent: slot.sent }, "live: open failed");
     } finally {
       this.pending.delete(e.leaderPosition);
+      // The reservation lives while the open may still spend: until it is adopted or dropped.
+      if (!this.opening.has(e.leaderPosition)) this.reservations.delete(e.leaderPosition);
     }
+  }
+
+  /** SOL set aside for opens in flight; opens restored from a state file count a lot each. */
+  private reservedTotal(): bigint {
+    let sum = 0n;
+    for (const v of this.reservations.values()) sum += v;
+    for (const k of this.opening.keys()) if (!this.reservations.has(k)) sum += this.opts.lotLamports;
+    return sum;
   }
 
   /**
@@ -272,8 +370,10 @@ export class LiveMm {
     if (exists) {
       const { sigs, sentAt, ...p } = rec; // p keeps closeRequested: persisted with the position
       this.opening.delete(rec.leaderPosition);
+      this.reservations.delete(rec.leaderPosition);
       this.ours.set(rec.leaderPosition, p);
       this.save();
+      await this.syncRange(p, "open");
       this.record("live", { t: now, kind: justSent ? "open" : "open_recovered", ...p, lamports: this.opts.lotLamports.toString(), sigs: sigs.map((x) => x.sig) });
       this.log.info({ pool: p.pool, position: p.position, range: p.range, recovered: !justSent }, "live: opened");
       if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed");
@@ -283,6 +383,7 @@ export class LiveMm {
       // the signature is persisted before the first broadcast: none means nothing was ever sent
       this.opening.delete(rec.leaderPosition);
       this.save();
+      this.reservations.delete(rec.leaderPosition);
       this.record("live", { t: now, kind: "open_dropped", reason: "never_signed", leaderPosition: rec.leaderPosition, position: rec.position, sigs: [] });
       return "dropped";
     }
@@ -290,6 +391,7 @@ export class LiveMm {
     if (out.every((o) => o === "failed" || o === "expired")) {
       this.opening.delete(rec.leaderPosition);
       this.save();
+      this.reservations.delete(rec.leaderPosition);
       this.record("live", { t: now, kind: "open_dropped", reason: out.every((o) => o === "failed") ? "tx_failed" : "not_landed", leaderPosition: rec.leaderPosition, position: rec.position, sigs: rec.sigs.map((x) => x.sig), outcomes: out });
       return "dropped";
     }
@@ -306,38 +408,62 @@ export class LiveMm {
   /** A fresh active bin for a pool: move every one of our positions there that needs it. */
   onTick(pool: string, active: number): void {
     for (const p of this.ours.values()) {
-      if (p.pool !== pool || p.closing || this.busy.has(p.position)) continue;
+      // A persisted close request (pending or not yet sent) blocks every new rebalance.
+      if (p.pool !== pool || p.closeRequested || this.locks.has(p.position)) continue;
       if (p.rebalanceInFlight && Date.now() < (this.settleAt.get(p.position) ?? 0)) continue; // resolving: rate-limited
       const d = mmDecide(p.range, active, p.binStep, MM_TRIGGER_BINS);
-      if (d.kind === "rebalance") void this.rebalance(p, active, d.distance);
+      if (d.kind === "rebalance") void this.exclusive(p.position, () => this.rebalance(p, active, d.distance));
     }
   }
 
+  /** Runs inside exclusive(p.position). */
   private async rebalance(p: OurPosition, active: number, distance: number): Promise<void> {
-    this.busy.add(p.position);
     const t = Math.floor(Date.now() / 1000);
+    if (p.closeRequested || !this.ours.has(p.leaderPosition)) return; // a close came first
     try {
       // An earlier rebalance with an unknown outcome decides first: never two on top of each other.
       if ((await this.settleRebalance(p)) !== "none") return;
       const removes = [{ minBinId: p.range.lower, maxBinId: p.range.upper, bps: 10_000 }];
-      const held = await this.builder.simulateWithdraw(p.pool, p.position, removes);
-      const adds = mmAddsAt(held.x, held.y, p.binStep, active);
-      if (!adds.length) throw new Error("empty position");
-      const built = await this.builder.rebalanceOne({
-        pool: p.pool, position: p.position, removes, adds,
-        favorX: false, claimFee: true, maxActiveBinSlippage: this.opts.slippageBins, slippagePct: 1,
-      });
-      const range = mmRangeAfter(adds, active);
-      const inFlight = { sigs: [] as SentSig[], range, active, t };
+      const prep = async () => {
+        const held = await this.builder.simulateWithdraw(p.pool, p.position, removes);
+        const build = (at: number) => {
+          const adds = mmAddsAt(held.x, held.y, p.binStep, at);
+          if (!adds.length) throw new Error("empty position");
+          return this.builder.rebalanceOne({
+            pool: p.pool, position: p.position, removes, adds,
+            favorX: false, claimFee: true, maxActiveBinSlippage: this.opts.slippageBins, slippagePct: 1,
+          }).then((built) => ({ built, adds, at }));
+        };
+        let r = await build(active);
+        // The SDK refetches the pool and its add deltas are relative to ITS active bin: if that is
+        // not the bin we planned with, plan again against it (once); a second move → next tick.
+        if (r.built.activeId !== undefined && r.built.activeId !== r.at) {
+          r = await build(r.built.activeId);
+          if (r.built.activeId !== undefined && r.built.activeId !== r.at) throw new Error(`active bin moved while building (${r.at} → ${r.built.activeId})`);
+        }
+        return { ...r, held };
+      };
+      const { built, adds, at, held } = await withTimeout(prep(), PREP_TIMEOUT_MS, "rebalance preparation");
+      if (p.closeRequested) {
+        this.record("live", { t, kind: "rebalance_dropped", reason: "close_requested", position: p.position, pool: p.pool });
+        return;
+      }
+      const range = mmRangeAfter(adds, at);
+      const inFlight = { sigs: [] as SentSig[], range, active: at, t };
       p.rebalanceInFlight = inFlight;
+      let timedOut = false;
       let sigs: string[];
       try {
-        sigs = await this.sendBuilt(built, async (sig, lastValid) => { inFlight.sigs.push({ sig, lastValid }); this.save(); });
+        sigs = await withTimeout(this.sendBuilt(built, async (sig, lastValid) => {
+          if (inFlight.sigs.length === 0 && (timedOut || p.closeRequested)) throw new AbortBeforeBroadcast(timedOut ? "send_timeout_before_broadcast" : "close_requested_before_broadcast");
+          inFlight.sigs.push({ sig, lastValid });
+          this.save();
+        }), SEND_TIMEOUT_MS, "rebalance send", () => (timedOut = true));
       } catch (err) {
         if (inFlight.sigs.length) {
           // signed and maybe broadcast: the chain decides on a later tick (settleRebalance)
           this.save();
-          this.record("live", { t, kind: "rebalance_uncertain", position: p.position, pool: p.pool, active, distance, range, sigs: inFlight.sigs.map((x) => x.sig), error: String((err as Error).message).slice(0, 300) });
+          this.record("live", { t, kind: "rebalance_uncertain", position: p.position, pool: p.pool, active: at, distance, range, sigs: inFlight.sigs.map((x) => x.sig), error: String((err as Error).message).slice(0, 300) });
           return;
         }
         p.rebalanceInFlight = undefined;
@@ -347,12 +473,11 @@ export class LiveMm {
       p.range = range;
       p.lastMoveAt = Math.floor(Date.now() / 1000);
       this.save();
-      this.record("live", { t, kind: "rebalance", position: p.position, pool: p.pool, active, distance, range: p.range, held: { x: held.x.toString(), y: held.y.toString() }, sigs });
+      this.record("live", { t, kind: "rebalance", position: p.position, pool: p.pool, active: at, plannedActive: active, distance, range: p.range, held: { x: held.x.toString(), y: held.y.toString() }, sigs });
+      await this.syncRange(p, "rebalance");
     } catch (err) {
       // Expected when the price moved again before we landed (bin slippage): the next tick retries.
       this.record("live", { t, kind: "rebalance_failed", position: p.position, pool: p.pool, active, distance, error: String((err as Error).message).slice(0, 300) });
-    } finally {
-      this.busy.delete(p.position);
     }
   }
 
@@ -372,6 +497,10 @@ export class LiveMm {
       p.range = f.range;
       p.lastMoveAt = t;
       this.record("live", { t, kind: "rebalance_confirmed", position: p.position, pool: p.pool, active: f.active, range: f.range, sigs: f.sigs.map((x) => x.sig) });
+      p.rebalanceInFlight = undefined;
+      this.save();
+      await this.syncRange(p, "rebalance_confirmed");
+      return "settled";
     } else {
       // rebalanceOne is a single tx, so "some confirmed" does not occur; anything else did not move us
       this.record("live", { t, kind: "rebalance_not_landed", position: p.position, pool: p.pool, sigs: f.sigs.map((x) => x.sig), outcomes: out });
@@ -423,10 +552,13 @@ export class LiveMm {
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
       // A rebalance in flight is resolved here too: the price may have come back, so no tick
-      // would ask for a rebalance, and our range must not stay stale.
-      if (p.rebalanceInFlight && !this.busy.has(p.position)) {
-        this.busy.add(p.position);
-        try { await this.settleRebalance(p); } finally { this.busy.delete(p.position); }
+      // would ask for a rebalance, and our range must not stay stale. After a restart every
+      // position's range is read back from chain once.
+      if (!this.locks.has(p.position) && (p.rebalanceInFlight || !this.verified.has(p.position))) {
+        await this.exclusive(p.position, async () => {
+          if (p.rebalanceInFlight) await this.settleRebalance(p);
+          if (!this.verified.has(p.position)) await this.syncRange(p, "restart");
+        });
       }
       if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed"); // restored intent
       else if (closeAll) await this.close(p, "close_all_file");
@@ -442,9 +574,18 @@ export class LiveMm {
     }
     if (p.closing) return;
     p.closing = true;
-    // Wait for an in-flight rebalance on this position to finish.
-    for (let i = 0; i < 60 && this.busy.has(p.position); i++) await new Promise((r) => setTimeout(r, 500));
-    this.busy.add(p.position);
+    try {
+      // Queues behind any action on this position (a rebalance being prepared or sent): no parallel
+      // close; a rebalance that has not signed yet sees closeRequested and drops itself.
+      await this.exclusive(p.position, () => this.closeNow(p, reason));
+    } finally {
+      p.closing = false;
+    }
+  }
+
+  /** Runs inside exclusive(p.position). */
+  private async closeNow(p: OurPosition, reason: string): Promise<void> {
+    if (!this.ours.has(p.leaderPosition)) return;
     const t = Math.floor(Date.now() / 1000);
     const done = async (kind: string, sigs: string[]) => {
       // One atomic save: the position (with its close intent) goes, the owed sale comes.
@@ -456,20 +597,23 @@ export class LiveMm {
     };
     try {
       // A previous close may have landed with its reply lost (or before a crash): verify on chain.
-      if ((await this.builder.connection.getAccountInfo(new PublicKey(p.position), "confirmed")) === null) return await done("close_verified", []);
+      if ((await withTimeout(this.builder.connection.getAccountInfo(new PublicKey(p.position), "confirmed"), PREP_TIMEOUT_MS, "position read")) === null) return await done("close_verified", []);
       // The same signature rule before building anything new: a close or a rebalance of ours that
       // may still land → wait for it (the intent stays persisted; the next tick looks again).
-      if ((await this.settleRebalance(p)) === "pending" || (await this.closePending(p))) {
-        p.closing = false;
-        return;
-      }
-      const built = await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true });
-      await done("close", await this.sendBuilt(built, async (sig, lastValid) => { (p.closeSigs ??= []).push({ sig, lastValid }); this.save(); }));
+      if ((await this.settleRebalance(p)) === "pending" || (await this.closePending(p))) return;
+      const built = await withTimeout(this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true }), PREP_TIMEOUT_MS, "close build");
+      let timedOut = false;
+      let signed = 0;
+      const sigs = await withTimeout(this.sendBuilt(built, async (sig, lastValid) => {
+        if (signed === 0 && timedOut) throw new AbortBeforeBroadcast("send_timeout_before_broadcast");
+        signed++;
+        (p.closeSigs ??= []).push({ sig, lastValid });
+        this.save();
+      }), SEND_TIMEOUT_MS, "close send", () => (timedOut = true));
+      await done("close", sigs);
     } catch (err) {
-      p.closing = false; // retried by the idle check / the next close signal
+      // retried by the next tick (the intent is persisted); a recorded signature is resolved first
       this.record("live", { t, kind: "close_failed", reason, position: p.position, pool: p.pool, error: String((err as Error).message).slice(0, 300) });
-    } finally {
-      this.busy.delete(p.position);
     }
   }
 
@@ -502,44 +646,75 @@ export class LiveMm {
   }
 
   /**
+   * What a swap's signatures did, read from chain: pending (any may still land, or a confirmed tx
+   * is not readable yet) → undefined; otherwise the token our wallet actually gave up and the SOL
+   * it actually received over the confirmed ones (a partial fill counts what it filled), and
+   * whether anything landed at all.
+   */
+  private async swapOutcome(sigs: SentSig[], mint: string): Promise<{ landed: boolean; sold: bigint; solIn: bigint } | undefined> {
+    let landed = false, sold = 0n, solIn = 0n;
+    const me = this.owner.toBase58();
+    for (const x of sigs) {
+      const o = await this.sender.resolve(x.sig, x.lastValid);
+      if (o === "pending") return undefined;
+      if (o !== "confirmed") continue;
+      const tx = await this.builder.connection.getTransaction(x.sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      if (!tx?.meta) return undefined;
+      if (tx.meta.err) continue;
+      const amt = (list: typeof tx.meta.postTokenBalances) =>
+        (list ?? []).filter((b) => b.mint === mint && b.owner === me).reduce((a, b) => a + BigInt(b.uiTokenAmount.amount), 0n);
+      sold += amt(tx.meta.preTokenBalances) - amt(tx.meta.postTokenBalances);
+      solIn += BigInt(tx.meta.postBalances[0] ?? 0) - BigInt(tx.meta.preBalances[0] ?? 0); // we are the fee payer (index 0)
+      landed = true;
+    }
+    return { landed, sold, solIn };
+  }
+
+  /**
    * Sell what THIS close released, never more: the owed amount is the close txs' net token
    * outflow for the position (other tokens of the same mint in the wallet are left alone), and
    * each pass sells min(owed − sold, balance).
    *
-   * Every swap's signature is persisted before its broadcast. If the outcome is unknown (lost
-   * reply, crash), the chain decides on the next pass by TxSender.resolve(): confirmed → counted
-   * as sold; failed or expired → not sold, and only then may the other route be used; pending → wait.
-   * Jupiter first; the pool route only when a Jupiter swap was never signed or is known not to
-   * have landed.
+   * Every swap's signatures are persisted before broadcast, and what a swap sold is READ from the
+   * confirmed tx (a pool that fills 400 of 1000 counts 400; the other 600 stay owed). The outcome
+   * of each swap is resolved by TxSender.resolve(): pending → wait; failed or expired → not sold,
+   * and only then may the other route be used. `sell_done` is written only when nothing is owed;
+   * a zero wallet balance while tokens are owed is waited out (it can be a stale RPC answer).
    */
   private async runSale(position: string, now: number): Promise<void> {
     const x = this.sales.get(position);
     if (!x || this.selling.has(position)) return;
     this.selling.add(position);
     const t = Math.floor(Date.now() / 1000);
-    const retryLater = (error: string) => {
+    const retryLater = (error: string, kind = "sell_failed") => {
       x.tries++;
       x.nextAt = now + saleBackoffSec(x.tries);
       this.save();
-      this.record("live", { t, kind: "sell_failed", mint: x.mintX, position, tries: x.tries, retryInSec: saleBackoffSec(x.tries), error: error.slice(0, 300) });
+      this.record("live", { t, kind, mint: x.mintX, position, owed: x.amount === undefined ? null : (BigInt(x.amount) - BigInt(x.sold)).toString(), tries: x.tries, retryInSec: saleBackoffSec(x.tries), error: error.slice(0, 300) });
+    };
+    /** Account for the swap in flight; true when it is settled (landed or known not to have). */
+    const settleInFlight = async (): Promise<boolean> => {
+      const f = x.inFlight;
+      if (!f) return true;
+      const r = await this.swapOutcome(f.sigs, x.mintX);
+      if (!r) return false;
+      if (r.landed) {
+        x.sold = (BigInt(x.sold) + r.sold).toString();
+        this.record("live", { t, kind: "sell", via: f.route, mint: x.mintX, position, requested: f.requested, amount: r.sold.toString(), outLamports: r.solIn.toString(), sigs: f.sigs.map((s) => s.sig), owed: x.amount === undefined ? null : (BigInt(x.amount) - BigInt(x.sold)).toString() });
+      } else {
+        this.record("live", { t, kind: "sell_not_landed", via: f.route, mint: x.mintX, position, sigs: f.sigs.map((s) => s.sig) });
+        x.route = f.route === "jupiter" ? "pool" : "jupiter";
+      }
+      x.inFlight = undefined;
+      x.nextAt = 0;
+      this.save();
+      return true;
     };
     try {
       // 1) a swap from an earlier pass with an unknown outcome: resolve it first
-      if (x.inFlight) {
-        const st = await this.sender.resolve(x.inFlight.sig, x.inFlight.lastValid);
-        if (st === "confirmed") {
-          x.sold = (BigInt(x.sold) + BigInt(x.inFlight.amount)).toString();
-          this.record("live", { t, kind: "sell_confirmed", via: x.inFlight.route, mint: x.mintX, position, amount: x.inFlight.amount, sig: x.inFlight.sig });
-          x.inFlight = undefined;
-        } else if (st === "failed" || st === "expired") {
-          this.record("live", { t, kind: "sell_not_landed", via: x.inFlight.route, mint: x.mintX, position, sig: x.inFlight.sig, status: st });
-          x.route = x.inFlight.route === "jupiter" ? "pool" : "jupiter";
-          x.inFlight = undefined;
-        } else {
-          x.nextAt = now + 5; // may still land: no new swap until it is known
-          return;
-        }
-        this.save();
+      if (!(await settleInFlight())) {
+        x.nextAt = now + 5; // may still land: no new swap until it is known
+        return;
       }
       // 2) how much this close released
       if (x.amount === undefined) {
@@ -563,45 +738,49 @@ export class LiveMm {
         this.save();
       }
       const owed = BigInt(x.amount) - BigInt(x.sold);
-      const bal = owed > 0n ? await this.builder.tokenBalance(x.mintX) : 0n;
-      const amount = owed < bal ? owed : bal;
-      if (amount <= 0n) {
+      if (owed <= 0n) {
         this.sales.delete(position);
         this.save();
         this.record("live", { t, kind: "sell_done", mint: x.mintX, position, amount: x.amount, sold: x.sold, tries: x.tries });
         return;
       }
-      // 3) one swap, signature persisted before broadcast
+      const bal = await this.builder.tokenBalance(x.mintX);
+      const amount = owed < bal ? owed : bal;
+      if (amount <= 0n) return retryLater(`owed ${owed} but the wallet shows ${bal}`, "sell_waiting_balance");
+      // 3) one swap; signatures persisted before broadcast; the outcome is read from chain
       const mark = (route: "jupiter" | "pool") => async (sig: string, lastValid: number) => {
-        x.inFlight = { sig, lastValid, route, amount: amount.toString(), sentAt: Math.floor(Date.now() / 1000) };
+        x.inFlight ??= { sigs: [], route, requested: amount.toString(), sentAt: Math.floor(Date.now() / 1000) };
+        x.inFlight.sigs.push({ sig, lastValid });
         this.save();
       };
-      const settle = (route: string, sig: string, out: string) => {
-        x.sold = (BigInt(x.sold) + amount).toString();
-        x.inFlight = undefined;
-        x.nextAt = 0;
-        this.save();
-        this.record("live", { t, kind: "sell", via: route, mint: x.mintX, position, amount: amount.toString(), outLamports: out, sig });
+      const afterSend = async (err?: unknown) => {
+        if (!x.inFlight) return false; // never signed
+        if (!(await settleInFlight())) {
+          retryLater(`${x.inFlight?.route} outcome unknown, resolving from chain${err ? `: ${(err as Error).message}` : ""}`);
+          return true;
+        }
+        return true;
       };
       const errors: string[] = [];
       if ((x.route ?? "jupiter") === "jupiter") {
         try {
-          const q = await this.jupiter.quoteToSol(x.mintX, amount, 300);
-          const { tx, lastValidBlockHeight } = await this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000);
-          const r = await this.sender.sendVersioned(tx, lastValidBlockHeight, { onSignature: mark("jupiter") });
-          return settle("jupiter", r.signature, q.outAmount);
+          const q = await withTimeout(this.jupiter.quoteToSol(x.mintX, amount, 300), PREP_TIMEOUT_MS, "jupiter quote");
+          const { tx, lastValidBlockHeight } = await withTimeout(this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000), PREP_TIMEOUT_MS, "jupiter build");
+          await this.sender.sendVersioned(tx, lastValidBlockHeight, { onSignature: mark("jupiter") });
+          await afterSend();
+          return;
         } catch (err) {
-          if (x.inFlight) return retryLater(`jupiter outcome unknown, resolving from chain: ${(err as Error).message}`); // signed: NO fallback now
+          if (await afterSend(err)) return; // signed: NO fallback until it is known not to have landed
           errors.push(`jupiter: ${(err as Error).message}`); // never signed: the pool route is safe
         }
       }
       try {
-        const s2 = await this.builder.swapTokenToSol({ pool: x.pool, amount, slippageBps: 300 });
+        const s2 = await withTimeout(this.builder.swapTokenToSol({ pool: x.pool, amount, slippageBps: 300 }), PREP_TIMEOUT_MS, "pool quote");
         if (!s2) throw new Error("no pool route");
-        const sigs = await this.sendBuilt(s2.built, mark("pool"));
-        return settle("pool", sigs.at(-1) ?? "", s2.outLamports.toString());
+        await this.sendBuilt(s2.built, mark("pool"));
+        await afterSend();
       } catch (err) {
-        if (x.inFlight) return retryLater(`pool outcome unknown, resolving from chain: ${(err as Error).message}`);
+        if (await afterSend(err)) return;
         errors.push(`pool: ${(err as Error).message}`);
         x.route = "jupiter"; // nothing was signed on either route: start over next time
         return retryLater(errors.join(" / "));

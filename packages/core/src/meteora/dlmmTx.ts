@@ -22,6 +22,10 @@ export interface BuiltTxs {
   extraSigners: Map<number, Keypair[]>;
   /** Our position address, when this build creates or targets one. */
   position: string | null;
+  /** The bin range the SDK actually built for (after clipping to the active bin), when known. */
+  range?: { lower: number; upper: number };
+  /** The active bin the SDK built against (it refetches the pool), when known. */
+  activeId?: number;
 }
 
 export interface PoolInfo {
@@ -104,7 +108,7 @@ export class DlmmTxBuilder {
         // The add is built against the on-chain position, so it must be built after the create lands.
         // Callers send `txs[0]`, then call add() for the funding.
       }
-      return { txs, extraSigners, position: kp.publicKey.toBase58() };
+      return { txs, extraSigners, position: kp.publicKey.toBase58(), range: { lower: p.lowerBinId, upper: p.upperBinId }, activeId: d.lbPair.activeId };
     }
 
     const { x, y, range } = this.oneSided(d, p.lowerBinId, p.upperBinId, p.amountSol);
@@ -116,7 +120,7 @@ export class DlmmTxBuilder {
       strategy: { minBinId: range[0], maxBinId: range[1], strategyType: toStrategyType(p.strategy) },
       slippage: p.slippagePct,
     });
-    return { txs: [tx], extraSigners, position: kp.publicKey.toBase58() };
+    return { txs: [tx], extraSigners, position: kp.publicKey.toBase58(), range: { lower: range[0], upper: range[1] }, activeId: d.lbPair.activeId };
   }
 
   /**
@@ -155,6 +159,7 @@ export class DlmmTxBuilder {
       txs: [tx],
       extraSigners: new Map(),
       position: p.position,
+      activeId: d.lbPair.activeId, // the add deltas are relative to THIS bin
       withdrawn: { x: BigInt(r.actualAmountXWithdrawn.toString()), y: BigInt(r.actualAmountYWithdrawn.toString()) },
       deposited: { x: BigInt(r.actualAmountXDeposited.toString()), y: BigInt(r.actualAmountYDeposited.toString()) },
     };

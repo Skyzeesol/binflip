@@ -105,6 +105,34 @@ export class TxSender {
     return { unitsConsumed: v.unitsConsumed ?? null, logs: v.logs ?? [] };
   }
 
+  /**
+   * SOL this tx would take from our wallet, by simulation (nothing signed or sent): the payer's
+   * balance change (rent for new accounts, transfers, wraps) + the base fee + the priority fee
+   * at the units the simulation used (with the margin fitComputeLimit adds). Prepares the tx.
+   */
+  async estimateSpend(tx: Transaction, opts: SendOptions = {}): Promise<bigint> {
+    await this.prepare(tx, opts);
+    const payer = new PublicKey(this.signer.publicKey);
+    const msg = tx.compileMessage();
+    const [pre, res, fee] = await Promise.all([
+      this.connection.getBalance(payer, "confirmed"),
+      this.connection.simulateTransaction(new VersionedTransaction(msg), {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: "confirmed",
+        accounts: { encoding: "base64", addresses: [payer.toBase58()] },
+      }),
+      this.connection.getFeeForMessage(msg, "confirmed"),
+    ]);
+    const v = res.value;
+    if (v.err) throw new SimulationError(`simulation failed: ${JSON.stringify(v.err)}`, v.logs ?? []);
+    const post = v.accounts?.[0]?.lamports;
+    if (post === undefined || post === null) throw new Error("simulation returned no payer account");
+    const units = Math.min(1_400_000, Math.ceil((v.unitsConsumed ?? 1_200_000) * 1.15) + 20_000);
+    const priority = BigInt(Math.ceil(((opts.priorityMicroLamports ?? 0) * units) / 1e6));
+    return BigInt(pre) - BigInt(post) + BigInt(fee.value ?? 5000) + priority;
+  }
+
   async sign(tx: Transaction, extra: Keypair[] = []): Promise<string> {
     if (extra.length) tx.partialSign(...extra);
     const message = tx.serializeMessage();
