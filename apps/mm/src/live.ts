@@ -57,6 +57,8 @@ interface OurPosition {
    */
   closeRequested?: boolean;
   closeReason?: string;
+  /** Signatures of our close txs, persisted before each broadcast. */
+  closeSigs?: string[];
 }
 
 /**
@@ -72,7 +74,20 @@ interface PendingSale {
   since: number;
   tries: number;
   nextAt: number;
+  /** Our close tx signatures (persisted before broadcast): the owed amount is read from them. */
+  closeSigs: string[];
+  /** Net token outflow of THIS position's close (raw units, decimal string); unset until read. */
+  amount?: string;
+  /** Raw units already sold (confirmed swaps). */
+  sold: string;
+  /** A swap that was signed (and maybe broadcast) but whose outcome is not known yet. */
+  inFlight?: { sig: string; route: "jupiter" | "pool"; amount: string; sentAt: number };
+  /** Route for the next attempt; a route is changed only after the previous swap is known NOT to have landed. */
+  route?: "jupiter" | "pool";
 }
+
+/** A swap with an unknown outcome this long after signing can no longer land (blockhash expired). */
+const SWAP_EXPIRE_SEC = 120;
 
 /** Retry spacing for a sale that failed: 30 s doubling to 15 min (LP Agent style: keep trying). */
 const saleBackoffSec = (tries: number) => Math.min(900, 30 * 2 ** Math.max(0, tries - 1));
@@ -114,7 +129,7 @@ export class LiveMm {
       const st = Array.isArray(raw) ? { positions: raw, opening: [] } : raw;
       for (const p of st.positions) this.ours.set(p.leaderPosition, { ...p, closing: false });
       for (const o of st.opening ?? []) this.opening.set(o.leaderPosition, o);
-      for (const x of ("sales" in st ? st.sales : undefined) ?? []) this.sales.set(x.position, { ...x, nextAt: 0 });
+      for (const x of ("sales" in st ? st.sales : undefined) ?? []) this.sales.set(x.position, { ...x, closeSigs: x.closeSigs ?? [], sold: x.sold ?? "0", nextAt: 0 }); // older state files lack the new fields
       log.warn({ positions: this.ours.size, opening: this.opening.size, sales: this.sales.size }, "live: restored state (opens with unknown outcome are resolved from chain)");
     }
   }
@@ -351,7 +366,7 @@ export class LiveMm {
     const t = Math.floor(Date.now() / 1000);
     const done = async (kind: string, sigs: string[]) => {
       // One atomic save: the position (with its close intent) goes, the owed sale comes.
-      if (p.mintX !== WSOL_MINT) this.sales.set(p.position, { leaderPosition: p.leaderPosition, position: p.position, pool: p.pool, mintX: p.mintX, since: t, tries: 0, nextAt: 0 });
+      if (p.mintX !== WSOL_MINT) this.sales.set(p.position, { leaderPosition: p.leaderPosition, position: p.position, pool: p.pool, mintX: p.mintX, since: t, tries: 0, nextAt: 0, closeSigs: [...(p.closeSigs ?? [])], sold: "0" });
       this.ours.delete(p.leaderPosition); // the only place a close intent is cleared
       this.save();
       this.record("live", { t, kind, reason, position: p.position, pool: p.pool, sigs });
@@ -360,7 +375,8 @@ export class LiveMm {
     try {
       // A previous close may have landed with its reply lost (or before a crash): verify on chain.
       if ((await this.builder.connection.getAccountInfo(new PublicKey(p.position), "confirmed")) === null) return await done("close_verified", []);
-      await done("close", await this.sendBuilt(await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true })));
+      const built = await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true });
+      await done("close", await this.sendBuilt(built, async (sig) => { (p.closeSigs ??= []).push(sig); this.save(); }));
     } catch (err) {
       p.closing = false; // retried by the idle check / the next close signal
       this.record("live", { t, kind: "close_failed", reason, position: p.position, pool: p.pool, error: String((err as Error).message).slice(0, 300) });
@@ -373,44 +389,121 @@ export class LiveMm {
     for (const x of [...this.sales.values()]) if (now >= x.nextAt) await this.runSale(x.position, now);
   }
 
+  /** Net change of `mint` in our wallet over these confirmed txs; undefined if any tx cannot be read yet. */
+  private async tokenDelta(sigs: string[], mint: string): Promise<bigint | undefined> {
+    let sum = 0n;
+    const me = this.owner.toBase58();
+    for (const sig of sigs) {
+      const tx = await this.builder.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      if (!tx?.meta) return undefined;
+      if (tx.meta.err) continue; // a failed tx moved nothing
+      const amt = (list: typeof tx.meta.postTokenBalances) =>
+        (list ?? []).filter((b) => b.mint === mint && b.owner === me).reduce((a, b) => a + BigInt(b.uiTokenAmount.amount), 0n);
+      sum += amt(tx.meta.postTokenBalances) - amt(tx.meta.preTokenBalances);
+    }
+    return sum;
+  }
+
   /**
-   * Sell whatever of the pool's token the wallet holds (Jupiter first, the pool as fallback).
-   * The record stays until a balance read shows nothing left, so a lost reply, a failed swap or
-   * an RPC error (even on the balance read) is retried on later ticks and after a restart; a
-   * swap that landed with its reply lost is seen as a zero balance, never sold twice.
+   * Sell what THIS close released, never more: the owed amount is the close txs' net token
+   * outflow for the position (other tokens of the same mint in the wallet are left alone), and
+   * each pass sells min(owed − sold, balance).
+   *
+   * Every swap's signature is persisted before its broadcast. If the outcome is unknown (lost
+   * reply, crash), the chain decides on the next pass: confirmed → counted as sold; failed or
+   * expired (unknown for SWAP_EXPIRE_SEC) → not sold, and only then may the other route be used.
+   * Jupiter first; the pool route only when a Jupiter swap was never signed or is known not to
+   * have landed.
    */
   private async runSale(position: string, now: number): Promise<void> {
     const x = this.sales.get(position);
     if (!x || this.selling.has(position)) return;
     this.selling.add(position);
     const t = Math.floor(Date.now() / 1000);
-    try {
-      const amount = await this.builder.tokenBalance(x.mintX);
-      if (amount <= 0n) {
-        this.sales.delete(position);
-        this.save();
-        if (x.tries > 0) this.record("live", { t, kind: "sell_done", mint: x.mintX, position, tries: x.tries });
-        return;
-      }
-      try {
-        const q = await this.jupiter.quoteToSol(x.mintX, amount, 300);
-        const { tx, lastValidBlockHeight } = await this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000);
-        const r = await this.sender.sendVersioned(tx, lastValidBlockHeight);
-        this.record("live", { t, kind: "sell", via: "jupiter", mint: x.mintX, amount: amount.toString(), outLamports: q.outAmount, sig: r.signature });
-      } catch (err) {
-        const s2 = await this.builder.swapTokenToSol({ pool: x.pool, amount, slippageBps: 300 }).catch((e2: Error) => { throw new Error(`${(err as Error).message} / ${e2.message}`); });
-        if (!s2) throw new Error(`${(err as Error).message} / no pool route`);
-        const sigs = await this.sendBuilt(s2.built);
-        this.record("live", { t, kind: "sell", via: "pool", mint: x.mintX, amount: amount.toString(), outLamports: s2.outLamports.toString(), sigs });
-      }
-      // Sent: the next pass reads the balance again and clears the record (or sells the rest).
-      x.nextAt = 0;
-      this.save();
-    } catch (err) {
+    const retryLater = (error: string) => {
       x.tries++;
       x.nextAt = now + saleBackoffSec(x.tries);
       this.save();
-      this.record("live", { t, kind: "sell_failed", mint: x.mintX, position, tries: x.tries, retryInSec: saleBackoffSec(x.tries), error: String((err as Error).message).slice(0, 300) });
+      this.record("live", { t, kind: "sell_failed", mint: x.mintX, position, tries: x.tries, retryInSec: saleBackoffSec(x.tries), error: error.slice(0, 300) });
+    };
+    try {
+      // 1) a swap from an earlier pass with an unknown outcome: resolve it first
+      if (x.inFlight) {
+        const st = await this.sender.status(x.inFlight.sig);
+        if (st === "confirmed") {
+          x.sold = (BigInt(x.sold) + BigInt(x.inFlight.amount)).toString();
+          this.record("live", { t, kind: "sell_confirmed", via: x.inFlight.route, mint: x.mintX, position, amount: x.inFlight.amount, sig: x.inFlight.sig });
+          x.inFlight = undefined;
+        } else if (st === "failed" || t - x.inFlight.sentAt > SWAP_EXPIRE_SEC) {
+          this.record("live", { t, kind: "sell_not_landed", via: x.inFlight.route, mint: x.mintX, position, sig: x.inFlight.sig, status: st });
+          x.route = x.inFlight.route === "jupiter" ? "pool" : "jupiter";
+          x.inFlight = undefined;
+        } else {
+          x.nextAt = now + 5; // may still land: no new swap until it is known
+          return;
+        }
+        this.save();
+      }
+      // 2) how much this close released
+      if (x.amount === undefined) {
+        if (!x.closeSigs.length) {
+          // closed by someone else / before close signatures were recorded: amount unknown, sell nothing
+          this.sales.delete(position);
+          this.save();
+          this.record("live", { t, kind: "sell_skipped", reason: "unknown_close_amount", mint: x.mintX, position });
+          return;
+        }
+        const d = await this.tokenDelta(x.closeSigs, x.mintX);
+        if (d === undefined) return retryLater("close tx not readable yet");
+        x.amount = (d > 0n ? d : 0n).toString();
+        this.save();
+      }
+      const owed = BigInt(x.amount) - BigInt(x.sold);
+      const bal = owed > 0n ? await this.builder.tokenBalance(x.mintX) : 0n;
+      const amount = owed < bal ? owed : bal;
+      if (amount <= 0n) {
+        this.sales.delete(position);
+        this.save();
+        this.record("live", { t, kind: "sell_done", mint: x.mintX, position, amount: x.amount, sold: x.sold, tries: x.tries });
+        return;
+      }
+      // 3) one swap, signature persisted before broadcast
+      const mark = (route: "jupiter" | "pool") => async (sig: string) => {
+        x.inFlight = { sig, route, amount: amount.toString(), sentAt: Math.floor(Date.now() / 1000) };
+        this.save();
+      };
+      const settle = (route: string, sig: string, out: string) => {
+        x.sold = (BigInt(x.sold) + amount).toString();
+        x.inFlight = undefined;
+        x.nextAt = 0;
+        this.save();
+        this.record("live", { t, kind: "sell", via: route, mint: x.mintX, position, amount: amount.toString(), outLamports: out, sig });
+      };
+      const errors: string[] = [];
+      if ((x.route ?? "jupiter") === "jupiter") {
+        try {
+          const q = await this.jupiter.quoteToSol(x.mintX, amount, 300);
+          const { tx, lastValidBlockHeight } = await this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000);
+          const r = await this.sender.sendVersioned(tx, lastValidBlockHeight, { onSignature: mark("jupiter") });
+          return settle("jupiter", r.signature, q.outAmount);
+        } catch (err) {
+          if (x.inFlight) return retryLater(`jupiter outcome unknown, resolving from chain: ${(err as Error).message}`); // signed: NO fallback now
+          errors.push(`jupiter: ${(err as Error).message}`); // never signed: the pool route is safe
+        }
+      }
+      try {
+        const s2 = await this.builder.swapTokenToSol({ pool: x.pool, amount, slippageBps: 300 });
+        if (!s2) throw new Error("no pool route");
+        const sigs = await this.sendBuilt(s2.built, mark("pool"));
+        return settle("pool", sigs.at(-1) ?? "", s2.outLamports.toString());
+      } catch (err) {
+        if (x.inFlight) return retryLater(`pool outcome unknown, resolving from chain: ${(err as Error).message}`);
+        errors.push(`pool: ${(err as Error).message}`);
+        x.route = "jupiter"; // nothing was signed on either route: start over next time
+        return retryLater(errors.join(" / "));
+      }
+    } catch (err) {
+      return retryLater(String((err as Error).message));
     } finally {
       this.selling.delete(position);
     }
