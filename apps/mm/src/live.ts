@@ -51,7 +51,16 @@ interface OurPosition {
   openedAt: number;
   lastMoveAt: number;
   closing?: boolean;
+  /**
+   * Persisted close intent (leader closed, idle, CLOSE_ALL). Cleared only by removing the record
+   * once the close is verified: our close tx confirmed, or the position account is gone on chain.
+   */
+  closeRequested?: boolean;
+  closeReason?: string;
 }
+
+/** Thrown from onSignature: the open was signed but must not be broadcast (STOP / leader close). */
+class AbortBeforeBroadcast extends Error {}
 
 /**
  * An open that has been (or is about to be) broadcast but whose outcome we have not seen yet.
@@ -61,8 +70,6 @@ interface OurPosition {
 interface OpeningRecord extends OurPosition {
   sigs: string[];
   sentAt: number;
-  closeRequested?: boolean;
-  closeReason?: string;
 }
 
 /** After this long with no position account on chain and no landed signature, the open is dropped. */
@@ -167,8 +174,22 @@ export class LiveMm {
       this.save(); // position address persisted before the first broadcast
       slot.sent = true;
       try {
-        await this.sendBuilt(built, async (sig) => { rec.sigs.push(sig); this.save(); });
+        await this.sendBuilt(built, async (sig) => {
+          // Runs after the sender's simulation and signing, right before the FIRST broadcast:
+          // the last chance to honour STOP / CLOSE_ALL / a leader close that arrived meanwhile.
+          if (rec.sigs.length === 0) {
+            if (slot.closeRequested) throw new AbortBeforeBroadcast("leader_closed_before_broadcast");
+            if (this.stopped()) throw new AbortBeforeBroadcast("kill_file_before_broadcast");
+          }
+          rec.sigs.push(sig);
+          this.save();
+        });
       } catch (err) {
+        if (err instanceof AbortBeforeBroadcast) {
+          this.opening.delete(e.leaderPosition); // nothing was broadcast: nothing to resolve
+          this.save();
+          return skip(err.message);
+        }
         // Outcome uncertain (lost reply, timeout, failure): the chain decides, not the error.
         this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_uncertain", position: rec.position, sigs: rec.sigs, error: String((err as Error).message).slice(0, 300) });
         this.log.warn({ err: (err as Error).message, pool: e.pool, position: rec.position }, "live: open outcome uncertain, resolving from chain");
@@ -197,13 +218,13 @@ export class LiveMm {
     }
     const now = Math.floor(Date.now() / 1000);
     if (exists) {
-      const { sigs, sentAt, closeRequested, closeReason, ...p } = rec;
+      const { sigs, sentAt, ...p } = rec; // p keeps closeRequested: persisted with the position
       this.opening.delete(rec.leaderPosition);
       this.ours.set(rec.leaderPosition, p);
       this.save();
       this.record("live", { t: now, kind: justSent ? "open" : "open_recovered", ...p, lamports: this.opts.lotLamports.toString(), sigs });
       this.log.info({ pool: p.pool, position: p.position, range: p.range, recovered: !justSent }, "live: opened");
-      if (closeRequested) await this.close(p, closeReason ?? "leader_closed");
+      if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed");
       return "adopted";
     }
     const st = await Promise.all(rec.sigs.map((s) => this.sender.status(s).catch(() => "unknown" as const)));
@@ -260,7 +281,7 @@ export class LiveMm {
   // ── close ─────────────────────────────────────────────────────────────────────
   async onLeaderClose(leaderPosition: string, reason = "leader_closed"): Promise<void> {
     const p = this.ours.get(leaderPosition);
-    if (p) return this.close(p, reason);
+    if (p) return this.close(p, reason); // close() persists the intent first
     const rec = this.opening.get(leaderPosition);
     if (rec) {
       rec.closeRequested = true; // persisted: survives a restart before the open is resolved
@@ -283,24 +304,34 @@ export class LiveMm {
     const closeAll = fs.existsSync(this.opts.closeAllFile);
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
-      if (closeAll) await this.close(p, "close_all_file");
+      if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed"); // restored intent
+      else if (closeAll) await this.close(p, "close_all_file");
       else if (mmIdleExpired(p.lastMoveAt, now, this.opts.idleSec)) await this.close(p, "idle_timeout");
     }
   }
 
   private async close(p: OurPosition, reason: string): Promise<void> {
+    if (!p.closeRequested) {
+      p.closeRequested = true; // persisted before anything is sent: survives a crash from here on
+      p.closeReason = reason;
+      this.save();
+    }
     if (p.closing) return;
     p.closing = true;
     // Wait for an in-flight rebalance on this position to finish.
     for (let i = 0; i < 60 && this.busy.has(p.position); i++) await new Promise((r) => setTimeout(r, 500));
     this.busy.add(p.position);
     const t = Math.floor(Date.now() / 1000);
-    try {
-      const sigs = await this.sendBuilt(await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true }));
-      this.ours.delete(p.leaderPosition);
+    const done = async (kind: string, sigs: string[]) => {
+      this.ours.delete(p.leaderPosition); // the only place a close intent is cleared
       this.save();
-      this.record("live", { t, kind: "close", reason, position: p.position, pool: p.pool, sigs });
+      this.record("live", { t, kind, reason, position: p.position, pool: p.pool, sigs });
       await this.sellToken(p);
+    };
+    try {
+      // A previous close may have landed with its reply lost (or before a crash): verify on chain.
+      if ((await this.builder.connection.getAccountInfo(new PublicKey(p.position), "confirmed")) === null) return await done("close_verified", []);
+      await done("close", await this.sendBuilt(await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true })));
     } catch (err) {
       p.closing = false; // retried by the idle check / the next close signal
       this.record("live", { t, kind: "close_failed", reason, position: p.position, pool: p.pool, error: String((err as Error).message).slice(0, 300) });

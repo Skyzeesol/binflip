@@ -20,9 +20,10 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
   const chain = o.chain ?? new Set<string>(); // position accounts that exist "on chain"
   const sigStatus = new Map<string, "confirmed" | "failed" | "unknown">();
   let sendMode: SendMode = "ok";
-  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0 };
-  const gates = { poolInfo: [] as ReturnType<typeof gate>[], send: [] as ReturnType<typeof gate>[] };
-  let hold = { poolInfo: false, send: false };
+  let removeMode: "ok" | "hang" | "land_then_throw" = "ok";
+  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0 };
+  const gates = { poolInfo: [] as ReturnType<typeof gate>[], send: [] as ReturnType<typeof gate>[], sim: [] as ReturnType<typeof gate>[] };
+  let hold = { poolInfo: false, send: false, sim: false };
   const builder = {
     connection: {
       getBalance: async () => Math.round((o.balanceSol ?? 10) * 1e9),
@@ -34,14 +35,26 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       return { solIsY: true, binStep: 100, activeBinId: 0, mintX: "So11111111111111111111111111111111111111112" };
     },
     async open() { calls.open++; return { txs: [{}], extraSigners: new Map(), position: posAddr(calls.open) }; },
-    async remove() { calls.remove++; return { txs: [{}], extraSigners: new Map() }; },
+    async remove(r: { position: string }) {
+      calls.remove++;
+      if (removeMode === "hang") await new Promise(() => {}); // process "crashes" while closing
+      return { txs: [{ close: r.position }], extraSigners: new Map() };
+    },
     async tokenBalance() { return 0n; },
   };
   const sender = {
-    async send(_tx: unknown, _x: unknown, opts: { onSignature?: (s: string) => Promise<void> } = {}) {
+    async send(tx: { close?: string }, _x: unknown, opts: { onSignature?: (s: string) => Promise<void> } = {}) {
       calls.send++;
       const sig = `sig${calls.send}`;
-      await opts.onSignature?.(sig);
+      if (hold.sim) { const g = gate(); gates.sim.push(g); await g.p; } // sender is simulating
+      await opts.onSignature?.(sig); // real TxSender: after simulate + sign, before the first broadcast
+      calls.broadcast++;
+      if (tx.close) {
+        chain.delete(tx.close); // the close landed
+        sigStatus.set(sig, "confirmed");
+        if (removeMode === "land_then_throw") throw new Error("fetch failed (reply lost)");
+        return { signature: sig };
+      }
       if (hold.send) { const g = gate(); gates.send.push(g); await g.p; }
       const mode = sendMode;
       if (mode === "fail") { sigStatus.set(sig, "failed"); throw new Error("simulation failed"); }
@@ -59,7 +72,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     lotLamports: 100_000_000n, maxPositions: o.maxPositions ?? 3, reserveLamports: 150_000_000n, slippageBins: 0,
     priorityMicroLamports: 0, stateFile: path.join(dir, "state.json"), killFile: path.join(dir, "STOP"), closeAllFile: path.join(dir, "CLOSE_ALL"),
   }, log as never, (kind, obj) => records.push({ _file: kind, ...obj }));
-  return { mm, dir, chain, calls, gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m) };
+  return { mm, dir, chain, calls, gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m), removeMode: (m: typeof removeMode) => (removeMode = m) };
 }
 // distinct valid base58 public keys for fake position accounts
 const posAddr = (n: number) => new PublicKey(new Uint8Array(32).fill(n % 255 + 1)).toBase58();
@@ -190,5 +203,73 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     s.gates.poolInfo.forEach((g) => g.open());
     await a;
     expect(s.calls.send).toBe(0);
+  });
+
+  it("crash between restoring a position and closing it: the close intent survives the next restart", async () => {
+    const s = setup();
+    s.sendMode("land_then_hang");
+    void s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    for (let i = 0; i < 10 && s.calls.send === 0; i++) await tick();
+    await tick();
+    await s.mm.onLeaderClose("L1");
+    // restart #1: restores the position, starts the close, "crashes" inside it
+    const r1 = setup({ dir: s.dir, chain: s.chain });
+    r1.removeMode("hang");
+    void r1.mm.checkIdle(Math.floor(Date.now() / 1000));
+    for (let i = 0; i < 10 && r1.calls.remove === 0; i++) await tick();
+    expect(r1.calls.remove).toBe(1);
+    const state = JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8"));
+    expect(state.opening).toHaveLength(0);
+    expect(state.positions[0]).toMatchObject({ leaderPosition: "L1", closeRequested: true, closeReason: "leader_closed" });
+    // restart #2: the intent is still there and is carried out
+    const r2 = setup({ dir: s.dir, chain: s.chain });
+    await r2.mm.checkIdle(Math.floor(Date.now() / 1000));
+    expect(r2.calls.broadcast).toBe(1);
+    expect(kinds(r2.records)).toEqual(["close:leader_closed"]);
+    expect(r2.mm.openCount).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8")).positions).toHaveLength(0);
+  });
+
+  it("close landed but its reply was lost: verified on chain, not re-sent forever", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    s.removeMode("land_then_throw");
+    await s.mm.onLeaderClose("L1");
+    expect(kinds(s.records)).toEqual(["open", "close_failed:leader_closed"]);
+    expect(s.mm.openCount).toBe(1); // intent kept until verified
+    await s.mm.checkIdle(Math.floor(Date.now() / 1000));
+    expect(kinds(s.records).at(-1)).toBe("close_verified:leader_closed");
+    expect(s.mm.openCount).toBe(0);
+    expect(s.calls.remove).toBe(1); // no second close tx
+  });
+
+  for (const file of ["STOP", "CLOSE_ALL"]) {
+    it(`${file} created while the sender simulates: signed but never broadcast`, async () => {
+      const s = setup();
+      s.holdAll({ sim: true });
+      const a = s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+      for (let i = 0; i < 10 && !s.gates.sim.length; i++) await tick();
+      expect(s.calls.send).toBe(1); // inside the sender
+      fs.writeFileSync(path.join(s.dir, file), "");
+      s.gates.sim.forEach((g) => g.open());
+      await a;
+      expect(s.calls.broadcast).toBe(0);
+      expect(s.mm.openCount).toBe(0);
+      expect(kinds(s.records)).toEqual(["open_skipped:kill_file_before_broadcast"]);
+      expect(JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8")).opening).toHaveLength(0);
+    });
+  }
+
+  it("leader close while the sender simulates: signed but never broadcast", async () => {
+    const s = setup();
+    s.holdAll({ sim: true });
+    const a = s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    for (let i = 0; i < 10 && !s.gates.sim.length; i++) await tick();
+    await s.mm.onLeaderClose("L1");
+    s.gates.sim.forEach((g) => g.open());
+    await a;
+    expect(s.calls.broadcast).toBe(0);
+    expect(s.mm.openCount).toBe(0);
+    expect(kinds(s.records)).toEqual(["close_deferred:leader_closed", "open_skipped:leader_closed_before_broadcast"]);
   });
 });
