@@ -31,9 +31,14 @@ export interface SendOptions {
   rebroadcastMs?: number;
   /** Stop waiting after this; the caller must check the signature before any retry. */
   confirmTimeoutMs?: number;
-  /** Called with the signature right before the first broadcast, so it can be persisted. */
-  onSignature?: (sig: string) => Promise<void>;
+  /**
+   * Called with the signature (and the last block height at which the tx can still land) right
+   * before the first broadcast, so both can be persisted and the outcome resolved later.
+   */
+  onSignature?: (sig: string, lastValidBlockHeight: number) => Promise<void>;
 }
+
+export type SigOutcome = "confirmed" | "failed" | "expired" | "pending";
 
 export interface SendResult {
   signature: TransactionSignature;
@@ -113,7 +118,7 @@ export class TxSender {
     const lastValid = await this.prepare(tx, opts);
     await this.fitComputeLimit(tx);
     const signature = await this.sign(tx, extra);
-    await opts.onSignature?.(signature);
+    await opts.onSignature?.(signature, lastValid);
     return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
   }
 
@@ -129,8 +134,8 @@ export class TxSender {
     const sig = await this.signer.signMessage(tx.message.serialize());
     tx.addSignature(new PublicKey(this.signer.publicKey), sig);
     const signature = bs58.encode(sig);
-    await opts.onSignature?.(signature);
     const lastValid = lastValidBlockHeight || (await this.connection.getBlockHeight("confirmed")) + 150;
+    await opts.onSignature?.(signature, lastValid);
     return this.broadcastAndConfirm(tx.serialize(), signature, lastValid, opts);
   }
 
@@ -158,6 +163,24 @@ export class TxSender {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new ConfirmTimeoutError(`not confirmed in time: ${signature}`);
+  }
+
+  /**
+   * The one rule for an outcome we did not see (lost reply, timeout, crash):
+   *  - confirmed / failed: as the chain says (history searched);
+   *  - expired: not found, AND the chain is past the tx's last valid block height, AND still not
+   *    found on a second look after that (so it can never land);
+   *  - pending: anything else (may still land, or the RPC has not seen it yet): wait.
+   * Without a last valid block height an unseen tx is never declared expired.
+   */
+  async resolve(signature: string, lastValidBlockHeight: number | undefined): Promise<SigOutcome> {
+    const a = await this.status(signature);
+    if (a !== "unknown") return a;
+    if (lastValidBlockHeight === undefined) return "pending";
+    const height = await this.connection.getBlockHeight("confirmed");
+    if (height <= lastValidBlockHeight) return "pending";
+    const b = await this.status(signature);
+    return b === "unknown" ? "expired" : b;
   }
 
   /** After a crash/timeout: did this signature land? */
