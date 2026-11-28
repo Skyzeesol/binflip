@@ -150,8 +150,9 @@ export class TxSender {
         next = Date.now() + (opts.rebroadcastMs ?? 2_000);
       }
       const st = (await this.connection.getSignatureStatuses([signature])).value[0];
-      if (st?.err) throw new Error(`transaction failed: ${JSON.stringify(st.err)}`);
-      if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) {
+      const final = st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized");
+      if (final && st.err) throw new Error(`transaction failed: ${JSON.stringify(st.err)}`); // processed + err: keep waiting
+      if (final) {
         const fee = await this.connection
           .getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 as 0 })
           .then((t) => t?.meta?.fee ?? null)
@@ -189,8 +190,9 @@ export class TxSender {
   async statusDetail(signature: string): Promise<"confirmed" | "failed" | "processed" | "not_found"> {
     const st = (await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
     if (!st) return "not_found";
-    if (st.err) return "failed";
-    return st.confirmationStatus === "processed" ? "processed" : "confirmed";
+    // processed is checked FIRST: an error seen only at processed (a fork) is not final either
+    if (st.confirmationStatus === "processed" || !st.confirmationStatus) return "processed";
+    return st.err ? "failed" : "confirmed";
   }
 
   /** After a crash/timeout: did this signature land? */

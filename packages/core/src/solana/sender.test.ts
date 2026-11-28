@@ -39,4 +39,13 @@ describe("TxSender.resolve", () => {
   it("not found first, processed on the second look past the height → pending", async () => {
     expect(await sender({ statuses: [null, { err: null, confirmationStatus: "processed" }], height: 11 }).resolve("s", 10)).toBe("pending");
   });
+  it("processed WITH an error is not final: pending, also past the last valid height", async () => {
+    const procErr = { err: { InstructionError: [0, "Custom"] }, confirmationStatus: "processed" };
+    expect(await sender({ statuses: [procErr], height: 5 }).resolve("s", 10)).toBe("pending");
+    expect(await sender({ statuses: [procErr, procErr], height: 11 }).resolve("s", 10)).toBe("pending");
+    expect(await sender({ statuses: [procErr], height: 5 }).status("s")).toBe("unknown");
+  });
+  it("confirmed with an error → failed", async () => {
+    expect(await sender({ statuses: [{ err: { x: 1 }, confirmationStatus: "finalized" }], height: 0 }).resolve("s", 10)).toBe("failed");
+  });
 });
