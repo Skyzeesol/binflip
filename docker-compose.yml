@@ -93,7 +93,8 @@ services:
       LIVE_CONFIRMED: "0"
       MM_OUT_DIR: /data/mm
     volumes:
-      - ./mm-data:/data/mm
+      # NOT ./mm-data: that is the standalone live project's (docker-compose.mm.yml) directory.
+      - ./mm-data-shadow:/data/mm
 
   api:
     <<: *app

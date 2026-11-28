@@ -18,6 +18,8 @@ export class AccountWatcher {
   private attempts = 0;
   private closed = false;
   private pingTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private readonly retryTimers = new Set<NodeJS.Timeout>();
   connected = false;
   notifications = 0;
 
@@ -26,6 +28,12 @@ export class AccountWatcher {
     private readonly log: Logger,
     private readonly onAccount: (address: string, dataBase64: string, slot: number) => void,
     private readonly commitment: "processed" | "confirmed" = "processed",
+    /** Injectable for tests; the default opens a real WebSocket (through HTTPS_PROXY if set). */
+    private readonly open: (url: string) => WebSocket = (url) => {
+      const proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+      return new WebSocket(url, proxy ? { agent: new HttpsProxyAgent(proxy) } : {});
+    },
+    private readonly retryMs = 5_000,
   ) {}
 
   start(): void {
@@ -47,12 +55,15 @@ export class AccountWatcher {
   close(): void {
     this.closed = true;
     if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer); // a scheduled reconnect must not run after close()
+    for (const t of this.retryTimers) clearTimeout(t);
+    this.retryTimers.clear();
     this.ws?.close();
   }
 
   private connect(): void {
-    const proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
-    const ws = new WebSocket(this.url, proxy ? { agent: new HttpsProxyAgent(proxy) } : {});
+    if (this.closed) return;
+    const ws = this.open(this.url);
     this.ws = ws;
     ws.on("open", () => {
       this.connected = true;
@@ -71,7 +82,7 @@ export class AccountWatcher {
       if (this.closed) return;
       const delay = Math.min(30_000, 500 * 2 ** this.attempts++);
       this.log.warn({ code, delay }, "account websocket closed, reconnecting");
-      setTimeout(() => this.connect(), delay);
+      this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.connect(); }, delay);
     });
     ws.on("error", (err) => this.log.warn({ err: err.message }, "account websocket error"));
   }
@@ -107,9 +118,21 @@ export class AccountWatcher {
       const address = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
       if (typeof msg.result === "number") {
+        if (!this.wanted.has(address)) {
+          // removed while the subscribe was in flight: drop the subscription the server just made
+          this.send("accountUnsubscribe", [msg.result]);
+          return;
+        }
         this.subs.set(msg.result, address);
         this.byAddress.set(address, msg.result);
-      } else this.log.warn({ address, error: msg.error }, "accountSubscribe failed");
+      } else {
+        this.log.warn({ address, error: msg.error }, "accountSubscribe failed, retrying");
+        const t = setTimeout(() => {
+          this.retryTimers.delete(t);
+          if (!this.closed && this.wanted.has(address) && !this.byAddress.has(address)) this.subscribe(address);
+        }, this.retryMs);
+        this.retryTimers.add(t);
+      }
       return;
     }
     if (msg.method === "accountNotification") {

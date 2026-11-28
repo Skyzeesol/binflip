@@ -12,6 +12,7 @@ const LOT = 100_000_000n;
 const RESERVE = 150_000_000n;
 const flush = async (n = 20) => { for (let i = 0; i < n; i++) await Promise.resolve(); await new Promise((r) => setImmediate(r)); };
 
+let readSlot = 0;
 function make(c: FakeChain, o: { dir?: string; maxPositions?: number } = {}) {
   const dir = o.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), "mmaudit-"));
   const records: Array<Record<string, unknown>> = [];
@@ -24,7 +25,7 @@ function make(c: FakeChain, o: { dir?: string; maxPositions?: number } = {}) {
   const ours = () => [...(mm as unknown as { ours: Map<string, { position: string; range: { lower: number; upper: number }; closeRequested?: boolean }> }).ours.values()];
   const state = () => JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
   const tick = (now = Math.floor(Date.now() / 1000)) =>
-    serviceTick({ book: { pools: () => [], onTick: () => [], checkExits: () => [] }, live: mm, watcher: null, readPools: async () => new Map(), write: () => {} }, now);
+    serviceTick({ book: { pools: () => [], onTick: () => [], checkExits: () => [] }, live: mm, watcher: null, readPools: async (pools) => new Map(pools.map((p) => [p, { activeId: c.active.get(p) ?? 0, slot: ++readSlot }] as const)), write: () => {} }, now);
   return { mm, dir, records, kinds, ours, state, tick };
 }
 

@@ -23,6 +23,8 @@ import { serviceTick } from "./tick.js";
 import { leaderEvents, liveOpenAllowed } from "./leaderEvents.js";
 import { LeaderFeed } from "./leaderFeed.js";
 import { SlotGate } from "./slotGate.js";
+import { parseMmConfig, type MmConfig } from "./config.js";
+import { WriterLock, pruneJsonl } from "./writerLock.js";
 import { PublicKey } from "@solana/web3.js";
 
 /**
@@ -32,18 +34,29 @@ import { PublicKey } from "@solana/web3.js";
  * runs the engine (packages/core/src/mm) and scores every leader rebalance against our
  * own decision. Sends no transactions. Output: JSONL in MM_OUT_DIR + a stats line per minute.
  */
-const LEADER = process.env.MM_LEADER ?? "BviQcBvnWv5HHxHcouTwRFhrAMPNKuMLzEaSuxCuv6eU";
-const TICK_MS = Number(process.env.MM_TICK_MS ?? 2000);
-const TX_POLL_MS = Number(process.env.MM_TX_POLL_MS ?? 3000);
-const OUT_DIR = process.env.MM_OUT_DIR ?? "mm-data";
-const STATS_MS = Number(process.env.MM_STATS_MS ?? 60_000);
+let cfg: MmConfig;
+try {
+  cfg = parseMmConfig(process.env);
+} catch (err) {
+  console.error((err as Error).message);
+  process.exit(78); // EX_CONFIG: like Binflip's config gate, before anything can trade
+}
+const LEADER = cfg.leader;
+const TICK_MS = cfg.tickMs;
+const TX_POLL_MS = cfg.txPollMs;
+const OUT_DIR = cfg.outDir;
+const STATS_MS = cfg.statsMs;
 /** Pool reads: WebSocket push (MM_WS=1, default) + this poll as a fallback. */
-const USE_WS = (process.env.MM_WS ?? "1") !== "0";
-const COMMITMENT = (process.env.MM_COMMITMENT ?? "processed") as "processed" | "confirmed";
+const USE_WS = cfg.ws;
+const COMMITMENT = cfg.commitment;
 
 await runService("mm", async ({ config, log }) => {
   // Live needs BOTH Binflip's live gates (DRY_RUN=0 + LIVE_CONFIRMED=1) AND MM_LIVE=1.
-  const wantLive = process.env.MM_LIVE === "1";
+  const wantLive = cfg.live;
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const lock = new WriterLock(OUT_DIR);
+  lock.acquire(); // one writer per data directory, before any state is read
+  let stale: string | null = null; // set by the health loop: no NEW opens while data is stale
   if (config.mode === "live" && !wantLive) throw new Error("live mode without MM_LIVE=1: refusing (set MM_LIVE=1 to trade, or DRY_RUN=1 for shadow only)");
   if (wantLive && config.mode !== "live") throw new Error("MM_LIVE=1 needs DRY_RUN=0 and LIVE_CONFIRMED=1");
   const rpc = new SolanaRpc(config.SOLANA_RPC_URL, { retries: 6, timeoutMs: 20_000 });
@@ -55,26 +68,36 @@ await runService("mm", async ({ config, log }) => {
     await signer.selfTest();
     const conn = createConnection(config.SOLANA_RPC_URL, config.SOLANA_WS_URL);
     const owner = new PublicKey(signer.publicKey);
-    const sol = (v: string | undefined, d: number) => BigInt(Math.round(Number(v ?? d) * 1e9));
     live = new LiveMm(new DlmmTxBuilder(conn, owner), new TxSender(conn, signer), owner, {
-      lotLamports: sol(process.env.MM_LOT_SOL, 0.1),
-      maxPositions: Number(process.env.MM_MAX_POSITIONS ?? 3),
-      reserveLamports: sol(process.env.MM_RESERVE_SOL, 0.15),
-      slippageBins: Number(process.env.MM_SLIPPAGE_BINS ?? 0),
-      priorityMicroLamports: Number(process.env.MM_PRIORITY_MICROLAMPORTS ?? 10_000),
+      lotLamports: cfg.lotLamports,
+      maxPositions: cfg.maxPositions,
+      reserveLamports: cfg.reserveLamports,
+      slippageBins: cfg.slippageBins,
+      priorityMicroLamports: cfg.priorityMicroLamports,
+      stale: () => stale,
       stateFile: path.join(OUT_DIR, "live-state.json"),
       killFile: process.env.MM_KILL_FILE ?? path.join(OUT_DIR, "STOP"),
       closeAllFile: process.env.MM_CLOSE_ALL_FILE ?? path.join(OUT_DIR, "CLOSE_ALL"),
     }, log, (kind, obj) => write(kind, obj));
     const balance = await conn.getBalance(owner);
-    log.warn({ wallet: signer.publicKey, balanceSol: balance / 1e9, lotSol: Number(process.env.MM_LOT_SOL ?? 0.1), maxPositions: Number(process.env.MM_MAX_POSITIONS ?? 3) }, "LIVE: mm will send transactions");
+    log.warn({ wallet: signer.publicKey, balanceSol: balance / 1e9, lotSol: Number(cfg.lotLamports) / 1e9, reserveSol: Number(cfg.reserveLamports) / 1e9, maxPositions: cfg.maxPositions }, "LIVE: mm will send transactions");
   }
   const binSteps = new Map<string, number>();
-  fs.mkdirSync(OUT_DIR, { recursive: true });
 
+  // Daily JSONL files, pruned after MM_KEEP_DAYS. A failed write (disk full) is logged, never
+  // fatal: trading state lives in the state files, these are records.
   const day = () => new Date().toISOString().slice(0, 10);
-  const write = (kind: string, obj: unknown) =>
-    fs.appendFileSync(path.join(OUT_DIR, `${kind}.${day()}.jsonl`), JSON.stringify(obj) + "\n");
+  let writeErrors = 0, lastWriteErrorLog = 0;
+  const write = (kind: string, obj: unknown) => {
+    try {
+      fs.appendFileSync(path.join(OUT_DIR, `${kind}.${day()}.jsonl`), JSON.stringify(obj) + "\n");
+    } catch (err) {
+      writeErrors++;
+      if (Date.now() - lastWriteErrorLog > 60_000) { lastWriteErrorLog = Date.now(); log.error({ err: (err as Error).message, writeErrors }, "record write failed"); }
+    }
+  };
+  const pruned = pruneJsonl(OUT_DIR, cfg.keepDays);
+  if (pruned.length) log.info({ pruned: pruned.length }, "old record files removed");
 
   // ── pool state ──────────────────────────────────────────────────────────────
   async function readPools(pools: string[]): Promise<Map<string, { activeId: number; binStep: number; slot: number }>> {
@@ -202,23 +225,53 @@ await runService("mm", async ({ config, log }) => {
     await serviceTick({ book, live, watcher, readPools, write, gate });
     lastTickOk = Date.now();
   });
+  /** Why our data is stale (null = fresh): leader feed or pool reads behind. */
+  const staleness = (): string | null => {
+    const now = Date.now();
+    if (now - lastLeaderOk > cfg.staleMs) return `leader feed ${Math.round((now - lastLeaderOk) / 1000)} s behind`;
+    if (now - lastTickOk > cfg.staleMs) return `pool reads ${Math.round((now - lastTickOk) / 1000)} s behind`;
+    const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p, now) > cfg.staleMs);
+    return old.length ? `${old.length} pool(s) without a fresh observation` : null;
+  };
   const statsTimer = setInterval(() => {
-    const s = { ...book.summary(), liveOpen: live?.openCount ?? null, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
-    log.info(s, "shadow stats");
+    stale = staleness();
+    const liveStatus = live?.status() ?? null;
+    const s = { ...book.summary(), liveOpen: live?.openCount ?? null, live: liveStatus, stale, writeErrors, leaderRetry: feed.state.retry.length, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
+    log.info(s, "mm stats");
     write("stats", { t: Math.floor(Date.now() / 1000), ...s });
-  }, STATS_MS);
+    if (liveStatus) {
+      // What is still in flight, for CLOSE_ALL: stop the service only once `idle` is true.
+      try {
+        fs.writeFileSync(path.join(OUT_DIR, "live-status.json"), JSON.stringify({ t: new Date().toISOString(), closeAll: fs.existsSync(path.join(OUT_DIR, "CLOSE_ALL")), ...liveStatus }, null, 1));
+      } catch { /* the stats line has it too */ }
+    }
+  }, Math.min(STATS_MS, 10_000));
+  const staleTimer = setInterval(() => { stale = staleness(); }, 5_000);
 
-  log.info({ leader: LEADER, tickMs: TICK_MS, ws: USE_WS, commitment: COMMITMENT, outDir: OUT_DIR }, "shadow mode: following leader, no transactions are sent");
+  log.info({ mode: live ? "LIVE" : "shadow", leader: LEADER, tickMs: TICK_MS, ws: USE_WS, commitment: COMMITMENT, outDir: OUT_DIR }, live ? "LIVE mode: following leader, transactions ARE sent" : "shadow mode: following leader, no transactions are sent");
   return {
     checks: {
       tick: async () => {
-        if (book.pools().length && Date.now() - lastTickOk > 60_000) throw new Error("no pool read for 60s");
+        if ((book.pools().length || live?.pools().length) && Date.now() - lastTickOk > 60_000) throw new Error("no pool read for 60s");
+      },
+      leader: async () => {
+        if (Date.now() - lastLeaderOk > 60_000) throw new Error(`leader feed stalled for ${Math.round((Date.now() - lastLeaderOk) / 1000)} s`);
+      },
+      pools: async () => {
+        const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p) > 120_000);
+        if (old.length) throw new Error(`no fresh observation for 2 min: ${old.map((p) => p.slice(0, 8)).join(", ")}`);
+      },
+      live: async () => {
+        const st = live?.status();
+        if (st && ((st.oldestOpeningSec ?? 0) > 600 || (st.oldestCloseRequestSec ?? 0) > 900 || (st.oldestRebalanceInFlightSec ?? 0) > 600)) throw new Error(`live work stuck: ${JSON.stringify(st)}`);
       },
     },
     cleanups: [
       () => {
         stopped = true;
         clearInterval(statsTimer);
+        clearInterval(staleTimer);
+        lock.release();
         watcher?.close();
       },
     ],

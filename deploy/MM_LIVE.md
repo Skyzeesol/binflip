@@ -32,6 +32,14 @@ grep '^SOLANA_RPC_URL=' ~/binflip/.env > .env.mm && chmod 600 .env.mm && wc -c .
 mkdir -p keystore-mm secrets mm-data && chmod 700 keystore-mm secrets
 ```
 
+Container `node` kullanıcısıyla (uid 1000) çalışır ve `keystore-mm` ile `mm-data` klasörlerine yazar. Sunucudaki kullanıcının uid'i farklıysa klasörleri ona ver:
+
+```bash
+[ "$(id -u)" = 1000 ] || sudo chown -R 1000:1000 keystore-mm mm-data
+```
+
+Bu klasörler yalnız bu projenindir. Ana `docker-compose.yml` içindeki gölge `mm` servisi artık `mm-data-shadow` kullanır. Aynı klasöre ikinci bir süreç yazmaya kalkarsa servis `another mm process ... refusing to start` diyerek başlamaz (`mm-data/mm.lock`).
+
 ## 3. İmajı derle (birkaç dakika sürer)
 
 ```bash
@@ -68,7 +76,7 @@ printf 'DRY_RUN=0\nLIVE_CONFIRMED=1\nMM_LIVE=1\nMM_LOT_SOL=0.1\nMM_MAX_POSITIONS
 docker compose -f docker-compose.mm.yml up -d mm
 ```
 
-Başlangıç kaydında `LIVE: mm will send transactions` satırı, cüzdan adresi ve bakiye görünmeli:
+Başlangıç kaydında `LIVE: mm will send transactions` ve `"mode":"LIVE"` satırları, cüzdan adresi ve bakiye görünmeli. Ayarlardan biri geçersizse (ör. `MM_MAX_POSITIONS=oops`) servis hiçbir şey yapmadan çıkar ve hatalı ayarı yazar:
 
 ```bash
 docker compose -f docker-compose.mm.yml logs --tail 30 mm
@@ -87,7 +95,11 @@ tail -f mm-data/live.$(date -u +%F).jsonl
 | `rebalance_failed` | Fiyat kaçtı. Normaldir, bir sonraki fiyat değişiminde tekrar dener. |
 | `close` | Kapandı |
 | `sell` | Token satıldı |
-| `open_skipped` | Açılmadı (sebep yanında yazar) |
+| `open_skipped` | Açılmadı (sebep yanında yazar; `stale_data` = lider akışı ya da fiyat verisi geride, yeni açılış durduruldu) |
+| `rebalance_uncertain` / `rebalance_confirmed` | Taşıma gönderildi, sonucu zincirden okunuyor / onaylandı |
+| `range_from_chain` | Kayıttaki aralık zincirdekiyle düzeltildi |
+| `sell_waiting_balance` | Satılacak token var ama cüzdan şimdilik 0 gösteriyor; tekrar denenir |
+| `leader_position_gone` | Liderin pozisyonu zincirde yok: lider kapatmış sayıldı (kaçırılan kapanış güvencesi) |
 
 ## Durdurma
 
@@ -96,6 +108,12 @@ tail -f mm-data/live.$(date -u +%F).jsonl
 | Yeni pozisyon açmasın (açıklar yönetilmeye devam eder) | `touch mm-data/STOP` |
 | **Tüm pozisyonları kapatsın ve token'ları satsın** | `touch mm-data/CLOSE_ALL` |
 | Tekrar açmaya başlasın | `rm -f mm-data/STOP mm-data/CLOSE_ALL` |
-| Servisi tamamen durdur (önce `CLOSE_ALL` ile kapatmayı bekle!) | `docker compose -f docker-compose.mm.yml down` |
+| Servisi tamamen durdur (önce `CLOSE_ALL` ile kapatmayı bekle!) | aşağıya bak |
+
+**Tamamen durdurmak:** `touch mm-data/CLOSE_ALL`, ardından `mm-data/live-status.json` içinde `"idle": true` olana kadar bekle (açık, açılan, hazırlanan pozisyon ve satılmayı bekleyen token kalmamış demektir):
+
+```bash
+until grep -q '"idle": true' mm-data/live-status.json; do sleep 10; done; docker compose -f docker-compose.mm.yml down
+```
 
 Servis yeniden başlarsa açık pozisyonları `mm-data/live-state.json` dosyasından hatırlar ve yönetmeye devam eder.

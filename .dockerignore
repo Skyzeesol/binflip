@@ -7,3 +7,8 @@ keystore
 .git
 coverage
 **/.next
+# mm: wallet, records and research data never go into an image
+keystore-mm
+mm-data
+mm-data-*
+research/ilginc/data

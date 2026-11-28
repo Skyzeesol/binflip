@@ -43,6 +43,8 @@ export interface LiveOptions {
   settleEveryMs?: number;
   /** How often copied leader positions are checked on chain (missed-close backstop, default 60 s). */
   leaderCheckMs?: number;
+  /** Non-null = our data is stale (reason): no NEW opens; recovery and closes go on. */
+  stale?: () => string | null;
 }
 
 interface OurPosition {
@@ -61,6 +63,7 @@ interface OurPosition {
    */
   closeRequested?: boolean;
   closeReason?: string;
+  closeRequestedAt?: number;
   /** Signatures of our close txs, persisted before each broadcast. */
   closeSigs?: SentSig[];
   /**
@@ -194,6 +197,29 @@ export class LiveMm {
     }
   }
 
+  /**
+   * What is in flight, with ages (seconds): for /health, the stats line and the CLOSE_ALL status.
+   * `idle` = nothing open, opening, being prepared, closing or owed: safe to stop the service.
+   */
+  status(now = Math.floor(Date.now() / 1000)) {
+    const ps = [...this.ours.values()];
+    const age = (ts: Array<number | undefined>) => { const v = ts.filter((x): x is number => x !== undefined); return v.length ? now - Math.min(...v) : null; };
+    const s = {
+      open: ps.length,
+      opening: this.opening.size,
+      preparing: this.pending.size,
+      rebalancesInFlight: ps.filter((p) => p.rebalanceInFlight).length,
+      oldestRebalanceInFlightSec: age(ps.map((p) => p.rebalanceInFlight?.t)),
+      closesRequested: ps.filter((p) => p.closeRequested).length,
+      oldestCloseRequestSec: age(ps.filter((p) => p.closeRequested).map((p) => p.closeRequestedAt)),
+      salesOwed: this.sales.size,
+      oldestSaleSec: age([...this.sales.values()].map((x) => x.since)),
+      oldestOpeningSec: age([...this.opening.values()].map((o) => o.sentAt)),
+      reservedLamports: this.reservedTotal().toString(),
+    };
+    return { ...s, idle: s.open + s.opening + s.preparing + s.salesOwed === 0 };
+  }
+
   pools(): string[] {
     return [...new Set([...this.ours.values()].map((p) => p.pool))];
   }
@@ -281,6 +307,8 @@ export class LiveMm {
     if (this.ours.has(e.leaderPosition) || this.pending.has(e.leaderPosition) || this.opening.has(e.leaderPosition)) return; // duplicate
     const skip = (reason: string, extra: Record<string, unknown> = {}) => this.record("live", { ...e, kind: "open_skipped", reason, ...extra });
     if (this.stopped()) return skip("kill_file");
+    const stale = this.opts.stale?.();
+    if (stale) return skip("stale_data", { why: stale });
     if (this.ours.size + this.inFlight() >= this.opts.maxPositions) return skip("max_positions");
     const slot = { closeRequested: false, sent: false } as { closeRequested: boolean; reason?: string; sent: boolean };
     this.pending.set(e.leaderPosition, slot); // reservation: from here on every exit path must release it
@@ -593,6 +621,7 @@ export class LiveMm {
     if (!p.closeRequested) {
       p.closeRequested = true; // persisted before anything is sent: survives a crash from here on
       p.closeReason = reason;
+      p.closeRequestedAt = Math.floor(Date.now() / 1000);
       this.save();
     }
     if (p.closing) return;

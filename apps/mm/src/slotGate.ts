@@ -6,12 +6,20 @@
  */
 export class SlotGate {
   private readonly last = new Map<string, number>();
+  private readonly at = new Map<string, number>(); // wall time of the newest accepted observation
 
-  accept(pool: string, slot: number | undefined): boolean {
+  accept(pool: string, slot: number | undefined, now = Date.now()): boolean {
     if (slot === undefined || !Number.isFinite(slot) || slot <= 0) return false;
     if (slot <= (this.last.get(pool) ?? 0)) return false;
     this.last.set(pool, slot);
+    this.at.set(pool, now);
     return true;
+  }
+
+  /** ms since the newest accepted observation of the pool (Infinity if none). */
+  ageMs(pool: string, now = Date.now()): number {
+    const t = this.at.get(pool);
+    return t === undefined ? Infinity : now - t;
   }
 
   /** Newest accepted slot per pool (for health: data age). */

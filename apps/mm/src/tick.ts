@@ -25,6 +25,7 @@ export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 100
   if (pools.length) {
     try {
       const states = await d.readPools(pools);
+      if (states.size === 0) throw new Error(`pool read returned no accounts for ${pools.length} pools`); // empty ≠ fresh
       for (const [pool, s] of states) {
         if (d.gate && !d.gate.accept(pool, s.slot)) continue; // older than what we already acted on
         for (const x of d.book.onTick(pool, s.activeId, now, s.slot)) d.write("ours", { t: now, slot: s.slot, pool, active: s.activeId, via: "poll", ...x });

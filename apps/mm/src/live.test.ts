@@ -355,7 +355,9 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
 
   // The service's own tick (serviceTick, as main.ts runs it), not checkIdle() directly.
   const emptyBook = { pools: () => [] as string[], onTick: () => [], checkExits: () => [] };
-  const tickDeps = (mm: LiveMm, readPools = async () => new Map()) => ({ book: emptyBook, live: mm, watcher: null, readPools, write: () => {} });
+  let readSlot = 1;
+  const freshReads = async (pools: string[]) => new Map(pools.map((p) => [p, { activeId: 0, slot: readSlot++ }] as const));
+  const tickDeps = (mm: LiveMm, readPools: (pools: string[]) => Promise<Map<string, { activeId: number; slot?: number }>> = freshReads) => ({ book: emptyBook, live: mm, watcher: null, readPools, write: () => {} });
 
   it("restart whose only state is an unresolved open: the service tick resolves it (no pools to read)", async () => {
     const s = setup();
