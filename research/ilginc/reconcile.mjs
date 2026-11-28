@@ -46,6 +46,7 @@ const openAtEnd = []; // positions still open when the data ends: their token sa
 for (const [position, seq] of byPos) {
   const open = seq.find((r) => r.created && !r.err), close = seq.find((r) => r.closed && !r.err);
   const pool = (open ?? seq[0]).pool;
+  if (!seq.some((r) => !r.err)) continue; // only failed txs (e.g. a failed open): the position never existed
   if (!close) { openAtEnd.push({ position, pool, mint: pools[pool]?.x, from: (open ?? seq[0]).t, to: Infinity }); continue; }
   if (!open) continue;
   // a signature that also moved another position: its wallet change cannot be split

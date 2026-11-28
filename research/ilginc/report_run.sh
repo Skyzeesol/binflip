@@ -12,7 +12,8 @@ if [ ! -f "$OLDMOD" ]; then
   mkdir -p "$OLD"
   git show 2a46516:packages/core/src/mm/shadow.ts > "$OLD/shadow.ts"
   git show 2a46516:packages/core/src/mm/engine.ts > "$OLD/engine.ts"
-  ../../packages/core/node_modules/.bin/tsc --target es2022 --module nodenext --moduleResolution nodenext --outDir "$OLD/dist" "$OLD/shadow.ts" "$OLD/engine.ts"
+  TSC=$(ls ../../node_modules/.bin/tsc ../../packages/core/node_modules/.bin/tsc 2>/dev/null | head -1)
+  "$TSC" --target es2022 --module nodenext --moduleResolution nodenext --outDir "$OLD/dist" "$OLD/shadow.ts" "$OLD/engine.ts"
   echo '{"type":"module"}' > "$OLD/dist/package.json"
 fi
 for f in "$D"/*.tx.*.gz "$D"/pools.json; do ln -sf "$(readlink -f "$f")" "$V2/"; done

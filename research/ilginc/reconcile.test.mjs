@@ -55,3 +55,16 @@ test("a signature that moved two positions is not split between them", () => {
   const out = run(rows, [e("P")]);
   assert.match(posLine(out), /başka pozisyonla ortak imza \(bölünemez\): 1/);
 });
+
+test("a position that only has a FAILED open never existed: it does not block the token's sales", () => {
+  const rows = [
+    { sig: "f", slot: 1, t: 0, kind: "initialize_position2", position: "X", pool: "L2", created: true, err: "{\"InstructionError\":[0,\"Custom\"]}", solDelta: -5000, tokDelta: {} },
+    { sig: "o", slot: 2, t: 10, kind: "initialize_position2", position: "P", pool: "L", created: true, solDelta: -1e9, tokDelta: {} },
+    { sig: "c", slot: 3, t: 120, kind: "close_position_if_empty", position: "P", pool: "L", closed: true, solDelta: 9e8, tokDelta: { M: "500" } },
+    { sig: "s", slot: 4, t: 130, kind: "jup_swap", solDelta: 5e7, tokDelta: { M: "-500" } },
+  ];
+  const out = run(rows, [e("P")]);
+  assert.match(posLine(out), /karşılaştırılabilir: 1/);
+  assert.match(out, /dönem sonunda açık pozisyon: 0/);
+});
+
