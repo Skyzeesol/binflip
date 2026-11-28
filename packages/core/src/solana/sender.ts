@@ -168,27 +168,35 @@ export class TxSender {
   /**
    * The one rule for an outcome we did not see (lost reply, timeout, crash):
    *  - confirmed / failed: as the chain says (history searched);
-   *  - expired: not found, AND the chain is past the tx's last valid block height, AND still not
-   *    found on a second look after that (so it can never land);
-   *  - pending: anything else (may still land, or the RPC has not seen it yet): wait.
+   *  - expired: NOT FOUND (no status at all), AND the chain is past the tx's last valid block
+   *    height, AND still not found on a second look after that (so it can never land);
+   *  - pending: anything else, wait. In particular a tx the RPC sees as `processed` is pending
+   *    on every look, whatever the block height: it is on a fork and may still confirm.
    * Without a last valid block height an unseen tx is never declared expired.
    */
   async resolve(signature: string, lastValidBlockHeight: number | undefined): Promise<SigOutcome> {
-    const a = await this.status(signature);
-    if (a !== "unknown") return a;
-    if (lastValidBlockHeight === undefined) return "pending";
+    const a = await this.statusDetail(signature);
+    if (a === "confirmed" || a === "failed") return a;
+    if (a === "processed" || lastValidBlockHeight === undefined) return "pending";
     const height = await this.connection.getBlockHeight("confirmed");
     if (height <= lastValidBlockHeight) return "pending";
-    const b = await this.status(signature);
-    return b === "unknown" ? "expired" : b;
+    const b = await this.statusDetail(signature);
+    if (b === "confirmed" || b === "failed") return b;
+    return b === "not_found" ? "expired" : "pending";
+  }
+
+  /** Raw view of one signature: seen only at `processed` is kept apart from not seen at all. */
+  async statusDetail(signature: string): Promise<"confirmed" | "failed" | "processed" | "not_found"> {
+    const st = (await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+    if (!st) return "not_found";
+    if (st.err) return "failed";
+    return st.confirmationStatus === "processed" ? "processed" : "confirmed";
   }
 
   /** After a crash/timeout: did this signature land? */
   async status(signature: string): Promise<"confirmed" | "failed" | "unknown"> {
-    const st = (await this.connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
-    if (!st) return "unknown";
-    if (st.err) return "failed";
-    return st.confirmationStatus === "processed" ? "unknown" : "confirmed";
+    const d = await this.statusDetail(signature);
+    return d === "confirmed" || d === "failed" ? d : "unknown";
   }
 }
 

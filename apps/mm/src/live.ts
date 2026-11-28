@@ -39,6 +39,8 @@ export interface LiveOptions {
   /** If this file exists, every open position is closed (and its token sold). */
   closeAllFile: string;
   idleSec?: number;
+  /** Min spacing of outcome lookups for a rebalance in flight, from ticks (default 2000 ms). */
+  settleEveryMs?: number;
 }
 
 interface OurPosition {
@@ -59,6 +61,12 @@ interface OurPosition {
   closeReason?: string;
   /** Signatures of our close txs, persisted before each broadcast. */
   closeSigs?: SentSig[];
+  /**
+   * A rebalance that was signed but whose outcome we did not see (lost reply, crash): its
+   * signatures and the range it moves us to. While any signature is pending, no new rebalance
+   * and no close is built for this position.
+   */
+  rebalanceInFlight?: { sigs: SentSig[]; range: MmRange; active: number; t: number };
 }
 
 /**
@@ -120,6 +128,7 @@ export class LiveMm {
   private readonly opening = new Map<string, OpeningRecord>(); // broadcast, outcome unknown (persisted)
   private readonly sales = new Map<string, PendingSale>(); // owed after a confirmed close (persisted), by our position
   private readonly selling = new Set<string>();
+  private readonly settleAt = new Map<string, number>(); // our position → next allowed outcome lookup (ms)
   private readonly busy = new Set<string>(); // our positions with an action in flight
   private readonly jupiter = new JupiterClient();
 
@@ -298,6 +307,7 @@ export class LiveMm {
   onTick(pool: string, active: number): void {
     for (const p of this.ours.values()) {
       if (p.pool !== pool || p.closing || this.busy.has(p.position)) continue;
+      if (p.rebalanceInFlight && Date.now() < (this.settleAt.get(p.position) ?? 0)) continue; // resolving: rate-limited
       const d = mmDecide(p.range, active, p.binStep, MM_TRIGGER_BINS);
       if (d.kind === "rebalance") void this.rebalance(p, active, d.distance);
     }
@@ -307,6 +317,8 @@ export class LiveMm {
     this.busy.add(p.position);
     const t = Math.floor(Date.now() / 1000);
     try {
+      // An earlier rebalance with an unknown outcome decides first: never two on top of each other.
+      if ((await this.settleRebalance(p)) !== "none") return;
       const removes = [{ minBinId: p.range.lower, maxBinId: p.range.upper, bps: 10_000 }];
       const held = await this.builder.simulateWithdraw(p.pool, p.position, removes);
       const adds = mmAddsAt(held.x, held.y, p.binStep, active);
@@ -315,8 +327,24 @@ export class LiveMm {
         pool: p.pool, position: p.position, removes, adds,
         favorX: false, claimFee: true, maxActiveBinSlippage: this.opts.slippageBins, slippagePct: 1,
       });
-      const sigs = await this.sendBuilt(built);
-      p.range = mmRangeAfter(adds, active);
+      const range = mmRangeAfter(adds, active);
+      const inFlight = { sigs: [] as SentSig[], range, active, t };
+      p.rebalanceInFlight = inFlight;
+      let sigs: string[];
+      try {
+        sigs = await this.sendBuilt(built, async (sig, lastValid) => { inFlight.sigs.push({ sig, lastValid }); this.save(); });
+      } catch (err) {
+        if (inFlight.sigs.length) {
+          // signed and maybe broadcast: the chain decides on a later tick (settleRebalance)
+          this.save();
+          this.record("live", { t, kind: "rebalance_uncertain", position: p.position, pool: p.pool, active, distance, range, sigs: inFlight.sigs.map((x) => x.sig), error: String((err as Error).message).slice(0, 300) });
+          return;
+        }
+        p.rebalanceInFlight = undefined;
+        throw err;
+      }
+      p.rebalanceInFlight = undefined;
+      p.range = range;
       p.lastMoveAt = Math.floor(Date.now() / 1000);
       this.save();
       this.record("live", { t, kind: "rebalance", position: p.position, pool: p.pool, active, distance, range: p.range, held: { x: held.x.toString(), y: held.y.toString() }, sigs });
@@ -326,6 +354,40 @@ export class LiveMm {
     } finally {
       this.busy.delete(p.position);
     }
+  }
+
+  /**
+   * Resolve a rebalance with an unknown outcome (TxSender.resolve on each signature):
+   * "pending" → wait (nothing new may be sent); "settled" → resolved now (confirmed: our range is
+   * the planned one; failed/expired: unchanged), the next tick decides afresh; "none" → nothing open.
+   */
+  private async settleRebalance(p: OurPosition): Promise<"none" | "pending" | "settled"> {
+    const f = p.rebalanceInFlight;
+    if (!f) return "none";
+    this.settleAt.set(p.position, Date.now() + (this.opts.settleEveryMs ?? 2000));
+    const out = await Promise.all(f.sigs.map((x) => this.sender.resolve(x.sig, x.lastValid).catch(() => "pending" as const)));
+    if (out.some((o) => o === "pending")) return "pending";
+    const t = Math.floor(Date.now() / 1000);
+    if (out.length && out.every((o) => o === "confirmed")) {
+      p.range = f.range;
+      p.lastMoveAt = t;
+      this.record("live", { t, kind: "rebalance_confirmed", position: p.position, pool: p.pool, active: f.active, range: f.range, sigs: f.sigs.map((x) => x.sig) });
+    } else {
+      // rebalanceOne is a single tx, so "some confirmed" does not occur; anything else did not move us
+      this.record("live", { t, kind: "rebalance_not_landed", position: p.position, pool: p.pool, sigs: f.sigs.map((x) => x.sig), outcomes: out });
+    }
+    p.rebalanceInFlight = undefined;
+    this.save();
+    return "settled";
+  }
+
+  /** Our close txs: is any still pending (may land)? Then no new close may be built. */
+  private async closePending(p: OurPosition): Promise<boolean> {
+    for (const x of p.closeSigs ?? []) {
+      const o = await this.sender.resolve(x.sig, x.lastValid).catch(() => "pending" as const);
+      if (o === "pending") return true;
+    }
+    return false;
   }
 
   // ── close ─────────────────────────────────────────────────────────────────────
@@ -360,6 +422,12 @@ export class LiveMm {
     const closeAll = fs.existsSync(this.opts.closeAllFile);
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
+      // A rebalance in flight is resolved here too: the price may have come back, so no tick
+      // would ask for a rebalance, and our range must not stay stale.
+      if (p.rebalanceInFlight && !this.busy.has(p.position)) {
+        this.busy.add(p.position);
+        try { await this.settleRebalance(p); } finally { this.busy.delete(p.position); }
+      }
       if (p.closeRequested) await this.close(p, p.closeReason ?? "leader_closed"); // restored intent
       else if (closeAll) await this.close(p, "close_all_file");
       else if (mmIdleExpired(p.lastMoveAt, now, this.opts.idleSec)) await this.close(p, "idle_timeout");
@@ -389,6 +457,12 @@ export class LiveMm {
     try {
       // A previous close may have landed with its reply lost (or before a crash): verify on chain.
       if ((await this.builder.connection.getAccountInfo(new PublicKey(p.position), "confirmed")) === null) return await done("close_verified", []);
+      // The same signature rule before building anything new: a close or a rebalance of ours that
+      // may still land → wait for it (the intent stays persisted; the next tick looks again).
+      if ((await this.settleRebalance(p)) === "pending" || (await this.closePending(p))) {
+        p.closing = false;
+        return;
+      }
       const built = await this.builder.remove({ pool: p.pool, position: p.position, bps: 10_000, close: true });
       await done("close", await this.sendBuilt(built, async (sig, lastValid) => { (p.closeSigs ??= []).push({ sig, lastValid }); this.save(); }));
     } catch (err) {

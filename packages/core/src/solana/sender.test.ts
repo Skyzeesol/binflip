@@ -32,4 +32,11 @@ describe("TxSender.resolve", () => {
   it("processed-only counts as not yet known", async () => {
     expect(await sender({ statuses: [{ err: null, confirmationStatus: "processed" }], height: 5 }).resolve("s", 10)).toBe("pending");
   });
+  it("processed on both looks past the last valid height → pending, never expired", async () => {
+    const proc = { err: null, confirmationStatus: "processed" };
+    expect(await sender({ statuses: [proc, proc], height: 11 }).resolve("s", 10)).toBe("pending");
+  });
+  it("not found first, processed on the second look past the height → pending", async () => {
+    expect(await sender({ statuses: [null, { err: null, confirmationStatus: "processed" }], height: 11 }).resolve("s", 10)).toBe("pending");
+  });
 });

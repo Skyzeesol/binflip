@@ -20,19 +20,20 @@ const TOKEN = "TokenMint1111111111111111111111111111111111";
 type Wallet = { tokens: bigint; balanceReadFailures: number };
 /** Shared "chain clock": block height, advanced by tests to expire blockhashes. */
 type Clock = { height: number };
-function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; chain?: Set<string>; mintX?: string; wallet?: Wallet; clock?: Clock; sigStatus?: Map<string, "confirmed" | "failed" | "unknown">; tokenMoves?: Map<string, bigint> } = {}) {
+function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; chain?: Set<string>; mintX?: string; wallet?: Wallet; clock?: Clock; sigStatus?: Map<string, "confirmed" | "failed" | "unknown" | "processed">; tokenMoves?: Map<string, bigint> } = {}) {
   const clock = o.clock ?? { height: 1000 };
   const LAST_VALID = () => clock.height + 150;
   const wallet = o.wallet ?? { tokens: 0n, balanceReadFailures: 0 }; // shared across "restarts" like the chain
   const dir = o.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), "mmlive-"));
   const chain = o.chain ?? new Set<string>(); // position accounts that exist "on chain"
-  const sigStatus = o.sigStatus ?? new Map<string, "confirmed" | "failed" | "unknown">(); // chain state: shared across restarts
+  const sigStatus = o.sigStatus ?? new Map<string, "confirmed" | "failed" | "unknown" | "processed">(); // chain state: shared across restarts
   const tokenMoves = o.tokenMoves ?? new Map<string, bigint>(); // sig → our token delta (for getTransaction)
   const OWNER = "11111111111111111111111111111111";
   let sendMode: SendMode = "ok";
-  let removeMode: "ok" | "hang" | "land_then_throw" | "first_never_lands" = "ok";
+  let removeMode: "ok" | "hang" | "land_then_throw" | "first_never_lands" | "lost_pending" = "ok";
+  let rebalanceMode: "ok" | "lost" = "ok";
   let removeSends = 0;
-  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0, sell: 0, poolSwap: 0, sold: [] as bigint[] };
+  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0, sell: 0, poolSwap: 0, sold: [] as bigint[], rebalance: 0 };
   let poolRoute = false;
   let jupiterMode: "ok" | "land_then_throw" = "ok";
   const gates = { poolInfo: [] as ReturnType<typeof gate>[], send: [] as ReturnType<typeof gate>[], sim: [] as ReturnType<typeof gate>[] };
@@ -56,6 +57,8 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       return { solIsY: true, binStep: 100, activeBinId: 0, mintX: o.mintX ?? "So11111111111111111111111111111111111111112" };
     },
     async open() { calls.open++; return { txs: [{}], extraSigners: new Map(), position: posAddr(calls.open) }; },
+    async simulateWithdraw() { return { x: 0n, y: 100_000_000n }; },
+    async rebalanceOne() { calls.rebalance++; return { txs: [{ rebalance: true }], extraSigners: new Map() }; },
     async remove(r: { position: string }) {
       calls.remove++;
       if (removeMode === "hang") await new Promise(() => {}); // process "crashes" while closing
@@ -72,12 +75,18 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     },
   };
   const sender = {
-    async send(tx: { close?: string; poolSell?: bigint }, _x: unknown, opts: { onSignature?: (s: string, lv: number) => Promise<void> } = {}) {
+    async send(tx: { close?: string; poolSell?: bigint; rebalance?: boolean }, _x: unknown, opts: { onSignature?: (s: string, lv: number) => Promise<void> } = {}) {
       calls.send++;
       const sig = `sig${calls.send}`;
       if (hold.sim) { const g = gate(); gates.sim.push(g); await g.p; } // sender is simulating
       await opts.onSignature?.(sig, LAST_VALID()); // real TxSender: after simulate + sign, before the first broadcast
       calls.broadcast++;
+      if (tx.rebalance) {
+        if (rebalanceMode === "lost") throw new Error("fetch failed (reply lost)"); // outcome unknown
+        sigStatus.set(sig, "confirmed");
+        return { signature: sig };
+      }
+      if (tx.close && removeMode === "lost_pending") throw new Error("fetch failed (reply lost)"); // broadcast, not landed yet
       if (tx.close && removeMode === "first_never_lands" && removeSends++ === 0) {
         throw new Error(`blockhash expired before ${sig} confirmed`); // broadcast, never landed
       }
@@ -107,10 +116,11 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     // TxSender.resolve semantics on the fake chain (uses status(), so tests may override status)
     async resolve(sig: string, lastValid: number | undefined) {
       const a = await (this as { status(s: string): Promise<string> }).status(sig);
-      if (a !== "unknown") return a;
-      if (lastValid === undefined || clock.height <= lastValid) return "pending";
+      if (a === "confirmed" || a === "failed") return a;
+      if (a === "processed" || lastValid === undefined || clock.height <= lastValid) return "pending";
       const b = await (this as { status(s: string): Promise<string> }).status(sig);
-      return b === "unknown" ? "expired" : b;
+      if (b === "confirmed" || b === "failed") return b;
+      return b === "unknown" ? "expired" : "pending";
     },
     // Jupiter swap: sells the quoted amount (exact in)
     async sendVersioned(tx: { amount: bigint }, _lv: number, opts: { onSignature?: (s: string, lv: number) => Promise<void> } = {}) {
@@ -128,14 +138,14 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
   const log = { info() {}, warn() {}, error() {}, debug() {} };
   const mm = new LiveMm(builder as never, sender as never, new PublicKey("11111111111111111111111111111111"), {
     lotLamports: 100_000_000n, maxPositions: o.maxPositions ?? 3, reserveLamports: 150_000_000n, slippageBins: 0,
-    priorityMicroLamports: 0, stateFile: path.join(dir, "state.json"), killFile: path.join(dir, "STOP"), closeAllFile: path.join(dir, "CLOSE_ALL"),
+    priorityMicroLamports: 0, settleEveryMs: 0, stateFile: path.join(dir, "state.json"), killFile: path.join(dir, "STOP"), closeAllFile: path.join(dir, "CLOSE_ALL"),
   }, log as never, (kind, obj) => records.push({ _file: kind, ...obj }));
   // no network: Jupiter replaced by a fake
   (mm as unknown as { jupiter: unknown }).jupiter = {
     async quoteToSol(_m: string, amount: bigint) { return { outAmount: String(amount) }; },
     async buildSwap(q: { outAmount: string }) { return { tx: { amount: BigInt(q.outAmount) }, lastValidBlockHeight: 1 }; },
   };
-  return { mm, dir, chain, wallet, clock, sigStatus, tokenMoves, calls, poolRoute: (v: boolean) => (poolRoute = v), jupiterMode: (m: typeof jupiterMode) => (jupiterMode = m), gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m), removeMode: (m: typeof removeMode) => (removeMode = m) };
+  return { mm, dir, chain, wallet, clock, sigStatus, tokenMoves, calls, rebalanceMode: (m: typeof rebalanceMode) => (rebalanceMode = m), poolRoute: (v: boolean) => (poolRoute = v), jupiterMode: (m: typeof jupiterMode) => (jupiterMode = m), gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m), removeMode: (m: typeof removeMode) => (removeMode = m) };
 }
 // distinct valid base58 public keys for fake position accounts
 const posAddr = (n: number) => new PublicKey(new Uint8Array(32).fill(n % 255 + 1)).toBase58();
@@ -490,5 +500,98 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     expect(r.calls.sold).toEqual([]);
     expect(r.mm.pendingSales).toBe(1);
     expect(kinds(r.records)).toEqual(["sell_failed"]); // "close outcome pending": retried, nothing sold
+  });
+
+  it("close reply lost, its signature still valid: the next ticks build NO second close; it lands → verified, sale", async () => {
+    const wallet = { tokens: 0n, balanceReadFailures: 0 };
+    const s = setup({ mintX: TOKEN, wallet });
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    s.removeMode("lost_pending");
+    await s.mm.onLeaderClose("L1");
+    expect(s.calls.remove).toBe(1);
+    for (let i = 0; i < 3; i++) await serviceTick(tickDeps(s.mm));
+    expect(s.calls.remove).toBe(1); // pending: nothing new built
+    // the first close lands
+    s.chain.delete(posAddr(1));
+    s.sigStatus.set("sig2", "confirmed");
+    s.tokenMoves.set("sig2", 1000n);
+    wallet.tokens += 1000n;
+    await serviceTick(tickDeps(s.mm));
+    await serviceTick(tickDeps(s.mm));
+    expect(s.calls.remove).toBe(1);
+    expect(kinds(s.records).slice(-3)).toEqual(["close_verified:leader_closed", "sell", "sell_done"]);
+    expect(s.calls.sold).toEqual([1000n]);
+  });
+
+  it("close reply lost and its blockhash then expires: only then a new close is built", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    s.removeMode("lost_pending");
+    await s.mm.onLeaderClose("L1");
+    await serviceTick(tickDeps(s.mm));
+    expect(s.calls.remove).toBe(1);
+    s.clock.height += 200; // past the first close's last valid height, still not found → expired
+    s.removeMode("ok");
+    await serviceTick(tickDeps(s.mm));
+    expect(s.calls.remove).toBe(2);
+    expect(s.mm.openCount).toBe(0);
+  });
+
+  it("a close the RPC sees only as processed stays pending past its last valid height", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    s.removeMode("lost_pending");
+    await s.mm.onLeaderClose("L1");
+    s.sigStatus.set("sig2", "processed");
+    s.clock.height += 200;
+    s.removeMode("ok");
+    await serviceTick(tickDeps(s.mm));
+    expect(s.calls.remove).toBe(1); // not expired: no second close
+    expect(s.mm.openCount).toBe(1);
+  });
+
+  it("rebalance reply lost: no second rebalance and no close until it resolves; confirmed → planned range", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    const ours = () => [...(s.mm as unknown as { ours: Map<string, { range: { lower: number; upper: number }; rebalanceInFlight?: unknown }> }).ours.values()][0]!;
+    const before = { ...ours().range };
+    s.rebalanceMode("lost");
+    s.mm.onTick("P", before.upper + 3); // 3 bins away → rebalance
+    for (let i = 0; i < 10 && s.calls.rebalance === 0; i++) await tick();
+    await tick(); await tick();
+    expect(kinds(s.records).at(-1)).toBe("rebalance_uncertain");
+    s.mm.onTick("P", before.upper + 5);
+    for (let i = 0; i < 5; i++) await tick();
+    expect(s.calls.rebalance).toBe(1); // still pending: not another one
+    await s.mm.onLeaderClose("L1");
+    expect(s.calls.remove).toBe(0); // close waits for the pending rebalance
+    // the rebalance turns out confirmed
+    const sig = (ours().rebalanceInFlight as { sigs: { sig: string }[] }).sigs[0]!.sig;
+    s.sigStatus.set(sig, "confirmed");
+    await serviceTick(tickDeps(s.mm));
+    expect(kinds(s.records)).toContain("rebalance_confirmed");
+    expect(s.calls.remove).toBe(1); // then the persisted close intent runs
+    expect(s.mm.openCount).toBe(0);
+  });
+
+  it("rebalance reply lost and expired: range unchanged, the next tick may rebalance again", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    const ours = () => [...(s.mm as unknown as { ours: Map<string, { range: { lower: number; upper: number } }> }).ours.values()][0]!;
+    const before = { ...ours().range };
+    s.rebalanceMode("lost");
+    s.mm.onTick("P", before.upper + 3);
+    for (let i = 0; i < 10 && s.calls.rebalance === 0; i++) await tick();
+    await tick(); await tick();
+    s.clock.height += 200;
+    await serviceTick(tickDeps(s.mm)); // settles as not landed
+    expect(kinds(s.records).at(-1)).toBe("rebalance_not_landed");
+    expect(ours().range).toEqual(before);
+    s.rebalanceMode("ok");
+    s.mm.onTick("P", before.upper + 3);
+    for (let i = 0; i < 10 && s.calls.rebalance < 2; i++) await tick();
+    await tick(); await tick();
+    expect(s.calls.rebalance).toBe(2);
+    expect(kinds(s.records).at(-1)).toBe("rebalance");
   });
 });
