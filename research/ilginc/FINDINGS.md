@@ -145,3 +145,26 @@ Fiyat ve hacim kapanışı açıklamıyor: spike5 0,62 vs 0,46, 15 dk aralık %1
 
 Birebir %85,7 · doğru taraf %93,3 · görmeden kaçırma %5,2 (çoğu tam +2) · yanlış taraf %1,2 · kural farkı %0,2 · karar gecikmesi medyan 0 sn. Önceki sürüm (2 sn okuma, confirmed): birebir %70, görmeden kaçırma %19,5.
 Bilinen sorun: public RPC WebSocket'i saatte ~37 kez kopuyor (1006); boşlukları 2 sn'lik okuma dolduruyor. Yanlış taraf vakaları incelenecek (aday: processed seviyesinde sonradan geri alınan durum).
+
+---
+
+## Güncelleme 28 Kasım: çıkış (pozisyon muhasebesi) ve Helius WebSocket
+
+Kaynak: `pnl.mjs` (tam veri, 1.602 kapanan pozisyon; +33 SOL lotsuz dışarıda), `exit2.mjs`, `waits.mjs`. Kâr/zarar = pozisyon değeri (token, aktif bin fiyatıyla) + toplanan fee + cüzdana dönen − yatırılan; lotun yüzdesi.
+
+### Kârın kaynağı — **KESİN**
+- Toplam kâr/zarar **+90,9 SOL**; toplanan fee **1.072,8 SOL**; envanter sonucu ≈ **−982 SOL**. Fee'nin ~%92'si fiyat/envanter kaybına gidiyor.
+- Kârla kapanan pozisyon %43,4. Kapanışta kâr/zarar medyanı 0 (q10 −%14, q90 +%15) → sabit TP/SL eşiği yok.
+
+### Çıkış 1: hareketsizlik zaman aşımı — **GÜÇLÜ**
+Son taşımadan (ya da açılıştan) kapanışa kadar geçen süre, 5 dk kovalarla: `0–5: 1.161 · 5–50: 30 · 50–55: 7 · 55–60: 92 · 60–65: 82 · 65–70: 26 · …`
+Hiç taşınmayan 272 pozisyonun tutma süresi: 54–61 dk'da yığılıyor (medyan 61). → **Yaklaşık 55 dk rebalance olmazsa kapat.** 5–50 dk aralığında neredeyse hiç kapanış yok. Kuyruk (65–180+ dk, ~200 kapanış): kural bunlarda liderden önce kapatırdı; lider bazen daha uzun bekliyor (ikinci koşul açık: aralık içinde süren fee?).
+
+### Çıkış 2: aktivite yavaşlayınca — **GÜÇLÜ ipucu, eşik AÇIK**
+1.142 "aktif" çıkış (son taşımadan < 5 dk sonra): kapanış öncesi son 15 dk taşıma sayısı medyan 10 (diğer anlarda 14), önceki taşımadan geçen süre 47 sn (diğerlerinde 17 sn), girişten kayma daha az (11 vs 15 bin). Sıçrama büyüklüğü farksız (medyan 2). → Hareket hızlanırken değil, **soğurken** çıkıyor.
+
+### Lider neden bazen geç taşıyor — **KESİN (kısmi)**
+Gölge motorun liderden önce davrandığı 36 incelenebilir vakanın 21'inde lider aynı pencerede taşımayı **denemiş ama başarısız** olmuş (hepsi `Custom 6004`, bin kayma toleransı); 15'inde hiç denememiş. Vakaların yarısı iki havuzda (BfREfu…, BFKBQT… = XMR-SOL, tarihsel başarısızlık %28,7). → Uyumsuzluğun önemli kısmı liderin kendi işlem başarısızlıkları; canlıda biz de yaşayacağız.
+
+### Gölge motor, Helius WebSocket (~11 saat, 741 karşılaştırma)
+Birebir %81,6 · doğru taraf %93,1 · görmeden kaçırma **%2,4** (public RPC'de %5,2) · kural farkı %2,3 · yanlış taraf %2,2 (çoğu yukarıdaki iki havuzda, liderin başarısız denemeleri) · WebSocket kopması 11 saatte 2 (public'te saatte ~37) · kararların %97'si WebSocket'ten.
