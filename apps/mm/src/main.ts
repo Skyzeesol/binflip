@@ -25,6 +25,8 @@ import { LeaderFeed } from "./leaderFeed.js";
 import { SlotGate } from "./slotGate.js";
 import { parseMmConfig, type MmConfig } from "./config.js";
 import { WriterLock, pruneJsonl } from "./writerLock.js";
+import { Readiness, closeAllMtime, writeStatus } from "./status.js";
+import { randomUUID } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
 
 /**
@@ -53,13 +55,16 @@ const COMMITMENT = cfg.commitment;
 await runService("mm", async ({ config, log }) => {
   // Live needs BOTH Binflip's live gates (DRY_RUN=0 + LIVE_CONFIRMED=1) AND MM_LIVE=1.
   const wantLive = cfg.live;
+  const runId = randomUUID(), startedAt = Date.now();
+  const closeAllPath = process.env.MM_CLOSE_ALL_FILE ?? path.join(OUT_DIR, "CLOSE_ALL");
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const lock = new WriterLock(OUT_DIR);
   lock.acquire(); // one writer per data directory, before any state is read
   // No NEW opens while data is stale, and none before the first successful leader read: the health
   // check gives a 60 s start-up grace, the opens gate does not.
-  let stale: string | null = "starting: no successful leader read yet";
-  let leaderEverOk = false;
+  const readiness = new Readiness(cfg.staleMs);
+  const trackedPoolAges = (): number[] => [...new Set([...book.pools(), ...(live?.pools() ?? [])])].map((p) => gate.ageMs(p));
+  const staleNow = (): string | null => readiness.staleness(trackedPoolAges()); // evaluated at each open, not cached
   if (config.mode === "live" && !wantLive) throw new Error("live mode without MM_LIVE=1: refusing (set MM_LIVE=1 to trade, or DRY_RUN=1 for shadow only)");
   if (wantLive && config.mode !== "live") throw new Error("MM_LIVE=1 needs DRY_RUN=0 and LIVE_CONFIRMED=1");
   const rpc = new SolanaRpc(config.SOLANA_RPC_URL, { retries: 6, timeoutMs: 20_000 });
@@ -77,7 +82,7 @@ await runService("mm", async ({ config, log }) => {
       reserveLamports: cfg.reserveLamports,
       slippageBins: cfg.slippageBins,
       priorityMicroLamports: cfg.priorityMicroLamports,
-      stale: () => stale,
+      stale: staleNow,
       idleSec: cfg.idleExitSec || undefined,
       stateFile: path.join(OUT_DIR, "live-state.json"),
       killFile: process.env.MM_KILL_FILE ?? path.join(OUT_DIR, "STOP"),
@@ -184,18 +189,13 @@ await runService("mm", async ({ config, log }) => {
   );
   const pollLeader = async () => {
     await feed.poll();
-    lastLeaderOk = Date.now();
-    if (!leaderEverOk) {
-      leaderEverOk = true;
-      log.info("first successful leader read: new opens allowed (if pool data is fresh)");
-    }
+    if (readiness.leaderOk()) log.info("first successful leader read: new opens allowed (if pool data is fresh)");
   };
   await live?.reconcileLeaderPositions("startup");
 
   // ── loops ───────────────────────────────────────────────────────────────────
   let stopped = false;
-  let lastTickOk = Date.now();
-  let lastLeaderOk = Date.now();
+
   const gate = new SlotGate(); // one slot order for WS pushes and RPC polls
   const loop = (name: string, ms: number, fn: () => Promise<void>) => {
     (async () => {
@@ -221,7 +221,7 @@ await runService("mm", async ({ config, log }) => {
           if (!gate.accept(pool, slot || undefined)) return; // older than what we already acted on
           for (const d of book.onTick(pool, s.activeId, now, slot)) write("ours", { t: now, slot, pool, active: s.activeId, via: "ws", ...d });
           live?.onTick(pool, s.activeId);
-          lastTickOk = Date.now();
+          readiness.tickOk();
         } catch (err) {
           log.debug({ err, pool }, "ws decode failed");
         }
@@ -232,43 +232,42 @@ await runService("mm", async ({ config, log }) => {
   loop("leader", TX_POLL_MS, pollLeader);
   loop("tick", TICK_MS, async () => {
     await serviceTick({ book, live, watcher, readPools, write, gate });
-    lastTickOk = Date.now();
+    readiness.tickOk();
   });
-  /** Why our data is stale (null = fresh): leader feed or pool reads behind. */
-  const staleness = (): string | null => {
-    const now = Date.now();
-    if (!leaderEverOk) return "starting: no successful leader read yet";
-    if (now - lastLeaderOk > cfg.staleMs) return `leader feed ${Math.round((now - lastLeaderOk) / 1000)} s behind`;
-    if (now - lastTickOk > cfg.staleMs) return `pool reads ${Math.round((now - lastTickOk) / 1000)} s behind`;
-    const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p, now) > cfg.staleMs);
-    return old.length ? `${old.length} pool(s) without a fresh observation` : null;
-  };
   const statsTimer = setInterval(() => {
-    stale = staleness();
+    const stale = staleNow();
     const liveStatus = live?.status() ?? null;
     const s = { ...book.summary(), liveOpen: live?.openCount ?? null, live: liveStatus, stale, writeErrors, leaderRetry: feed.state.retry.length, leaderProviderErrors: feed.providerErrors, leaderScanPending: feed.state.scan?.collected.length ?? 0, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
     log.info(s, "mm stats");
     write("stats", { t: Math.floor(Date.now() / 1000), ...s });
     if (liveStatus) {
-      // What is still in flight, for CLOSE_ALL: stop the service only once `idle` is true.
+      // What is still in flight, for CLOSE_ALL: stop only on a fresh record of THIS run that saw the
+      // current request (stopwait.js / stopSafe). Atomic write.
+      const requested = closeAllMtime(closeAllPath);
       try {
-        fs.writeFileSync(path.join(OUT_DIR, "live-status.json"), JSON.stringify({ t: new Date().toISOString(), closeAll: fs.existsSync(path.join(OUT_DIR, "CLOSE_ALL")), ...liveStatus }, null, 1));
+        writeStatus(path.join(OUT_DIR, "live-status.json"), { ...liveStatus, runId, startedAt, t: Date.now(), closeAll: requested !== null, closeAllRequestedAt: requested, ready: readiness.leaderEverOk && stale === null, notReadyWhy: stale, lastLeaderOkAt: readiness.leaderEverOk ? new Date(readiness.lastLeaderOk).toISOString() : null });
       } catch { /* the stats line has it too */ }
     }
   }, Math.min(STATS_MS, 10_000));
-  const staleTimer = setInterval(() => { stale = staleness(); }, 5_000);
+
 
   log.info({ mode: live ? "LIVE" : "shadow", leader: LEADER, tickMs: TICK_MS, ws: USE_WS, commitment: COMMITMENT, outDir: OUT_DIR }, live ? "LIVE mode: following leader, transactions ARE sent" : "shadow mode: following leader, no transactions are sent");
   return {
     checks: {
       tick: async () => {
-        if ((book.pools().length || live?.pools().length) && Date.now() - lastTickOk > 60_000) throw new Error("no pool read for 60s");
+        if ((book.pools().length || live?.pools().length) && Date.now() - readiness.lastTickOk > 60_000) throw new Error("no pool read for 60s");
       },
       leader: async () => {
         // provider-wide failure (every read failing) is told apart from single parked txs
         if (feed.providerErrors >= 3) throw new Error(`RPC provider failing: ${feed.providerErrors} polls in a row`);
-        if (Date.now() - lastLeaderOk > 60_000) throw new Error(`leader feed stalled for ${Math.round((Date.now() - lastLeaderOk) / 1000)} s`);
+        if (Date.now() - readiness.lastLeaderOk > 60_000) throw new Error(`leader feed stalled for ${Math.round((Date.now() - readiness.lastLeaderOk) / 1000)} s`);
         if (feed.state.retry.length > 20) throw new Error(`${feed.state.retry.length} leader txs parked (unreadable)`);
+      },
+      ready: async () => {
+        // "running" vs "ready": not ready until the first successful leader read (and fresh data)
+        // (live only: the shadow service opens nothing; its freshness is in the pools/leader checks)
+        const why = live ? staleNow() : readiness.leaderEverOk ? null : "starting: no successful leader read yet";
+        if (why) throw new Error(`not ready${live ? " for new opens" : ""}: ${why}`);
       },
       pools: async () => {
         const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p) > 120_000);
@@ -276,14 +275,13 @@ await runService("mm", async ({ config, log }) => {
       },
       live: async () => {
         const st = live?.status();
-        if (st && ((st.oldestOpeningSec ?? 0) > 600 || (st.oldestCloseRequestSec ?? 0) > 900 || (st.oldestRebalanceInFlightSec ?? 0) > 600)) throw new Error(`live work stuck: ${JSON.stringify(st)}`);
+        if (st && ((st.oldestOpeningSec ?? 0) > 600 || (st.oldestCloseRequestSec ?? 0) > 900 || (st.oldestRebalanceInFlightSec ?? 0) > 600 || (st.oldestSaleSec ?? 0) > 3600)) throw new Error(`live work stuck: ${JSON.stringify(st)}`);
       },
     },
     cleanups: [
       () => {
         stopped = true;
         clearInterval(statsTimer);
-        clearInterval(staleTimer);
         lock.release();
         watcher?.close();
       },

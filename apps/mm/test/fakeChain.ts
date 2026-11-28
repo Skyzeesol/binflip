@@ -46,7 +46,7 @@ export class FakeChain {
   /** Token released by a close (X side of the position). */
   closeReleasesToken = 1000n;
   /** Transient token-balance answers: queue of "error" | "zero" served before the real value. */
-  balanceGlitches: Array<"error" | "zero"> = [];
+  balanceGlitches: Array<"error" | "zero" | "hang"> = [];
   /** Per-position sends currently between broadcast and outcome, and the max ever seen. */
   inFlightByPosition = new Map<string, number>();
   maxParallelPerPosition = 0;
@@ -130,6 +130,7 @@ export class FakeChain {
         const g = c.balanceGlitches.shift();
         if (g === "error") throw new Error("429 Too Many Requests");
         if (g === "zero") return 0n;
+        if (g === "hang") await new Promise(() => {}); // the RPC never answers
         return c.token(mint);
       },
       swapTokenToSol: async (p: { amount: bigint }) => {

@@ -602,13 +602,29 @@ export class LiveMm {
   }
 
   async checkIdle(now: number): Promise<void> {
+    // CLOSE_ALL first, before anything that can wait on RPC: every position's close intent is
+    // persisted at once (a stuck sale or a slow recovery must not keep it from being recorded).
+    const closeAll = fs.existsSync(this.opts.closeAllFile);
+    if (closeAll) {
+      let changed = false;
+      for (const p of this.ours.values()) {
+        if (p.closeRequested) continue;
+        p.closeRequested = true;
+        p.closeReason = "close_all_file";
+        p.closeRequestedAt = Math.floor(Date.now() / 1000);
+        changed = true;
+      }
+      for (const o of this.opening.values()) if (!o.closeRequested) { o.closeRequested = true; o.closeReason = "close_all_file"; changed = true; }
+      if (changed) this.save();
+    }
     await this.recoverOpening();
     if (Date.now() - this.lastLeaderCheck >= (this.opts.leaderCheckMs ?? 60_000)) {
       this.lastLeaderCheck = Date.now();
       await this.reconcileLeaderPositions().catch((err) => this.log.warn({ err: (err as Error).message }, "live: leader position check failed"));
     }
-    await this.retrySales(now);
-    const closeAll = fs.existsSync(this.opts.closeAllFile);
+    // Sales start now and run alongside the closes below; closes never wait for them. The tick waits
+    // for them at the END, bounded (a sale stuck on RPC keeps running, one per position).
+    const sales = this.retrySales(now);
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
       // A rebalance in flight is resolved here too: the price may have come back, so no tick
@@ -624,6 +640,7 @@ export class LiveMm {
       else if (closeAll) await this.close(p, "close_all_file");
       else if (this.opts.idleSec && mmIdleExpired(p.lastMoveAt, now, this.opts.idleSec)) await this.close(p, "idle_timeout");
     }
+    await withTimeout(sales, PREP_TIMEOUT_MS, "sales").catch(() => undefined);
   }
 
   private async close(p: OurPosition, reason: string): Promise<void> {
@@ -654,7 +671,9 @@ export class LiveMm {
       this.ours.delete(p.leaderPosition); // the only place a close intent is cleared
       this.save();
       this.record("live", { t, kind, reason, position: p.position, pool: p.pool, sigs });
-      await this.runSale(p.position, t);
+      // bounded: a sale stuck on RPC keeps running in the background (one per position) and the
+      // next close is not held up; the owed amount is persisted either way
+      await withTimeout(this.runSale(p.position, t), PREP_TIMEOUT_MS, "sale after close").catch(() => undefined);
     };
     try {
       // A previous close may have landed with its reply lost (or before a crash): verify on chain.
@@ -678,8 +697,9 @@ export class LiveMm {
     }
   }
 
-  private async retrySales(now: number): Promise<void> {
-    for (const x of [...this.sales.values()]) if (now >= x.nextAt) await this.runSale(x.position, now);
+  private retrySales(now: number): Promise<unknown> {
+    const due = [...this.sales.values()].filter((x) => now >= x.nextAt);
+    return Promise.allSettled(due.map((x) => this.runSale(x.position, now).catch((err) => this.log.warn({ err: (err as Error).message }, "live: sale pass failed"))));
   }
 
   /**
@@ -805,7 +825,7 @@ export class LiveMm {
         this.record("live", { t, kind: "sell_done", mint: x.mintX, position, amount: x.amount, sold: x.sold, tries: x.tries });
         return;
       }
-      const bal = await this.builder.tokenBalance(x.mintX);
+      const bal = await withTimeout(this.builder.tokenBalance(x.mintX), PREP_TIMEOUT_MS, "token balance read");
       const amount = owed < bal ? owed : bal;
       if (amount <= 0n) return retryLater(`owed ${owed} but the wallet shows ${bal}`, "sell_waiting_balance");
       // 3) one swap; signatures persisted before broadcast; the outcome is read from chain

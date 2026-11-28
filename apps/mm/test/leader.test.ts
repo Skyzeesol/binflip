@@ -16,6 +16,7 @@ class FakeHistory {
   unreadable = new Set<string>();
   throwOn = new Set<string>(); // getTransaction throws (RPC error)
   down = false; // the whole provider fails
+  partial = false; // signature listing works, transaction reads and the health probe fail
   push(n: number, tag = "tx") {
     for (let i = 0; i < n; i++) {
       const slot = 1000 + this.sigs.length;
@@ -30,9 +31,9 @@ class FakeHistory {
         if (o.until) { const i = list.findIndex((s) => s.signature === o.until); if (i >= 0) list = list.slice(0, i); }
         return list.slice(0, o.limit);
       },
-      health: async () => { if (this.down) throw new Error("503"); },
+      health: async () => { if (this.down || this.partial) throw new Error("503"); },
       getTransaction: async (sig: string) => {
-        if (this.down || this.throwOn.has(sig)) throw new Error("503");
+        if (this.down || this.partial || this.throwOn.has(sig)) throw new Error("503");
         const s = this.sigs.find((x) => x.signature === sig)!;
         return { meta: this.unreadable.has(sig) ? null : {}, slot: s.slot, blockTime: s.blockTime, sig };
       },
@@ -150,6 +151,27 @@ describe("B3 leader feed: downtime, >200 events, a broken tx and replay, in one 
     h.throwOn.clear();
     await mk().poll();
     expect(seen).toEqual([close, ...bad]);
+  });
+
+  it("partial outage (listing works, reads and the probe fail): the counter goes 1, 2, 3, the cursor stays, recovery resets it", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
+    const h = new FakeHistory();
+    h.push(1);
+    const seen: string[] = [];
+    const f = new LeaderFeed(h.rpc(), LEADER, path.join(dir, "f.json"), async (_tx, i) => { seen.push(i.signature); }, {});
+    await f.poll();
+    const cursor = f.state.cursor;
+    h.push(1); // a single new tx: no streak of three is ever reached
+    h.partial = true;
+    const counts: number[] = [];
+    for (let i = 0; i < 3; i++) { await expect(f.poll()).rejects.toBeInstanceOf(ProviderError); counts.push(f.providerErrors); }
+    expect(counts).toEqual([1, 2, 3]);
+    expect(f.state.cursor).toBe(cursor);
+    expect(f.state.retry).toHaveLength(0);
+    h.partial = false;
+    await f.poll();
+    expect(f.providerErrors).toBe(0);
+    expect(seen).toEqual([h.sigs[1]!.signature]);
   });
 
   it("a provider outage (every read fails) stops the poll without parking or skipping anything", async () => {

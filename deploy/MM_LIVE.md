@@ -84,7 +84,7 @@ Başlangıç kaydında `LIVE: mm will send transactions` ve `"mode":"LIVE"` sat�
 docker compose -f docker-compose.mm.yml logs --tail 30 mm
 ```
 
-`healthy` görünmesi yetmez (ilk 60 sn tolerans var). Servis, lider akışından ilk başarılı yanıt gelene kadar zaten yeni pozisyon açmaz; bu satırı görmeden pilota başlamış sayma:
+`healthy` görünmesi yetmez (ilk 60 sn tolerans var). Sağlık çıktısındaki `ready` kontrolü ve `live-status.json` içindeki `ready` / `notReadyWhy` alanları, servisin yeni açılışa hazır olup olmadığını ayrıca gösterir. Servis, lider akışından ilk başarılı yanıt gelene kadar zaten yeni pozisyon açmaz; bu satırı görmeden pilota başlamış sayma:
 
 ```bash
 docker compose -f docker-compose.mm.yml logs mm | grep "first successful leader read"
@@ -122,10 +122,10 @@ tail -f mm-data/live.$(date -u +%F).jsonl
 | Tekrar açmaya başlasın | `rm -f mm-data/STOP mm-data/CLOSE_ALL` |
 | Servisi tamamen durdur (önce `CLOSE_ALL` ile kapatmayı bekle!) | aşağıya bak |
 
-**Tamamen durdurmak:** `touch mm-data/CLOSE_ALL`, ardından `mm-data/live-status.json` içinde `"idle": true` olana kadar bekle (açık, açılan, hazırlanan pozisyon ve satılmayı bekleyen token kalmamış demektir):
+**Tamamen durdurmak:** önce `CLOSE_ALL`, sonra servisin **bu isteği gördükten sonra** yazdığı güncel kayıtta `closeAll: true` ve `idle: true` olana kadar bekle (eski bir `live-status.json`, önceki bir istek ya da istekten önce yazılmış kayıt sayılmaz). Bekleme aracı servisin içinde çalışır; 0 ile çıkarsa durdurmak güvenli, 1 ile çıkarsa durdurma:
 
 ```bash
-until grep -q '"idle": true' mm-data/live-status.json; do sleep 10; done; docker compose -f docker-compose.mm.yml down
+touch mm-data/CLOSE_ALL && docker compose -f docker-compose.mm.yml exec mm node apps/mm/dist/stopwait.js 30 && docker compose -f docker-compose.mm.yml down
 ```
 
 Servis yeniden başlarsa açık pozisyonları `mm-data/live-state.json` dosyasından hatırlar ve yönetmeye devam eder.

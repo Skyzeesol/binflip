@@ -95,12 +95,12 @@ export class LeaderFeed {
       if (sigs.length < pageSize) { complete = true; break; }
       before = sigs.at(-1)!.signature;
     }
-    this.providerErrors = 0;
     if (!complete) {
       // not at the cursor yet: keep what we have, continue next poll; the cursor stays put
       this.state.scan = { collected: all, before: before! };
       this.save();
       this.opts.onGap?.(all.length);
+      this.providerErrors = 0; // a poll that made progress
       return;
     }
     this.state.scan = undefined;
@@ -119,17 +119,13 @@ export class LeaderFeed {
         } catch (err) {
           failed = `rpc: ${(err as Error).message}`;
           streak.push({ signature: s.signature, cursorBefore: this.state.cursor });
-          // Several in a row: is it the PROVIDER, or just these signatures? Ask the provider itself.
+          // Is it the PROVIDER, or just this signature? Ask the provider itself (at once, so a
+          // partial outage with few new txs is seen too). Without a health probe: after a streak.
           let providerDown = false;
-          if (streak.length >= (this.opts.outageAfter ?? 3)) {
-            try {
-              if (this.rpc.health) await this.rpc.health();
-              else providerDown = true; // no way to tell: be safe, treat as an outage
-            } catch {
-              providerDown = true;
-            }
-            if (!providerDown) streak = []; // the provider answers: these signatures are parked, go on
-          }
+          if (this.rpc.health) {
+            providerDown = !(await this.rpc.health().then(() => true, () => false));
+            if (!providerDown) streak = []; // the provider answers: this signature is parked, go on
+          } else providerDown = streak.length >= (this.opts.outageAfter ?? 3);
           if (providerDown) {
             const first = streak[0]!;
             const back = new Set(streak.map((x) => x.signature));
@@ -168,6 +164,11 @@ export class LeaderFeed {
       } catch (err) {
         rpcFailed = true;
         r.error = `rpc: ${(err as Error).message}`.slice(0, 200);
+        if (this.rpc.health && !(await this.rpc.health().then(() => true, () => false))) {
+          this.save();
+          this.providerErrors++;
+          throw new ProviderError(`retry read failed and the provider does not answer: ${r.error}`);
+        }
       }
       if (tx && tx.meta !== null && tx.meta !== undefined) {
         try {
@@ -185,5 +186,6 @@ export class LeaderFeed {
       }
       this.save();
     }
+    this.providerErrors = 0; // only a fully completed poll resets the outage counter
   }
 }

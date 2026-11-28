@@ -250,5 +250,24 @@ describe("recovery and budget", () => {
     expect(r.kinds()).toEqual(["open_skipped:low_balance"]);
     expect(c.broadcasts.filter((b) => b.kind === "open")).toHaveLength(1);
   });
+
+  it("CLOSE_ALL while an older sale's balance read hangs: the other position's close intent is persisted and its close goes on; the sale stays owed", async () => {
+    const c = new FakeChain();
+    const m = make(c);
+    await m.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: Math.floor(Date.now() / 1000) });
+    await m.mm.onLeaderOpen({ leaderPosition: "L2", pool: "P", t: Math.floor(Date.now() / 1000) });
+    c.balanceGlitches.push("error"); // L1's sale fails once: owed, retried later
+    await m.mm.onLeaderClose("L1");
+    expect(m.state().sales).toHaveLength(1);
+    c.balanceGlitches.push("hang"); // the retry's balance read never answers
+    fs.writeFileSync(path.join(m.dir, "CLOSE_ALL"), "");
+    void m.tick(Math.floor(Date.now() / 1000) + 3600); // not awaited: it waits (bounded) on the stuck sale at the end
+    await flush(80);
+    const l2 = m.state().positions.find((p: { leaderPosition: string }) => p.leaderPosition === "L2");
+    // L2's close went through (or at least its intent is on disk) while L1's sale hangs
+    expect(l2 === undefined || l2.closeRequested === true).toBe(true);
+    expect(c.broadcasts.filter((b) => b.kind === "close")).toHaveLength(2);
+    expect(m.state().sales.map((x: { leaderPosition: string }) => x.leaderPosition)).toContain("L1");
+  });
 });
 
