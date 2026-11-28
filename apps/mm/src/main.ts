@@ -151,7 +151,7 @@ await runService("mm", async ({ config, log }) => {
         const bs = await binStepOf(ev.pool);
         if (!bs) continue;
         write("leader", { t, sig: info.signature, kind: "open", position: ev.position, pool: ev.pool, binStep: bs, lower: ev.lower, width: ev.width, side: ev.side, amountX: ev.amountX.toString(), amountY: ev.amountY.toString(), blockTime: blockTime ?? null, late: info.late || undefined });
-        if (ev.side === "sol" || ev.side === "token") book.onOpen({ position: ev.position, pool: ev.pool, binStep: bs, range: { lower: ev.lower, upper: ev.lower + ev.width - 1, side: ev.side }, t });
+        if (ev.side === "sol" || ev.side === "token") book.onOpen({ position: ev.position, pool: ev.pool, binStep: bs, range: { lower: ev.lower, upper: ev.lower + ev.width - 1, side: ev.side }, t, slot: tx.slot });
         if (live && liveOpenAllowed(ev, blockTime, Math.floor(Date.now() / 1000), info.late)) void live.onLeaderOpen({ leaderPosition: ev.position, pool: ev.pool, t: blockTime! });
       }
     }

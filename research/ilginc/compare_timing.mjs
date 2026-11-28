@@ -39,4 +39,7 @@ const matchAll = timings.reduce((a, t) => a + n(`match|${t}`), 0);
 console.log(`\nbirebir (zamandan bağımsız):                 %${pct(matchAll)}  (${matchAll})`);
 console.log(`birebir VE önce — slotla DOĞRULANMIŞ:         %${pct(n("match|before"))}  (${n("match|before")})   aynı slot %${pct(n("match|same_slot"))}  sonra %${pct(n("match|after"))}`);
 console.log(`birebir VE muhtemelen önce — saat, YAKLAŞIK:  %${pct(n("match|likely_before"))}  (${n("match|likely_before")})   belirsiz %${pct(n("match|ambiguous"))}  muhtemelen sonra %${pct(n("match|likely_after"))}`);
+const lateLocal = scored.filter((c) => c.outcome === "match" && c.timing === "before" && c.decidedAfterLeaderBlock === true).length;
+const lateKnown = scored.filter((c) => c.outcome === "match" && c.timing === "before" && c.decidedAfterLeaderBlock !== undefined).length;
+console.log(`  ↳ slota göre önce olup kararı liderin bloğundan SONRA verilen (eski gözlem, yerel zaman): ${lateKnown ? `${lateLocal}/${lateKnown}` : "kayıtta yok (eski sürüm)"}`);
 console.log(`(iki oran toplanmaz: farklı yöntemler; slotlu kayıt payı %${scored.length ? ((withSlot.length / scored.length) * 100).toFixed(1) : 0})`);

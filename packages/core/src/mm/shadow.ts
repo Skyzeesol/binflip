@@ -14,8 +14,10 @@ export interface ShadowPosition {
   binStep: number;
   range: MmRange;
   /** Our decisions since the last sync with the leader (slot = slot of the observation we acted on). */
-  pending: Array<{ t: number; slot?: number; active: number; next: MmRange; distance: number }>;
+  pending: Array<{ t: number; slot?: number; active: number; next: MmRange; distance: number; from: MmRange }>;
   openedAt: number;
+  /** Slot of the leader's open (or of the first leader move we adopted): reads before it are not ours. */
+  openedSlot?: number;
   /** Block time of the last leader move we re-synced to. */
   syncedAt?: number;
   /** Slot of the last leader move we re-synced to. */
@@ -29,8 +31,9 @@ export interface ShadowPosition {
 }
 
 export type ExitOutcome =
-  | "exit_match" //  our idle rule fired within ±5 min of the leader's close
+  | "exit_match" //  our idle rule fired within ±5 min of the leader's close (both directions)
   | "exit_early" //  our idle rule fired more than 5 min before the leader closed
+  | "exit_late" //   our idle rule fired more than 5 min AFTER the leader closed (it was late)
   | "exit_other"; // the leader closed while our idle timer had not run out (another exit rule)
 
 export interface ExitComparison {
@@ -83,6 +86,12 @@ export interface ShadowComparison {
   timing?: ShadowTiming;
   /** Our decision wall time − leader block time, seconds. Coarse (1 s block times): prefer `timing`. */
   lagSec?: number;
+  /**
+   * Slot order and local time are separate facts: an observation can carry an earlier slot than
+   * the leader's tx yet reach us (and our decision) after the leader's block. true = we decided
+   * after the leader's block time even though the slot order may say "before".
+   */
+  decidedAfterLeaderBlock?: boolean;
   /** Our decisions the leader never made (since the previous sync). */
   extra: number;
 }
@@ -102,7 +111,10 @@ export interface ShadowStats {
   exits: number;
   exitMatch: number;
   exitEarly: number;
+  exitLate: number;
   exitOther: number;
+  /** "before" by slot, but decided after the leader's block time (stale observation). */
+  beforeButLate: number;
   /** outcome → timing → count, for comparisons where we had decided. */
   timing: Record<string, Record<ShadowTiming, number>>;
 }
@@ -111,7 +123,7 @@ export class ShadowBook {
   private readonly positions = new Map<string, ShadowPosition>();
   /** Recent active-bin reads per pool (bounded), to tell a rule gap from a speed gap. */
   private readonly reads = new Map<string, Array<{ t: number; slot?: number; active: number }>>();
-  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, desync: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [], exits: 0, exitMatch: 0, exitEarly: 0, exitOther: 0, timing: {} };
+  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, desync: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [], exits: 0, exitMatch: 0, exitEarly: 0, exitLate: 0, exitOther: 0, beforeButLate: 0, timing: {} };
 
   constructor(
     private readonly trigger?: number,
@@ -131,8 +143,8 @@ export class ShadowBook {
   }
 
   /** Leader opened a position. */
-  onOpen(p: { position: string; pool: string; binStep: number; range: MmRange; t: number }): void {
-    this.positions.set(p.position, { position: p.position, pool: p.pool, binStep: p.binStep, range: p.range, pending: [], openedAt: p.t, lastMoveAt: p.t, leaderMoveAt: p.t });
+  onOpen(p: { position: string; pool: string; binStep: number; range: MmRange; t: number; slot?: number }): void {
+    this.positions.set(p.position, { position: p.position, pool: p.pool, binStep: p.binStep, range: p.range, pending: [], openedAt: p.t, openedSlot: p.slot, lastMoveAt: p.t, leaderMoveAt: p.t });
   }
 
   /** Run the idle-exit rule on every open position; returns the ones that just expired. */
@@ -161,11 +173,12 @@ export class ShadowBook {
     if (p.predictedCloseAt === undefined) outcome = "exit_other";
     else {
       lagSec = p.predictedCloseAt - t;
-      outcome = lagSec >= -300 ? "exit_match" : "exit_early";
+      outcome = Math.abs(lagSec) <= 300 ? "exit_match" : lagSec < 0 ? "exit_early" : "exit_late";
     }
     this.stats.exits++;
     if (outcome === "exit_match") this.stats.exitMatch++;
     else if (outcome === "exit_early") this.stats.exitEarly++;
+    else if (outcome === "exit_late") this.stats.exitLate++;
     else this.stats.exitOther++;
     this.positions.delete(position);
     return { position: p, exit: { t, position, pool: p.pool, outcome, leaderIdleMin, lagSec } };
@@ -182,7 +195,7 @@ export class ShadowBook {
       if (p.pool !== pool) continue;
       const d = mmDecide(p.range, active, p.binStep, this.trigger);
       if (d.kind !== "rebalance") continue;
-      p.pending.push({ t, slot, active, next: d.next, distance: d.distance });
+      p.pending.push({ t, slot, active, next: d.next, distance: d.distance, from: p.range });
       p.range = d.next; // assume our move lands; the leader's next event re-syncs us
       p.lastMoveAt = Math.max(p.lastMoveAt, t);
       out.push({ position: p.position, next: d.next, distance: d.distance });
@@ -205,7 +218,7 @@ export class ShadowBook {
     const leader = { active: e.active, next: e.next, distance, old: { lower: e.old.lower, upper: e.old.upper } };
     const p = this.positions.get(e.position);
     if (!p) {
-      this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t, lastMoveAt: e.t, leaderMoveAt: e.t });
+      this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t, openedSlot: e.slot, syncedAt: e.t, syncedSlot: e.slot, lastMoveAt: e.t, leaderMoveAt: e.t });
       this.stats.adopted++;
       return { t: e.t, position: e.position, pool: e.pool, outcome: "adopted", leader, leaderSlot: e.slot, extra: 0 };
     }
@@ -215,10 +228,19 @@ export class ShadowBook {
     // Decisions taken AFTER the leader's tx (by slot) answer the leader's NEXT move, which we may
     // see only later (leader txs are polled). They were derived from our predicted range, so they
     // stay valid only if our answer to this move landed exactly where the leader did.
-    const carry =
-      ours && e.slot !== undefined && sameRange(ours.next, e.next)
-        ? p.pending.slice(1).filter((d) => d.slot !== undefined && d.slot > e.slot!)
-        : [];
+    // Each carried decision must chain from the leader's new range: the first one was derived from
+    // e.next, each next one from the previous kept one. A decision derived from a range we threw
+    // away (an "extra") breaks the chain, and it and everything after it are dropped.
+    const carry: typeof p.pending = [];
+    if (e.slot !== undefined) {
+      let from: MmRange = e.next;
+      for (const d of p.pending.slice(1)) {
+        if (d.slot === undefined || d.slot <= e.slot) continue;
+        if (!sameRange(d.from, from)) break;
+        carry.push(d);
+        from = d.next;
+      }
+    }
     const extra = Math.max(0, p.pending.length - 1 - carry.length);
     let outcome: ShadowOutcome;
     const ourRange = { lower: p.range.lower, upper: p.range.upper };
@@ -233,11 +255,14 @@ export class ShadowBook {
       // Did any read taken after our last sync and strictly before the leader's block
       // already show the leader's 2-bin trigger against the range we both held?
       // With slots: reads strictly between our last sync and the leader's slot. Without: by time.
+      // Only reads taken while THIS position existed and after our last sync count.
       const since = p.syncedAt ?? p.openedAt;
+      const fromSlot = p.syncedSlot ?? p.openedSlot;
       const inWindow = (r: { t: number; slot?: number }) =>
-        e.slot !== undefined && r.slot !== undefined
-          ? (p.syncedSlot === undefined || r.slot > p.syncedSlot) && r.slot < e.slot
-          : r.t >= since && r.t < e.t;
+        r.t >= p.openedAt &&
+        (e.slot !== undefined && r.slot !== undefined
+          ? (fromSlot === undefined || r.slot > fromSlot) && r.slot < e.slot
+          : r.t >= since && r.t < e.t);
       const sawTrigger = (this.reads.get(e.pool) ?? []).some((r) => inWindow(r) && Math.abs(mmDistance(e.old, r.active)) >= MM_TRIGGER_BINS);
       outcome = sawTrigger ? "missed" : "not_seen";
     }
@@ -256,6 +281,8 @@ export class ShadowBook {
     const lagSec = ours ? ours.t - e.t : undefined;
     if (lagSec !== undefined) this.stats.lagSec.push(lagSec);
     const timing = ours ? mmTiming(ours.slot, e.slot) : undefined;
+    const decidedAfterLeaderBlock = ours ? ours.t > e.t : undefined;
+    if (timing === "before" && decidedAfterLeaderBlock) this.stats.beforeButLate++;
     if (timing) {
       const row = (this.stats.timing[outcome] ??= { before: 0, same_slot: 0, after: 0, unknown: 0 });
       row[timing]++;
@@ -269,7 +296,7 @@ export class ShadowBook {
     p.leaderMoveAt = e.t;
     p.lastMoveAt = Math.max(p.lastMoveAt, e.t);
     p.predictedCloseAt = undefined; // a move resets the idle timer
-    return { t: e.t, position: e.position, pool: e.pool, outcome, leader, ourRange, leaderSlot: e.slot, ours: ours && { t: ours.t, slot: ours.slot, active: ours.active, next: ours.next }, timing, lagSec, extra };
+    return { t: e.t, position: e.position, pool: e.pool, outcome, leader, ourRange, leaderSlot: e.slot, ours: ours && { t: ours.t, slot: ours.slot, active: ours.active, next: ours.next }, timing, lagSec, decidedAfterLeaderBlock, extra };
   }
 
   /** Compact summary for logs. */
@@ -295,9 +322,12 @@ export class ShadowBook {
       exits: s.exits,
       exitMatchPct: s.exits ? Math.round((s.exitMatch / s.exits) * 1000) / 10 : null,
       exitEarlyPct: s.exits ? Math.round((s.exitEarly / s.exits) * 1000) / 10 : null,
+      exitLatePct: s.exits ? Math.round((s.exitLate / s.exits) * 1000) / 10 : null,
       exitOtherPct: s.exits ? Math.round((s.exitOther / s.exits) * 1000) / 10 : null,
       // Exact range AND decided in an earlier slot than the leader: the strict "on time" rate.
       matchBeforePct: pct(s.timing.match?.before ?? 0),
+      /** of the comparisons: "before" by slot but decided after the leader's block (stale observation) */
+      beforeButLatePct: pct(s.beforeButLate),
       matchSameSlotPct: pct(s.timing.match?.same_slot ?? 0),
       matchAfterPct: pct(s.timing.match?.after ?? 0),
       matchUnknownTimingPct: pct(s.timing.match?.unknown ?? 0),
