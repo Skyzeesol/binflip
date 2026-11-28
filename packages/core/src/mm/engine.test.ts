@@ -119,8 +119,43 @@ describe("ShadowBook", () => {
   it("our moves the leader never made count as extra on close", () => {
     const b = open();
     b.onTick("L", -570, 12);
-    b.onClose("P");
+    b.onClose("P", 20);
     expect(b.stats.extra).toBe(1);
     expect(b.open).toHaveLength(0);
+  });
+});
+
+describe("idle exit (55 min without a rebalance)", () => {
+  const MIN = 60;
+  const book = () => {
+    const b = new ShadowBook();
+    b.onOpen({ position: "P", pool: "L", binStep: 100, range: { lower: -2, upper: -2, side: "sol" }, t: 0 });
+    return b;
+  };
+  it("fires at 55 min and matches a leader close within 5 min", () => {
+    const b = book();
+    expect(b.checkExits(54 * MIN)).toHaveLength(0);
+    expect(b.checkExits(55 * MIN)).toHaveLength(1);
+    expect(b.checkExits(56 * MIN)).toHaveLength(0); // once
+    const r = b.onClose("P", 57 * MIN)!;
+    expect(r.exit.outcome).toBe("exit_match");
+    expect(r.exit.lagSec).toBe(-2 * MIN);
+    expect(r.exit.leaderIdleMin).toBe(57);
+  });
+  it("a leader move resets the timer", () => {
+    const b = book();
+    b.onLeaderRebalance({ position: "P", pool: "L", binStep: 100, t: 30 * MIN, active: 1, old: { lower: -2, upper: -2 }, next: { lower: 0, upper: 0, side: "sol" } });
+    expect(b.checkExits(60 * MIN)).toHaveLength(0);
+    expect(b.checkExits(85 * MIN)).toHaveLength(1);
+  });
+  it("leader holding much longer than 55 min → exit_early", () => {
+    const b = book();
+    b.checkExits(55 * MIN);
+    expect(b.onClose("P", 90 * MIN)!.exit.outcome).toBe("exit_early");
+  });
+  it("leader closing an active position → exit_other", () => {
+    const b = book();
+    expect(b.onClose("P", 10 * MIN)!.exit.outcome).toBe("exit_other");
+    expect(b.summary().exitOtherPct).toBe(100);
   });
 });

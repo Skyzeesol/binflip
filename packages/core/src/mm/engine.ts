@@ -13,6 +13,17 @@
 
 export const MM_TRIGGER_BINS = 2;
 
+/**
+ * Idle exit: close a position after ~55 min without a rebalance. From 1,602 closed BviQ
+ * positions: closes cluster at 55–65 min since the last move, almost none at 5–50 min, and
+ * never-moved positions close at 54–61 min (research/ilginc/FINDINGS.md, 28 Nov).
+ */
+export const MM_IDLE_EXIT_SEC = 55 * 60;
+
+export function mmIdleExpired(lastMoveAt: number, now: number, idleSec = MM_IDLE_EXIT_SEC): boolean {
+  return now - lastMoveAt >= idleSec;
+}
+
 export type MmSide = "sol" | "token";
 
 export interface MmRange {

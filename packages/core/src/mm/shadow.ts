@@ -1,4 +1,4 @@
-import { MM_TRIGGER_BINS, mmDecide, mmDistance, sameRange, type MmRange } from "./engine.js";
+import { MM_TRIGGER_BINS, mmDecide, mmDistance, mmIdleExpired, sameRange, type MmRange } from "./engine.js";
 
 /**
  * Shadow book: mirrors a leader's (BviQ's) open positions, runs our engine on the
@@ -18,6 +18,28 @@ export interface ShadowPosition {
   openedAt: number;
   /** Block time of the last leader move we re-synced to. */
   syncedAt?: number;
+  /** Last rebalance by either side (our idle timer). */
+  lastMoveAt: number;
+  /** Last rebalance by the leader (to classify the leader's own close). */
+  leaderMoveAt: number;
+  /** When our idle rule said "close" (once per position). */
+  predictedCloseAt?: number;
+}
+
+export type ExitOutcome =
+  | "exit_match" //  our idle rule fired within ±5 min of the leader's close
+  | "exit_early" //  our idle rule fired more than 5 min before the leader closed
+  | "exit_other"; // the leader closed while our idle timer had not run out (another exit rule)
+
+export interface ExitComparison {
+  t: number;
+  position: string;
+  pool: string;
+  outcome: ExitOutcome;
+  /** Leader's close − its last rebalance (or open), minutes. */
+  leaderIdleMin: number;
+  /** Our "close" − the leader's close, seconds (negative: we were earlier). */
+  lagSec?: number;
 }
 
 export type ShadowOutcome =
@@ -52,15 +74,22 @@ export interface ShadowStats {
   extra: number;
   closedWithPending: number;
   lagSec: number[];
+  exits: number;
+  exitMatch: number;
+  exitEarly: number;
+  exitOther: number;
 }
 
 export class ShadowBook {
   private readonly positions = new Map<string, ShadowPosition>();
   /** Recent active-bin reads per pool (bounded), to tell a rule gap from a speed gap. */
   private readonly reads = new Map<string, Array<{ t: number; active: number }>>();
-  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [] };
+  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [], exits: 0, exitMatch: 0, exitEarly: 0, exitOther: 0 };
 
-  constructor(private readonly trigger?: number) {}
+  constructor(
+    private readonly trigger?: number,
+    private readonly idleSec?: number,
+  ) {}
 
   get open(): ShadowPosition[] {
     return [...this.positions.values()];
@@ -76,19 +105,43 @@ export class ShadowBook {
 
   /** Leader opened a position. */
   onOpen(p: { position: string; pool: string; binStep: number; range: MmRange; t: number }): void {
-    this.positions.set(p.position, { position: p.position, pool: p.pool, binStep: p.binStep, range: p.range, pending: [], openedAt: p.t });
+    this.positions.set(p.position, { position: p.position, pool: p.pool, binStep: p.binStep, range: p.range, pending: [], openedAt: p.t, lastMoveAt: p.t, leaderMoveAt: p.t });
   }
 
-  /** Leader closed a position. Our undecided-by-leader moves count as extra. */
-  onClose(position: string): ShadowPosition | undefined {
+  /** Run the idle-exit rule on every open position; returns the ones that just expired. */
+  checkExits(now: number): ShadowPosition[] {
+    const out: ShadowPosition[] = [];
+    for (const p of this.positions.values()) {
+      if (p.predictedCloseAt === undefined && mmIdleExpired(p.lastMoveAt, now, this.idleSec)) {
+        p.predictedCloseAt = now;
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  /** Leader closed a position: score our exit rule; our undecided-by-leader moves count as extra. */
+  onClose(position: string, t: number): { position: ShadowPosition; exit: ExitComparison } | undefined {
     const p = this.positions.get(position);
     if (!p) return undefined;
     if (p.pending.length) {
       this.stats.closedWithPending++;
       this.stats.extra += p.pending.length;
     }
+    const leaderIdleMin = Math.round(((t - p.leaderMoveAt) / 60) * 10) / 10;
+    let outcome: ExitOutcome;
+    let lagSec: number | undefined;
+    if (p.predictedCloseAt === undefined) outcome = "exit_other";
+    else {
+      lagSec = p.predictedCloseAt - t;
+      outcome = lagSec >= -300 ? "exit_match" : "exit_early";
+    }
+    this.stats.exits++;
+    if (outcome === "exit_match") this.stats.exitMatch++;
+    else if (outcome === "exit_early") this.stats.exitEarly++;
+    else this.stats.exitOther++;
     this.positions.delete(position);
-    return p;
+    return { position: p, exit: { t, position, pool: p.pool, outcome, leaderIdleMin, lagSec } };
   }
 
   /** A fresh active bin for a pool: run the engine on every shadow position there. */
@@ -104,6 +157,7 @@ export class ShadowBook {
       if (d.kind !== "rebalance") continue;
       p.pending.push({ t, active, next: d.next, distance: d.distance });
       p.range = d.next; // assume our move lands; the leader's next event re-syncs us
+      p.lastMoveAt = Math.max(p.lastMoveAt, t);
       out.push({ position: p.position, next: d.next, distance: d.distance });
     }
     return out;
@@ -123,7 +177,7 @@ export class ShadowBook {
     const leader = { active: e.active, next: e.next, distance };
     const p = this.positions.get(e.position);
     if (!p) {
-      this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t });
+      this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t, lastMoveAt: e.t, leaderMoveAt: e.t });
       this.stats.adopted++;
       return { t: e.t, position: e.position, pool: e.pool, outcome: "adopted", leader, extra: 0 };
     }
@@ -159,6 +213,9 @@ export class ShadowBook {
     p.range = e.next;
     p.pending = [];
     p.syncedAt = e.t;
+    p.leaderMoveAt = e.t;
+    p.lastMoveAt = Math.max(p.lastMoveAt, e.t);
+    p.predictedCloseAt = undefined; // a move resets the idle timer
     return { t: e.t, position: e.position, pool: e.pool, outcome, leader, ours: ours && { t: ours.t, active: ours.active, next: ours.next }, lagSec, extra };
   }
 
@@ -181,6 +238,10 @@ export class ShadowBook {
       lagP10: q(0.1),
       lagP50: q(0.5),
       lagP90: q(0.9),
+      exits: s.exits,
+      exitMatchPct: s.exits ? Math.round((s.exitMatch / s.exits) * 1000) / 10 : null,
+      exitEarlyPct: s.exits ? Math.round((s.exitEarly / s.exits) * 1000) / 10 : null,
+      exitOtherPct: s.exits ? Math.round((s.exitOther / s.exits) * 1000) / 10 : null,
     };
   }
 }

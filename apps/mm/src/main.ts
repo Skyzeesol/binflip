@@ -96,7 +96,11 @@ await runService("mm", async ({ config, log }) => {
         write("compare", { sig: tx.signature, ...cmp });
       } else if (e.name === "PositionClose") {
         const position = str(e.data.position);
-        if (book.onClose(position)) write("leader", { t, sig: tx.signature, kind: "close", position });
+        const closed = book.onClose(position, t);
+        if (closed) {
+          write("leader", { t, sig: tx.signature, kind: "close", position });
+          write("exits", { sig: tx.signature, ...closed.exit });
+        }
       }
     }
 
@@ -195,6 +199,7 @@ await runService("mm", async ({ config, log }) => {
     for (const [pool, s] of states) {
       for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "poll", ...d });
     }
+    for (const p of book.checkExits(now)) write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });
     lastTickOk = Date.now();
   });
   const statsTimer = setInterval(() => {
