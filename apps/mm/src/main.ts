@@ -56,7 +56,10 @@ await runService("mm", async ({ config, log }) => {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const lock = new WriterLock(OUT_DIR);
   lock.acquire(); // one writer per data directory, before any state is read
-  let stale: string | null = null; // set by the health loop: no NEW opens while data is stale
+  // No NEW opens while data is stale, and none before the first successful leader read: the health
+  // check gives a 60 s start-up grace, the opens gate does not.
+  let stale: string | null = "starting: no successful leader read yet";
+  let leaderEverOk = false;
   if (config.mode === "live" && !wantLive) throw new Error("live mode without MM_LIVE=1: refusing (set MM_LIVE=1 to trade, or DRY_RUN=1 for shadow only)");
   if (wantLive && config.mode !== "live") throw new Error("MM_LIVE=1 needs DRY_RUN=0 and LIVE_CONFIRMED=1");
   const rpc = new SolanaRpc(config.SOLANA_RPC_URL, { retries: 6, timeoutMs: 20_000 });
@@ -182,6 +185,10 @@ await runService("mm", async ({ config, log }) => {
   const pollLeader = async () => {
     await feed.poll();
     lastLeaderOk = Date.now();
+    if (!leaderEverOk) {
+      leaderEverOk = true;
+      log.info("first successful leader read: new opens allowed (if pool data is fresh)");
+    }
   };
   await live?.reconcileLeaderPositions("startup");
 
@@ -230,6 +237,7 @@ await runService("mm", async ({ config, log }) => {
   /** Why our data is stale (null = fresh): leader feed or pool reads behind. */
   const staleness = (): string | null => {
     const now = Date.now();
+    if (!leaderEverOk) return "starting: no successful leader read yet";
     if (now - lastLeaderOk > cfg.staleMs) return `leader feed ${Math.round((now - lastLeaderOk) / 1000)} s behind`;
     if (now - lastTickOk > cfg.staleMs) return `pool reads ${Math.round((now - lastTickOk) / 1000)} s behind`;
     const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p, now) > cfg.staleMs);

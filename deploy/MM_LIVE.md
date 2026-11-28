@@ -68,8 +68,10 @@ Phantom'dan, 4. adımda yazan adrese **az** gönder. Örneğin 0,5 SOL: 3 pozisy
 
 ## 6. Canlıya al
 
+İlk pilot **tek pozisyonla** yapılır, hareketsizlik çıkışı kapalı kalır (`MM_IDLE_EXIT_MIN=0`, varsayılan):
+
 ```bash
-printf 'DRY_RUN=0\nLIVE_CONFIRMED=1\nMM_LIVE=1\nMM_LOT_SOL=0.1\nMM_MAX_POSITIONS=3\n' >> .env.mm
+printf 'DRY_RUN=0\nLIVE_CONFIRMED=1\nMM_LIVE=1\nMM_LOT_SOL=0.1\nMM_MAX_POSITIONS=1\nMM_IDLE_EXIT_MIN=0\n' >> .env.mm
 ```
 
 ```bash
@@ -81,6 +83,16 @@ Başlangıç kaydında `LIVE: mm will send transactions` ve `"mode":"LIVE"` sat�
 ```bash
 docker compose -f docker-compose.mm.yml logs --tail 30 mm
 ```
+
+`healthy` görünmesi yetmez (ilk 60 sn tolerans var). Servis, lider akışından ilk başarılı yanıt gelene kadar zaten yeni pozisyon açmaz; bu satırı görmeden pilota başlamış sayma:
+
+```bash
+docker compose -f docker-compose.mm.yml logs mm | grep "first successful leader read"
+```
+
+## Pilotun kabul ölçütü
+
+Tek pozisyonda, lideri takip ederken: **taşıma** (`rebalance` / `rebalance_confirmed`), **liderin kapanışının takibi** (`close`, gerekirse `leader_position_gone`) ve **token satışı** (`sell` → `sell_done`) zincir kayıtlarıyla uzlaşmalı: her kayıttaki imzalar Solscan'de, satılan miktar kapanışta çıkan token kadar.
 
 ## İzleme
 
