@@ -7,17 +7,16 @@
 //     overlapping the window) and whose tokens were fully sold count as "comparable".
 // Usage: node reconcile.mjs   (reads data/rows.jsonl, data/pools.json, data/pnl.jsonl)
 import fs from "node:fs";
+import { attribute } from "./attrib.mjs";
 const DATA = process.env.DATA_DIR ?? "data";
 const rows = fs.readFileSync(`${DATA}/rows.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l)).sort((a, b) => a.slot - b.slot);
 const pools = JSON.parse(fs.readFileSync(`${DATA}/pools.json`, "utf8"));
 const est = new Map(fs.readFileSync(`${DATA}/pnl.jsonl`, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).map((c) => [c.position, c]));
 const SOL = (l) => l / 1e9;
 const isSale = (r) => /swap/.test(r.kind) && !r.err;
-// Tokens left after the window: below 0.5% of what was received counts as dust (ignored, value ~0).
-const unsoldBeyondDust = (left, received) => left > 0n && left * 200n > received;
-// The window's sales sold MORE of the token than these positions received: the sales also cleared
-// tokens from other positions, so their proceeds cannot be attributed here.
-const mixedSales = (soldTok, received) => soldTok * 200n > received * 201n;
+const sales = rows.filter(isSale);
+// Sale attribution (buys and sells not netted; dust < 0.5%; mixed sales): see attrib.mjs.
+const swapsIn = (mint, from, to) => sales.filter((r) => r.t >= from && r.t <= to && r.tokDelta?.[mint]).map((r) => ({ ...r, tok: BigInt(r.tokDelta[mint]) }));
 
 // 1) wallet level ─────────────────────────────────────────────────────────────
 const total = rows.reduce((s, r) => s + (r.solDelta ?? 0), 0);
@@ -45,8 +44,7 @@ for (const [position, seq] of byPos) {
   if (!open || !close) continue;
   windows.push({ position, pool: open.pool, mint: pools[open.pool]?.x, from: open.t, to: close.t, seq });
 }
-const sales = rows.filter(isSale);
-const res = { comparable: [], overlapping: 0, unsold: 0, mixed: 0, noEstimate: 0, noMint: 0 };
+const res = { comparable: [], overlapping: 0, unsold: 0, mixed: 0, externalBuy: 0, noEstimate: 0, noMint: 0 };
 for (const w of windows) {
   if (!w.mint) { res.noMint++; continue; }
   const e = est.get(w.position);
@@ -57,18 +55,20 @@ for (const w of windows) {
   const own = w.seq.reduce((s, r) => s + (r.solDelta ?? 0), 0); // includes failed txs' fees
   let tok = 0n, recv = 0n;
   for (const r of w.seq) if (!r.err) { const d = BigInt(r.tokDelta?.[w.mint] ?? 0); tok += d; if (d > 0n) recv += d; }
-  let sold = 0, soldTok = 0n;
-  const saleSigs = [];
-  for (const r of sales) if (r.t >= w.from && r.t <= end && r.tokDelta?.[w.mint]) { sold += r.solDelta ?? 0; tok += BigInt(r.tokDelta[w.mint]); soldTok -= BigInt(r.tokDelta[w.mint]); saleSigs.push(`${r.kind}:${r.sig.slice(0, 8)}:${SOL(r.solDelta ?? 0).toFixed(3)}`); }
-  if (unsoldBeyondDust(tok, recv)) { res.unsold++; continue; } // tokens still in the wallet: realized result incomplete
-  if (mixedSales(soldTok, recv)) { res.mixed++; continue; }
+  const sw = swapsIn(w.mint, w.from, end);
+  const a = attribute(recv, tok, sw);
+  if (a.status === "unsold") { res.unsold++; continue; } // tokens still in the wallet: realized result incomplete
+  if (a.status === "mixed") { res.mixed++; continue; }
+  if (a.status === "external_buy") { res.externalBuy++; continue; }
+  const sold = a.soldLamports, soldTok = a.soldTok;
+  const saleSigs = sw.filter((r) => r.tok < 0n).map((r) => `${r.kind}:${r.sig.slice(0, 8)}:${SOL(r.solDelta ?? 0).toFixed(3)}`);
   res.comparable.push({ position: w.position, name: e.name, lotSol: e.lotSol, estSol: (e.pnlPct * e.lotSol) / 100, realSol: SOL(own + sold), ownSol: SOL(own), soldSol: SOL(sold), recvTok: recv.toString(), soldTok: soldTok.toString(), saleSigs, txs: w.seq.length, feeSol: (e.feePct * e.lotSol) / 100, rebalances: e.rebalances });
 }
 const c = res.comparable;
 const sum = (k) => c.reduce((s, x) => s + x[k], 0);
 const q = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? [0.1, 0.25, 0.5, 0.75, 0.9].map((p) => s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(4)).join(" | ") : "-"; };
 console.log(`\n## 2) Pozisyon seviyesi (dönem içinde açılıp kapanan ${windows.length} pozisyon)`);
-console.log(`karşılaştırılabilir: ${c.length}   aynı token'da üst üste binen (satış ayrıştırılamaz): ${res.overlapping}   satılmamış token kalan: ${res.unsold}   karışık satış (başka pozisyonların token'ı da satılmış): ${res.mixed}   tahmini yok (lotsuz/fiyatsız): ${res.noEstimate}`);
+console.log(`karşılaştırılabilir: ${c.length}   aynı token'da üst üste binen (satış ayrıştırılamaz): ${res.overlapping}   satılmamış token kalan: ${res.unsold}   karışık satış (başka pozisyonların token'ı da satılmış): ${res.mixed}   aynı token'da ayrıca alım (netlenmez): ${res.externalBuy}   tahmini yok (lotsuz/fiyatsız): ${res.noEstimate}`);
 console.log(`Σ tahmin (pnl.mjs)        ${sum("estSol").toFixed(2)} SOL`);
 console.log(`Σ gerçekleşen (cüzdan)    ${sum("realSol").toFixed(2)} SOL`);
 console.log(`fark (gerçekleşen − tahmin) pozisyon başına SOL, q10 | q25 | medyan | q75 | q90:  ${q(c.map((x) => x.realSol - x.estSol))}`);
@@ -98,19 +98,21 @@ for (const ws of byMint.values()) {
     else { cur = { mint: w.mint, from: w.from, to: w.to, items: [w] }; chains.push(cur); }
   }
 }
-const ch = { comparable: [], unsold: 0, mixed: 0, noEstimate: 0 };
+const ch = { comparable: [], unsold: 0, mixed: 0, externalBuy: 0, noEstimate: 0 };
 for (const k of chains) {
   if (k.items.some((w) => !est.has(w.position))) { ch.noEstimate++; continue; }
   const end = k.to + 3600;
-  let realL = 0, tok = 0n, recv = 0n, soldTok = 0n;
+  let realL = 0, tok = 0n, recv = 0n;
   for (const w of k.items) for (const r of w.seq) { realL += r.solDelta ?? 0; if (!r.err) { const d = BigInt(r.tokDelta?.[k.mint] ?? 0); tok += d; if (d > 0n) recv += d; } }
-  for (const r of sales) if (r.t >= k.from && r.t <= end && r.tokDelta?.[k.mint]) { realL += r.solDelta ?? 0; tok += BigInt(r.tokDelta[k.mint]); soldTok -= BigInt(r.tokDelta[k.mint]); }
-  if (unsoldBeyondDust(tok, recv)) { ch.unsold++; continue; }
-  if (mixedSales(soldTok, recv)) { ch.mixed++; continue; }
+  const a = attribute(recv, tok, swapsIn(k.mint, k.from, end));
+  if (a.status === "unsold") { ch.unsold++; continue; }
+  if (a.status === "mixed") { ch.mixed++; continue; }
+  if (a.status === "external_buy") { ch.externalBuy++; continue; }
+  realL += a.soldLamports;
   const estSol = k.items.reduce((s, w) => { const e = est.get(w.position); return s + (e.pnlPct * e.lotSol) / 100; }, 0);
   ch.comparable.push({ positions: k.items.length, estSol, realSol: SOL(realL) });
 }
 const cc = ch.comparable, cpos = cc.reduce((s, x) => s + x.positions, 0);
 const csum = (k) => cc.reduce((s, x) => s + x[k], 0);
-console.log(`zincir: ${chains.length}   karşılaştırılabilir: ${cc.length} (${cpos} pozisyon = %${((cpos / windows.length) * 100).toFixed(1)})   satılmamış token kalan: ${ch.unsold}   karışık satış: ${ch.mixed}   tahmini eksik: ${ch.noEstimate}`);
+console.log(`zincir: ${chains.length}   karşılaştırılabilir: ${cc.length} (${cpos} pozisyon = %${((cpos / windows.length) * 100).toFixed(1)})   satılmamış token kalan: ${ch.unsold}   karışık satış: ${ch.mixed}   ayrıca alım: ${ch.externalBuy}   tahmini eksik: ${ch.noEstimate}`);
 console.log(`Σ tahmin ${csum("estSol").toFixed(2)} SOL · Σ gerçekleşen ${csum("realSol").toFixed(2)} SOL · fark ${(csum("realSol") - csum("estSol")).toFixed(2)} SOL (pozisyon başına ${cpos ? ((csum("realSol") - csum("estSol")) / cpos).toFixed(4) : "-"} SOL)`);

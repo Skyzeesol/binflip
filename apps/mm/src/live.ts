@@ -77,7 +77,7 @@ export class LiveMm {
   }
 
   get openCount(): number {
-    return this.ours.size;
+    return this.ours.size + this.pending.size;
   }
 
   private save(): void {
@@ -96,35 +96,54 @@ export class LiveMm {
   }
 
   // ── open ──────────────────────────────────────────────────────────────────────
+  /**
+   * Opens in flight, keyed by leader position. Reserved SYNCHRONOUSLY (before the first await),
+   * so concurrent leader opens cannot exceed maxPositions or the SOL budget, and a duplicate open
+   * signal for the same leader position is dropped. `closeRequested` records a leader close that
+   * arrives while our open is still in flight: before sending we cancel, after it lands we close.
+   */
+  private readonly pending = new Map<string, { closeRequested: boolean; reason?: string; sent: boolean }>();
+
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
   async onLeaderOpen(e: { leaderPosition: string; pool: string; t: number }): Promise<void> {
-    if (this.ours.has(e.leaderPosition)) return;
+    if (this.ours.has(e.leaderPosition) || this.pending.has(e.leaderPosition)) return; // duplicate
     const skip = (reason: string, extra: Record<string, unknown> = {}) => this.record("live", { ...e, kind: "open_skipped", reason, ...extra });
     if (fs.existsSync(this.opts.killFile) || fs.existsSync(this.opts.closeAllFile)) return skip("kill_file");
-    if (this.ours.size >= this.opts.maxPositions) return skip("max_positions");
-    const info = await this.builder.poolInfo(e.pool);
-    if (!info.solIsY) return skip("sol_not_y");
-    const w = mmWidth(info.binStep);
-    if (w > 70) return skip("too_wide", { width: w });
-    const bal = BigInt(await this.builder.connection.getBalance(this.owner, "confirmed"));
-    if (bal < this.opts.lotLamports + this.opts.reserveLamports) return skip("low_balance", { balance: bal.toString() });
-
-    const range = mmPlace("sol", info.activeBinId, info.binStep);
-    const key = `open:${e.leaderPosition}`;
-    this.busy.add(key);
+    if (this.ours.size + this.pending.size >= this.opts.maxPositions) return skip("max_positions");
+    const slot = { closeRequested: false, sent: false } as { closeRequested: boolean; reason?: string; sent: boolean };
+    this.pending.set(e.leaderPosition, slot); // reservation: from here on every exit path must release it
     try {
+      const info = await this.builder.poolInfo(e.pool);
+      if (!info.solIsY) return skip("sol_not_y");
+      const w = mmWidth(info.binStep);
+      if (w > 70) return skip("too_wide", { width: w });
+      // Budget: our lot plus the lots of the other opens still in flight (not yet in the balance).
+      const others = BigInt(this.pending.size - 1);
+      const bal = BigInt(await this.builder.connection.getBalance(this.owner, "confirmed"));
+      if (bal < this.opts.lotLamports * (others + 1n) + this.opts.reserveLamports) return skip("low_balance", { balance: bal.toString(), inFlight: Number(others) });
+      if (slot.closeRequested) return skip("leader_closed_before_open");
+
+      const range = mmPlace("sol", info.activeBinId, info.binStep);
       const built = await this.builder.open({ pool: e.pool, lowerBinId: range.lower, upperBinId: range.upper, amountSol: this.opts.lotLamports, strategy: "spot", slippagePct: 1 });
+      if (slot.closeRequested) return skip("leader_closed_before_open"); // last point before anything is signed
+      slot.sent = true;
       const sigs = await this.sendBuilt(built);
       const now = Math.floor(Date.now() / 1000);
       const p: OurPosition = { leaderPosition: e.leaderPosition, pool: e.pool, position: built.position!, mintX: info.mintX, binStep: info.binStep, range, openedAt: now, lastMoveAt: now };
       this.ours.set(e.leaderPosition, p);
+      this.pending.delete(e.leaderPosition);
       this.save();
       this.record("live", { t: now, kind: "open", ...p, lamports: this.opts.lotLamports.toString(), sigs });
       this.log.info({ pool: e.pool, position: p.position, range }, "live: opened");
+      if (slot.closeRequested) await this.close(p, slot.reason ?? "leader_closed"); // leader closed while we were landing
     } catch (err) {
-      this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_failed", error: String((err as Error).message).slice(0, 300) });
-      this.log.warn({ err: (err as Error).message, pool: e.pool }, "live: open failed");
+      this.record("live", { ...e, tFail: Math.floor(Date.now() / 1000), kind: "open_failed", sent: slot.sent, error: String((err as Error).message).slice(0, 300) });
+      this.log.warn({ err: (err as Error).message, pool: e.pool, sent: slot.sent }, "live: open failed");
     } finally {
-      this.busy.delete(key);
+      this.pending.delete(e.leaderPosition);
     }
   }
 
@@ -166,7 +185,14 @@ export class LiveMm {
   // ── close ─────────────────────────────────────────────────────────────────────
   async onLeaderClose(leaderPosition: string, reason = "leader_closed"): Promise<void> {
     const p = this.ours.get(leaderPosition);
-    if (p) await this.close(p, reason);
+    if (p) return this.close(p, reason);
+    const inFlight = this.pending.get(leaderPosition);
+    if (inFlight) {
+      // Our open has not landed yet: record the intent; onLeaderOpen cancels or closes.
+      inFlight.closeRequested = true;
+      inFlight.reason = reason;
+      this.record("live", { t: Math.floor(Date.now() / 1000), kind: "close_deferred", reason, leaderPosition, sent: inFlight.sent });
+    }
   }
 
   /** Idle exit as a backstop (e.g. if we missed the leader's close). */

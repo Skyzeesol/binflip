@@ -34,5 +34,9 @@ for (const o of outcomes) {
   if (!tot) continue;
   console.log(o.padEnd(16) + cells.map((n) => (n ? `${n} (%${pct(n)})` : "·").padStart(14)).join("") + `     ${tot} (%${pct(tot)})`);
 }
-const strict = (m.get("match|before") ?? 0) + (m.get("match|likely_before") ?? 0);
-console.log(`\nbirebir VE liderden önce: %${pct(strict)}   (birebir, zamandan bağımsız: %${pct(outcomes.slice(0, 1).reduce((s, o) => s + timings.reduce((a, t) => a + (m.get(`${o}|${t}`) ?? 0), 0), 0))})`);
+const n = (k) => m.get(k) ?? 0;
+const matchAll = timings.reduce((a, t) => a + n(`match|${t}`), 0);
+console.log(`\nbirebir (zamandan bağımsız):                 %${pct(matchAll)}  (${matchAll})`);
+console.log(`birebir VE önce — slotla DOĞRULANMIŞ:         %${pct(n("match|before"))}  (${n("match|before")})   aynı slot %${pct(n("match|same_slot"))}  sonra %${pct(n("match|after"))}`);
+console.log(`birebir VE muhtemelen önce — saat, YAKLAŞIK:  %${pct(n("match|likely_before"))}  (${n("match|likely_before")})   belirsiz %${pct(n("match|ambiguous"))}  muhtemelen sonra %${pct(n("match|likely_after"))}`);
+console.log(`(iki oran toplanmaz: farklı yöntemler; slotlu kayıt payı %${scored.length ? ((withSlot.length / scored.length) * 100).toFixed(1) : 0})`);
