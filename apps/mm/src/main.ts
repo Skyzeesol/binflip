@@ -19,6 +19,7 @@ import {
 } from "@binflip/core";
 import { AccountWatcher } from "./accountWatcher.js";
 import { LiveMm } from "./live.js";
+import { serviceTick } from "./tick.js";
 import { PublicKey } from "@solana/web3.js";
 
 /**
@@ -225,17 +226,7 @@ await runService("mm", async ({ config, log }) => {
 
   loop("leader", TX_POLL_MS, pollLeader);
   loop("tick", TICK_MS, async () => {
-    const pools = [...new Set([...book.pools(), ...(live?.pools() ?? [])])];
-    watcher?.setAddresses(pools);
-    if (!pools.length) return;
-    const states = await readPools(pools);
-    const now = Math.floor(Date.now() / 1000);
-    for (const [pool, s] of states) {
-      for (const d of book.onTick(pool, s.activeId, now, s.slot)) write("ours", { t: now, slot: s.slot, pool, active: s.activeId, via: "poll", ...d });
-      live?.onTick(pool, s.activeId);
-    }
-    for (const p of book.checkExits(now)) write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });
-    await live?.checkIdle(now);
+    await serviceTick({ book, live, watcher, readPools, write });
     lastTickOk = Date.now();
   });
   const statsTimer = setInterval(() => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import { LiveMm } from "./live.js";
+import { serviceTick } from "./tick.js";
 
 // Fakes: no RPC, no signing, no sending. Each async builder call can be held on a gate so the
 // tests control interleaving exactly.
@@ -15,13 +16,16 @@ function gate() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 type SendMode = "ok" | "land_then_throw" | "land_then_hang" | "fail";
-function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; chain?: Set<string> } = {}) {
+const TOKEN = "TokenMint1111111111111111111111111111111111";
+type Wallet = { tokens: bigint; balanceReadFailures: number };
+function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; chain?: Set<string>; mintX?: string; wallet?: Wallet } = {}) {
+  const wallet = o.wallet ?? { tokens: 0n, balanceReadFailures: 0 }; // shared across "restarts" like the chain
   const dir = o.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), "mmlive-"));
   const chain = o.chain ?? new Set<string>(); // position accounts that exist "on chain"
   const sigStatus = new Map<string, "confirmed" | "failed" | "unknown">();
   let sendMode: SendMode = "ok";
   let removeMode: "ok" | "hang" | "land_then_throw" = "ok";
-  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0 };
+  const calls = { poolInfo: 0, open: 0, send: 0, remove: 0, broadcast: 0, sell: 0 };
   const gates = { poolInfo: [] as ReturnType<typeof gate>[], send: [] as ReturnType<typeof gate>[], sim: [] as ReturnType<typeof gate>[] };
   let hold = { poolInfo: false, send: false, sim: false };
   const builder = {
@@ -32,7 +36,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     async poolInfo() {
       calls.poolInfo++;
       if (hold.poolInfo) { const g = gate(); gates.poolInfo.push(g); await g.p; }
-      return { solIsY: true, binStep: 100, activeBinId: 0, mintX: "So11111111111111111111111111111111111111112" };
+      return { solIsY: true, binStep: 100, activeBinId: 0, mintX: o.mintX ?? "So11111111111111111111111111111111111111112" };
     },
     async open() { calls.open++; return { txs: [{}], extraSigners: new Map(), position: posAddr(calls.open) }; },
     async remove(r: { position: string }) {
@@ -40,7 +44,11 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       if (removeMode === "hang") await new Promise(() => {}); // process "crashes" while closing
       return { txs: [{ close: r.position }], extraSigners: new Map() };
     },
-    async tokenBalance() { return 0n; },
+    async tokenBalance() {
+      if (wallet.balanceReadFailures > 0) { wallet.balanceReadFailures--; throw new Error("429 Too Many Requests"); }
+      return wallet.tokens;
+    },
+    async swapTokenToSol() { throw new Error("no pool route in fake"); },
   };
   const sender = {
     async send(tx: { close?: string }, _x: unknown, opts: { onSignature?: (s: string) => Promise<void> } = {}) {
@@ -51,6 +59,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       calls.broadcast++;
       if (tx.close) {
         chain.delete(tx.close); // the close landed
+        if (o.mintX) wallet.tokens += 1000n; // the token side comes out of the position
         sigStatus.set(sig, "confirmed");
         if (removeMode === "land_then_throw") throw new Error("fetch failed (reply lost)");
         return { signature: sig };
@@ -65,6 +74,7 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
       return { signature: sig };
     },
     async status(sig: string) { return sigStatus.get(sig) ?? "unknown"; },
+    async sendVersioned() { calls.sell++; wallet.tokens = 0n; return { signature: `sell${calls.sell}` }; },
   };
   const records: Record<string, unknown>[] = [];
   const log = { info() {}, warn() {}, error() {}, debug() {} };
@@ -72,7 +82,12 @@ function setup(o: { maxPositions?: number; balanceSol?: number; dir?: string; ch
     lotLamports: 100_000_000n, maxPositions: o.maxPositions ?? 3, reserveLamports: 150_000_000n, slippageBins: 0,
     priorityMicroLamports: 0, stateFile: path.join(dir, "state.json"), killFile: path.join(dir, "STOP"), closeAllFile: path.join(dir, "CLOSE_ALL"),
   }, log as never, (kind, obj) => records.push({ _file: kind, ...obj }));
-  return { mm, dir, chain, calls, gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m), removeMode: (m: typeof removeMode) => (removeMode = m) };
+  // no network: Jupiter replaced by a fake
+  (mm as unknown as { jupiter: unknown }).jupiter = {
+    async quoteToSol(_m: string, amount: bigint) { return { outAmount: String(amount) }; },
+    async buildSwap() { return { tx: {}, lastValidBlockHeight: 1 }; },
+  };
+  return { mm, dir, chain, wallet, calls, gates, records, holdAll: (h: Partial<typeof hold>) => (hold = { ...hold, ...h }), sendMode: (m: SendMode) => (sendMode = m), removeMode: (m: typeof removeMode) => (removeMode = m) };
 }
 // distinct valid base58 public keys for fake position accounts
 const posAddr = (n: number) => new PublicKey(new Uint8Array(32).fill(n % 255 + 1)).toBase58();
@@ -271,5 +286,67 @@ describe("LiveMm open/close races (no RPC, nothing sent)", () => {
     expect(s.calls.broadcast).toBe(0);
     expect(s.mm.openCount).toBe(0);
     expect(kinds(s.records)).toEqual(["close_deferred:leader_closed", "open_skipped:leader_closed_before_broadcast"]);
+  });
+
+  // The service's own tick (serviceTick, as main.ts runs it), not checkIdle() directly.
+  const emptyBook = { pools: () => [] as string[], onTick: () => [], checkExits: () => [] };
+  const tickDeps = (mm: LiveMm, readPools = async () => new Map()) => ({ book: emptyBook, live: mm, watcher: null, readPools, write: () => {} });
+
+  it("restart whose only state is an unresolved open: the service tick resolves it (no pools to read)", async () => {
+    const s = setup();
+    s.sendMode("land_then_hang");
+    void s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    for (let i = 0; i < 10 && s.calls.send === 0; i++) await tick();
+    await tick();
+    const r = setup({ dir: s.dir, chain: s.chain });
+    let reads = 0;
+    await serviceTick(tickDeps(r.mm, async () => { reads++; return new Map(); }));
+    expect(reads).toBe(0); // nothing to read: book and live have no pools yet
+    expect(kinds(r.records)).toEqual(["open_recovered"]);
+    expect(r.mm.openCount).toBe(1);
+  });
+
+  it("pool read failing does not block live housekeeping", async () => {
+    const s = setup();
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    fs.writeFileSync(path.join(s.dir, "CLOSE_ALL"), "");
+    await expect(serviceTick(tickDeps(s.mm, async () => { throw new Error("rpc down"); }))).rejects.toThrow("rpc down");
+    expect(kinds(s.records)).toEqual(["open", "close:close_all_file"]);
+    expect(s.mm.openCount).toBe(0);
+  });
+
+  it("close confirmed, balance read fails: the owed sale survives a restart; close sent once, sale done after", async () => {
+    const s = setup({ mintX: TOKEN });
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    s.wallet.balanceReadFailures = 1; // transient RPC error right after the close
+    await s.mm.onLeaderClose("L1");
+    expect(kinds(s.records)).toEqual(["open", "close:leader_closed", "sell_failed"]);
+    expect(s.calls.remove).toBe(1);
+    const state = JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8"));
+    expect(state.positions).toHaveLength(0);
+    expect(state.sales).toMatchObject([{ mintX: TOKEN, position: posAddr(1), tries: 1 }]);
+    // restart
+    const r = setup({ dir: s.dir, chain: s.chain, mintX: TOKEN, wallet: s.wallet });
+    expect(r.mm.pendingSales).toBe(1);
+    await serviceTick(tickDeps(r.mm)); // sells
+    await serviceTick(tickDeps(r.mm)); // balance 0 → done
+    expect(kinds(r.records)).toEqual(["sell", "sell_done"]);
+    expect(r.calls.sell).toBe(1);
+    expect(r.calls.remove + r.calls.broadcast).toBe(0); // the close is not sent again
+    expect(r.mm.pendingSales).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(s.dir, "state.json"), "utf8")).sales).toHaveLength(0);
+  });
+
+  it("a sale whose reply was lost is not repeated: the next balance read clears it", async () => {
+    const s = setup({ mintX: TOKEN });
+    await s.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: 0 });
+    const fake = s.mm as unknown as { sender: { sendVersioned: () => Promise<unknown> } };
+    fake.sender.sendVersioned = async () => { s.calls.sell++; s.wallet.tokens = 0n; throw new Error("fetch failed (reply lost)"); };
+    await s.mm.onLeaderClose("L1");
+    expect(kinds(s.records).slice(-1)).toEqual(["sell_failed"]); // jupiter "failed", pool fallback has no route
+    await serviceTick(tickDeps(s.mm), Math.floor(Date.now() / 1000) + 60); // after the backoff
+    expect(s.calls.sell).toBe(1);
+    expect(kinds(s.records).slice(-1)).toEqual(["sell_done"]);
+    expect(s.mm.pendingSales).toBe(0);
   });
 });

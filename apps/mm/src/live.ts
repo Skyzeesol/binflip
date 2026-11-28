@@ -59,6 +59,24 @@ interface OurPosition {
   closeReason?: string;
 }
 
+/**
+ * A token sale owed after a confirmed close. Written in the SAME state save that removes the
+ * position, so a crash or an RPC error between close and sale cannot lose it; removed only when
+ * the wallet holds none of the token any more (sold, or nothing came out).
+ */
+interface PendingSale {
+  leaderPosition: string;
+  position: string;
+  pool: string;
+  mintX: string;
+  since: number;
+  tries: number;
+  nextAt: number;
+}
+
+/** Retry spacing for a sale that failed: 30 s doubling to 15 min (LP Agent style: keep trying). */
+const saleBackoffSec = (tries: number) => Math.min(900, 30 * 2 ** Math.max(0, tries - 1));
+
 /** Thrown from onSignature: the open was signed but must not be broadcast (STOP / leader close). */
 class AbortBeforeBroadcast extends Error {}
 
@@ -78,6 +96,8 @@ const OPEN_RESOLVE_SEC = 180;
 export class LiveMm {
   private readonly ours = new Map<string, OurPosition>(); // by leader position
   private readonly opening = new Map<string, OpeningRecord>(); // broadcast, outcome unknown (persisted)
+  private readonly sales = new Map<string, PendingSale>(); // owed after a confirmed close (persisted), by our position
+  private readonly selling = new Set<string>();
   private readonly busy = new Set<string>(); // our positions with an action in flight
   private readonly jupiter = new JupiterClient();
 
@@ -90,11 +110,12 @@ export class LiveMm {
     private readonly record: (kind: string, obj: Record<string, unknown>) => void,
   ) {
     if (fs.existsSync(opts.stateFile)) {
-      const raw = JSON.parse(fs.readFileSync(opts.stateFile, "utf8")) as OurPosition[] | { positions: OurPosition[]; opening: OpeningRecord[] };
+      const raw = JSON.parse(fs.readFileSync(opts.stateFile, "utf8")) as OurPosition[] | { positions: OurPosition[]; opening: OpeningRecord[]; sales?: PendingSale[] };
       const st = Array.isArray(raw) ? { positions: raw, opening: [] } : raw;
       for (const p of st.positions) this.ours.set(p.leaderPosition, { ...p, closing: false });
       for (const o of st.opening ?? []) this.opening.set(o.leaderPosition, o);
-      log.warn({ positions: this.ours.size, opening: this.opening.size }, "live: restored state (opens with unknown outcome are resolved from chain)");
+      for (const x of ("sales" in st ? st.sales : undefined) ?? []) this.sales.set(x.position, { ...x, nextAt: 0 });
+      log.warn({ positions: this.ours.size, opening: this.opening.size, sales: this.sales.size }, "live: restored state (opens with unknown outcome are resolved from chain)");
     }
   }
 
@@ -107,7 +128,7 @@ export class LiveMm {
   }
 
   private save(): void {
-    const st = { positions: [...this.ours.values()], opening: [...this.opening.values()] };
+    const st = { positions: [...this.ours.values()], opening: [...this.opening.values()], sales: [...this.sales.values()] };
     fs.writeFileSync(this.opts.stateFile + ".tmp", JSON.stringify(st, null, 1));
     fs.renameSync(this.opts.stateFile + ".tmp", this.opts.stateFile);
   }
@@ -299,8 +320,14 @@ export class LiveMm {
   }
 
   /** Idle exit as a backstop (e.g. if we missed the leader's close). */
+  /** Sales owed after a close; true while any is still pending. */
+  get pendingSales(): number {
+    return this.sales.size;
+  }
+
   async checkIdle(now: number): Promise<void> {
     await this.recoverOpening();
+    await this.retrySales(now);
     const closeAll = fs.existsSync(this.opts.closeAllFile);
     for (const p of [...this.ours.values()]) {
       if (p.closing) continue;
@@ -323,10 +350,12 @@ export class LiveMm {
     this.busy.add(p.position);
     const t = Math.floor(Date.now() / 1000);
     const done = async (kind: string, sigs: string[]) => {
+      // One atomic save: the position (with its close intent) goes, the owed sale comes.
+      if (p.mintX !== WSOL_MINT) this.sales.set(p.position, { leaderPosition: p.leaderPosition, position: p.position, pool: p.pool, mintX: p.mintX, since: t, tries: 0, nextAt: 0 });
       this.ours.delete(p.leaderPosition); // the only place a close intent is cleared
       this.save();
       this.record("live", { t, kind, reason, position: p.position, pool: p.pool, sigs });
-      await this.sellToken(p);
+      await this.runSale(p.position, t);
     };
     try {
       // A previous close may have landed with its reply lost (or before a crash): verify on chain.
@@ -340,26 +369,50 @@ export class LiveMm {
     }
   }
 
-  /** Sell whatever of the pool's token the wallet holds: Jupiter first, the pool itself as fallback. */
-  private async sellToken(p: OurPosition): Promise<void> {
-    if (p.mintX === WSOL_MINT) return;
-    const amount = await this.builder.tokenBalance(p.mintX);
-    if (amount <= 0n) return;
+  private async retrySales(now: number): Promise<void> {
+    for (const x of [...this.sales.values()]) if (now >= x.nextAt) await this.runSale(x.position, now);
+  }
+
+  /**
+   * Sell whatever of the pool's token the wallet holds (Jupiter first, the pool as fallback).
+   * The record stays until a balance read shows nothing left, so a lost reply, a failed swap or
+   * an RPC error (even on the balance read) is retried on later ticks and after a restart; a
+   * swap that landed with its reply lost is seen as a zero balance, never sold twice.
+   */
+  private async runSale(position: string, now: number): Promise<void> {
+    const x = this.sales.get(position);
+    if (!x || this.selling.has(position)) return;
+    this.selling.add(position);
     const t = Math.floor(Date.now() / 1000);
     try {
-      const q = await this.jupiter.quoteToSol(p.mintX, amount, 300);
-      const { tx, lastValidBlockHeight } = await this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000);
-      const r = await this.sender.sendVersioned(tx, lastValidBlockHeight);
-      this.record("live", { t, kind: "sell", via: "jupiter", mint: p.mintX, amount: amount.toString(), outLamports: q.outAmount, sig: r.signature });
-    } catch (err) {
-      try {
-        const s = await this.builder.swapTokenToSol({ pool: p.pool, amount, slippageBps: 300 });
-        if (!s) return;
-        const sigs = await this.sendBuilt(s.built);
-        this.record("live", { t, kind: "sell", via: "pool", mint: p.mintX, amount: amount.toString(), outLamports: s.outLamports.toString(), sigs });
-      } catch (err2) {
-        this.record("live", { t, kind: "sell_failed", mint: p.mintX, amount: amount.toString(), error: `${(err as Error).message} / ${(err2 as Error).message}`.slice(0, 300) });
+      const amount = await this.builder.tokenBalance(x.mintX);
+      if (amount <= 0n) {
+        this.sales.delete(position);
+        this.save();
+        if (x.tries > 0) this.record("live", { t, kind: "sell_done", mint: x.mintX, position, tries: x.tries });
+        return;
       }
+      try {
+        const q = await this.jupiter.quoteToSol(x.mintX, amount, 300);
+        const { tx, lastValidBlockHeight } = await this.jupiter.buildSwap(q, this.owner.toBase58(), 200_000);
+        const r = await this.sender.sendVersioned(tx, lastValidBlockHeight);
+        this.record("live", { t, kind: "sell", via: "jupiter", mint: x.mintX, amount: amount.toString(), outLamports: q.outAmount, sig: r.signature });
+      } catch (err) {
+        const s2 = await this.builder.swapTokenToSol({ pool: x.pool, amount, slippageBps: 300 }).catch((e2: Error) => { throw new Error(`${(err as Error).message} / ${e2.message}`); });
+        if (!s2) throw new Error(`${(err as Error).message} / no pool route`);
+        const sigs = await this.sendBuilt(s2.built);
+        this.record("live", { t, kind: "sell", via: "pool", mint: x.mintX, amount: amount.toString(), outLamports: s2.outLamports.toString(), sigs });
+      }
+      // Sent: the next pass reads the balance again and clears the record (or sells the rest).
+      x.nextAt = 0;
+      this.save();
+    } catch (err) {
+      x.tries++;
+      x.nextAt = now + saleBackoffSec(x.tries);
+      this.save();
+      this.record("live", { t, kind: "sell_failed", mint: x.mintX, position, tries: x.tries, retryInSec: saleBackoffSec(x.tries), error: String((err as Error).message).slice(0, 300) });
+    } finally {
+      this.selling.delete(position);
     }
   }
 }
