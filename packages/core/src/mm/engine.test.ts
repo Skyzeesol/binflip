@@ -108,6 +108,19 @@ describe("ShadowBook", () => {
     expect(c.outcome).toBe("missed");
   });
 
+  it("our book held a different range than the leader's old range → desync, not missed", () => {
+    // we think [-572, -572]; the leader's real old range is [-571, -571] (a range change we never saw)
+    const b2 = open();
+    b2.onTick("L", -573, 3); // distance −1 from ours: hold, but 2 from the leader's real [-571, -571]
+    const c = b2.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 5, active: -573, old: { lower: -571, upper: -571 }, next: { lower: -572, upper: -572, side: "token" } });
+    expect(c.outcome).toBe("desync");
+    expect(c.ourRange).toEqual({ lower: -572, upper: -572 });
+    expect(c.leader.old).toEqual({ lower: -571, upper: -571 });
+    expect(b2.summary().desyncPct).toBe(100);
+    expect(b2.summary().missedPct).toBe(0);
+    expect(b2.open[0]!.range).toEqual({ lower: -572, upper: -572, side: "token" }); // re-synced
+  });
+
   it("unknown position is adopted, not scored", () => {
     const b = new ShadowBook();
     const c = b.onLeaderRebalance({ position: "Q", pool: "L", binStep: 100, t: 5, active: 3, old: { lower: 0, upper: 0 }, next: { lower: 2, upper: 2, side: "sol" } });

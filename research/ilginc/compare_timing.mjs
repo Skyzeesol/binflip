@@ -22,7 +22,7 @@ const timingOf = (c) => {
 const t0 = scored.length ? new Date(Math.min(...scored.map((c) => c.t)) * 1000).toISOString().slice(0, 16) : "-";
 const t1 = scored.length ? new Date(Math.max(...scored.map((c) => c.t)) * 1000).toISOString().slice(0, 16) : "-";
 console.log(`${dir}  pencere ${t0} → ${t1}  karşılaştırma ${scored.length}  slotlu ${withSlot.length} (${scored.length ? ((withSlot.length / scored.length) * 100).toFixed(1) : 0}%)  ${withSlot.length === scored.length ? "yöntem: slot (kesin)" : withSlot.length ? "yöntem: karışık" : "yöntem: saat (yaklaşık)"}`);
-const outcomes = ["match", "match_other_bin", "wrong_side", "missed", "not_seen"];
+const outcomes = ["match", "match_other_bin", "wrong_side", "missed", "desync", "not_seen"];
 const timings = ["before", "same_slot", "after", "likely_before", "ambiguous", "likely_after", "no_decision"];
 const m = new Map();
 for (const c of scored) { const k = `${c.outcome}|${timingOf(c)}`; m.set(k, (m.get(k) ?? 0) + 1); }

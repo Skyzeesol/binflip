@@ -49,6 +49,7 @@ export type ShadowOutcome =
   | "match_other_bin" //  same side and width, but the price had moved: different bins
   | "wrong_side" //       we moved to the other side
   | "missed" //           we saw the trigger distance but did not decide (a rule gap)
+  | "desync" //           our book held a different range than the leader's real old range (state, not rules)
   | "not_seen" //         the leader moved before our last pool read showed the trigger (speed, not rules)
   | "adopted"; //         first time we see this position (started mid-life), no score
 
@@ -72,7 +73,9 @@ export interface ShadowComparison {
   position: string;
   pool: string;
   outcome: ShadowOutcome;
-  leader: { active: number; next: MmRange; distance: number };
+  leader: { active: number; next: MmRange; distance: number; old: Pick<MmRange, "lower" | "upper"> };
+  /** The range our book held for this position when the leader moved (before the re-sync). */
+  ourRange?: Pick<MmRange, "lower" | "upper">;
   ours?: { t: number; slot?: number; active: number; next: MmRange };
   /** Slot of the leader's rebalance transaction. */
   leaderSlot?: number;
@@ -91,6 +94,7 @@ export interface ShadowStats {
   wrongSide: number;
   missed: number;
   notSeen: number;
+  desync: number;
   adopted: number;
   extra: number;
   closedWithPending: number;
@@ -107,7 +111,7 @@ export class ShadowBook {
   private readonly positions = new Map<string, ShadowPosition>();
   /** Recent active-bin reads per pool (bounded), to tell a rule gap from a speed gap. */
   private readonly reads = new Map<string, Array<{ t: number; slot?: number; active: number }>>();
-  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [], exits: 0, exitMatch: 0, exitEarly: 0, exitOther: 0, timing: {} };
+  readonly stats: ShadowStats = { compared: 0, match: 0, matchOtherBin: 0, wrongSide: 0, missed: 0, notSeen: 0, desync: 0, adopted: 0, extra: 0, closedWithPending: 0, lagSec: [], exits: 0, exitMatch: 0, exitEarly: 0, exitOther: 0, timing: {} };
 
   constructor(
     private readonly trigger?: number,
@@ -198,7 +202,7 @@ export class ShadowBook {
     next: MmRange;
   }): ShadowComparison {
     const distance = e.active > e.old.upper ? e.active - e.old.upper : e.active < e.old.lower ? e.active - e.old.lower : 0;
-    const leader = { active: e.active, next: e.next, distance };
+    const leader = { active: e.active, next: e.next, distance, old: { lower: e.old.lower, upper: e.old.upper } };
     const p = this.positions.get(e.position);
     if (!p) {
       this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t, lastMoveAt: e.t, leaderMoveAt: e.t });
@@ -210,7 +214,15 @@ export class ShadowBook {
     const ours = p.pending[0];
     const extra = Math.max(0, p.pending.length - 1);
     let outcome: ShadowOutcome;
-    if (!ours) {
+    const ourRange = { lower: p.range.lower, upper: p.range.upper };
+    if (!ours && !sameRange(p.range, e.old)) {
+      // Our book was out of sync with the leader's position (e.g. a range change we did not see):
+      // our engine ran on the wrong range, so this says nothing about the rule or about speed.
+      outcome = "desync";
+    } else if (!ours) {
+      // Same range as the leader. With our trigger equal to the leader's (default), a read showing
+      // the trigger would have produced our decision in the same onTick, so "missed" then means an
+      // engine/plumbing bug; with a stricter trigger it is the rule gap it measures.
       // Did any read taken after our last sync and strictly before the leader's block
       // already show the leader's 2-bin trigger against the range we both held?
       // With slots: reads strictly between our last sync and the leader's slot. Without: by time.
@@ -232,6 +244,7 @@ export class ShadowBook {
     else if (outcome === "match_other_bin") this.stats.matchOtherBin++;
     else if (outcome === "wrong_side") this.stats.wrongSide++;
     else if (outcome === "missed") this.stats.missed++;
+    else if (outcome === "desync") this.stats.desync++;
     else this.stats.notSeen++;
     const lagSec = ours ? ours.t - e.t : undefined;
     if (lagSec !== undefined) this.stats.lagSec.push(lagSec);
@@ -249,7 +262,7 @@ export class ShadowBook {
     p.leaderMoveAt = e.t;
     p.lastMoveAt = Math.max(p.lastMoveAt, e.t);
     p.predictedCloseAt = undefined; // a move resets the idle timer
-    return { t: e.t, position: e.position, pool: e.pool, outcome, leader, leaderSlot: e.slot, ours: ours && { t: ours.t, slot: ours.slot, active: ours.active, next: ours.next }, timing, lagSec, extra };
+    return { t: e.t, position: e.position, pool: e.pool, outcome, leader, ourRange, leaderSlot: e.slot, ours: ours && { t: ours.t, slot: ours.slot, active: ours.active, next: ours.next }, timing, lagSec, extra };
   }
 
   /** Compact summary for logs. */
@@ -266,6 +279,7 @@ export class ShadowBook {
       wrongSidePct: pct(s.wrongSide),
       missedPct: pct(s.missed),
       notSeenPct: pct(s.notSeen),
+      desyncPct: pct(s.desync),
       extra: s.extra,
       adopted: s.adopted,
       lagP10: q(0.1),
