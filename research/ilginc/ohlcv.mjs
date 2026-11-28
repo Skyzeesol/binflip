@@ -1,5 +1,9 @@
 // Backfill GeckoTerminal 1-minute candles around every historical open/close of the wallet.
-// Output: data/ohlcv/<pool>.json = [[t, o, h, l, c, volUsd], ...] ascending. Resumable.
+// Output: data/ohlcv/<pool>.json = [[t, o, h, l, c, volUsd], ...] ascending, and
+// data/ohlcv/<pool>.cov.json = [[from, to], ...]: the time spans the pages actually covered.
+// GeckoTerminal returns only minutes WITH trades, so inside a covered span a missing minute is a
+// real zero volume; outside it nothing is known (a page that never came, a 180-day limit).
+// Resumable.
 // Public API: 30 req/min, minute data for the last 180 days. Usage: node ohlcv.mjs [maxPools]
 import fs from "node:fs";
 // Only the minutes each decision could see: 65 min before every open/close (plus the
@@ -42,6 +46,7 @@ for (const [pool, wins] of pools) {
   // Page backwards from the newest window; each page (~1000 traded minutes) usually covers
   // several windows. When a page ends inside a gap, jump straight to the next window's end.
   const candles = new Map();
+  const covered = []; // [from, to] spans fully covered by the pages we got
   const left = [...wins]; // ascending
   let before = left.at(-1)[1];
   while (left.length) {
@@ -51,12 +56,14 @@ for (const [pool, wins] of pools) {
     const list = j?.data?.attributes?.ohlcv_list ?? [];
     if (!list.length || j?.tooOld) break;
     const oldest = list.at(-1)[0];
+    covered.push([oldest, before]); // a page lists every traded minute in [oldest, before)
     for (const c of list) if (left.some(([f, t]) => c[0] >= f - 60 && c[0] <= t)) candles.set(c[0], c);
     while (left.length && left.at(-1)[0] >= oldest) left.pop(); // fully covered
     if (!left.length || oldest >= before) break;
     before = Math.min(oldest, left.at(-1)[1]);
   }
   fs.writeFileSync(file, JSON.stringify([...candles.values()].sort((a, b) => a[0] - b[0])));
+  fs.writeFileSync(file.replace(/\.json$/, ".cov.json"), JSON.stringify(covered.sort((a, b) => a[0] - b[0])));
   done++;
   if (done % 10 === 0) console.log(new Date().toISOString(), `pools ${done}/${pools.length} requests ${reqs}`);
 }

@@ -2,15 +2,19 @@
 // plus a control sample: the same pool 2 h before each open (when the wallet had no position there).
 // Output: data/features.jsonl and a quantile report (opens vs control, closes vs mid-position).
 import fs from "node:fs";
+const DATA = process.env.DATA_DIR ?? "data";
 
-const rows = fs.readFileSync("data/rows.jsonl", "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => !r.err).sort((a, b) => a.slot - b.slot);
-const pools = fs.existsSync("data/pools.json") ? JSON.parse(fs.readFileSync("data/pools.json", "utf8")) : {};
+const rows = fs.readFileSync(`${DATA}/rows.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => !r.err).sort((a, b) => a.slot - b.slot);
+const pools = fs.existsSync(`${DATA}/pools.json`) ? JSON.parse(fs.readFileSync(`${DATA}/pools.json`, "utf8")) : {};
 const cache = new Map();
+const MIN_CANDLES = +(process.env.MIN_CANDLES || 10); // traded minutes per hour needed without coverage info
 function candles(pool) {
   if (!cache.has(pool)) {
-    const f = `data/ohlcv/${pool}.json`;
+    const f = `${DATA}/ohlcv/${pool}.json`;
     const list = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
-    cache.set(pool, list && list.length ? { list, byMin: new Map(list.map((c) => [c[0], c])) } : null);
+    const cf = f.replace(/\.json$/, ".cov.json");
+    const cov = fs.existsSync(cf) ? JSON.parse(fs.readFileSync(cf, "utf8")) : null; // spans the download covered
+    cache.set(pool, list && list.length ? { list, byMin: new Map(list.map((c) => [c[0], c])), cov } : null);
   }
   return cache.get(pool);
 }
@@ -22,23 +26,39 @@ function feat(pool, t) {
   const m0 = Math.floor(t / 60) * 60; // event minute (excluded)
   const at = (k) => c.byMin.get(m0 - 60 * k); // k minutes before
   if (c.list[0][0] > m0 - 3600 || c.list.at(-1)[0] < m0 - 120) return null; // need 60 min of history
-  const vol = (n) => { let s = 0; for (let k = 1; k <= n; k++) s += at(k)?.[5] ?? 0; return s; };
+  // A missing minute is zero volume only where we KNOW the download covered it (cov spans).
+  // Without coverage info (older downloads) at least MIN_CANDLES traded minutes in the hour are
+  // required, otherwise volume features are unknown (null), never "zero".
+  const known = (minute) => c.cov ? c.cov.some(([a, b]) => minute >= a && minute < b) : null;
+  const vol = (n) => {
+    let s = 0;
+    for (let k = 1; k <= n; k++) {
+      const x = at(k);
+      if (x) s += x[5];
+      else if (known(m0 - 60 * k) === false) return null; // a gap in the data, not a quiet minute
+    }
+    return s;
+  };
+  let cov60 = 0;
+  for (let k = 1; k <= 60; k++) if (at(k)) cov60++;
+  const enough = c.cov ? true : cov60 >= MIN_CANDLES;
   const lastClose = (k) => { for (let j = k; j < k + 240; j++) { const x = at(j); if (x) return x[4]; } return null; }; // carry forward over empty minutes
   const p1 = lastClose(1), p5 = lastClose(6), p15 = lastClose(16), p60 = lastClose(61);
   let hi = -Infinity, lo = Infinity, active = 0;
   for (let k = 1; k <= 15; k++) { const x = at(k); if (x) { hi = Math.max(hi, x[2]); lo = Math.min(lo, x[3]); active++; } }
-  const v5 = vol(5), v60 = vol(60);
+  const v5 = enough ? vol(5) : null, v60 = enough ? vol(60) : null;
   const pct = (a, b) => (a && b ? +(((a / b) - 1) * 100).toFixed(2) : null);
   return {
-    v1: +vol(1).toFixed(0), v5: +v5.toFixed(0), v15: +vol(15).toFixed(0), v60: +v60.toFixed(0),
-    spike5: v60 > 0 ? +((v5 / (v60 / 12))).toFixed(2) : null, // 5-min volume vs the hour's 5-min average
+    v1: enough && vol(1) != null ? +vol(1).toFixed(0) : null, v5: v5 == null ? null : +v5.toFixed(0), v15: enough && vol(15) != null ? +vol(15).toFixed(0) : null, v60: v60 == null ? null : +v60.toFixed(0),
+    spike5: v5 != null && v60 > 0 ? +((v5 / (v60 / 12))).toFixed(2) : null, // 5-min volume vs the hour's 5-min average
+    cov60, covKnown: !!c.cov,
     pc5: pct(p1, p5), pc15: pct(p1, p15), pc60: pct(p1, p60),
     range15: hi > 0 && lo < Infinity ? +(((hi / lo) - 1) * 100).toFixed(2) : null,
     activeMin15: active, // minutes with trades in the last 15
   };
 }
 
-const out = fs.createWriteStream("data/features.jsonl");
+const out = fs.createWriteStream(`${DATA}/features.jsonl`);
 const sets = { open: [], control: [], close: [], mid: [] };
 const openAt = new Map(); // position -> open row
 const busy = new Map(); // pool -> [[from,to],...] periods with a position
@@ -48,6 +68,20 @@ for (const r of rows) {
     const o = openAt.get(r.position);
     const a = busy.get(r.pool) ?? []; a.push([o.t, r.t]); busy.set(r.pool, a);
   }
+}
+// Positions with no close in the data are busy until the end; positions whose open we never saw
+// (they started before the data) are busy from their first row.
+const firstSeen = new Map(), closedPos = new Set();
+for (const r of rows) {
+  if (r.position && !firstSeen.has(r.position)) firstSeen.set(r.position, r);
+  if (r.closed) closedPos.add(r.position);
+}
+for (const [position, r] of firstSeen) {
+  if (closedPos.has(position) && openAt.has(position)) continue; // already in busy
+  const close = rows.find((x) => x.position === position && x.closed);
+  const a = busy.get(r.pool) ?? [];
+  a.push([openAt.get(position)?.t ?? -Infinity, close ? close.t : Infinity]);
+  busy.set(r.pool, a);
 }
 const isBusy = (pool, t) => (busy.get(pool) ?? []).some(([a, b]) => t >= a && t <= b);
 for (const r of rows) {

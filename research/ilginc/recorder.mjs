@@ -78,7 +78,10 @@ async function snapshotEvent(e) {
       getJson(`https://dlmm.datapi.meteora.ag/pools/${e.pool}`).catch((err) => ({ error: err.message })),
       dexPairs([e.pool]).catch((err) => [{ error: err.message }]),
     ]);
-    write("event", { ...e, snapMs: Date.now(), meteora, dex: dex[0] ?? null });
+    // Taken AFTER the decision (the tx is already on chain): describes the pool right after it.
+    // Not decision-time data: analyses must not use it as an input of the decision.
+    const snapMs = Date.now();
+    write("event", { ...e, snapMs, snapLagSec: e.blockTime ? Math.round(snapMs / 1000 - e.blockTime) : null, postDecision: true, meteora, dex: dex[0] ?? null });
     stats.events++;
   } catch (err) { stats.errors++; log("event", err.message); }
 }
@@ -86,7 +89,9 @@ async function snapshotEvent(e) {
 // ── wallet transactions ────────────────────────────────────────────────────────
 const pools = new Map(); // pool -> last touched ms
 const seen = new Set();
-const cursor = new Map(); // wallet -> newest signature seen
+const cursor = new Map(); // wallet -> newest signature WRITTEN (moves only after the tx is in the archive)
+const misses = new Map(); // signature -> polls it could not be read; after MAX_MISSES it is recorded as a gap
+const MAX_MISSES = +(process.env.MAX_MISSES || 20);
 async function pollWallet(w) {
   const until = cursor.get(w);
   const sigs = [];
@@ -99,17 +104,31 @@ async function pollWallet(w) {
     if (batch.length < 1000 || !until) break; // first run: only the newest page
     before = batch.at(-1).signature;
   }
-  if (sigs.length) cursor.set(w, sigs[0].signature);
+  // Oldest first; the cursor moves past a signature only once its tx is written. A transient
+  // RPC error stops this pass (the rest is read next poll) instead of leaving a permanent hole;
+  // a tx that stays unreadable for MAX_MISSES polls is written as a "gap" record, visibly.
   for (const s of sigs.reverse()) {
-    if (seen.has(s.signature)) continue;
-    seen.add(s.signature);
+    if (seen.has(s.signature)) { cursor.set(w, s.signature); continue; }
     let tx = null;
-    for (let k = 0; k < 6 && !tx; k++) {
+    for (let k = 0; k < 3 && !tx; k++) {
       tx = await rpc("getTransaction", [s.signature, { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
       if (!tx) await sleep(1000);
     }
-    if (!tx) { stats.errors++; continue; }
+    if (!tx || !tx.meta) {
+      const n = (misses.get(s.signature) ?? 0) + 1;
+      misses.set(s.signature, n);
+      stats.errors++;
+      if (n < MAX_MISSES) break; // retry from here on the next poll
+      write("gap", { t: Date.now(), wallet: w, signature: s.signature, slot: s.slot, blockTime: s.blockTime ?? null, misses: n });
+      misses.delete(s.signature);
+      seen.add(s.signature);
+      cursor.set(w, s.signature);
+      continue;
+    }
     write("tx", { signature: s.signature, wallet: w, recvMs: Date.now(), ...tx });
+    seen.add(s.signature);
+    misses.delete(s.signature);
+    cursor.set(w, s.signature);
     stats.tx++;
     try {
       const decoded = decodeMeteoraTx(tx);
