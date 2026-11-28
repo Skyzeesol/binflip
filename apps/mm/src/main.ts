@@ -73,11 +73,11 @@ await runService("mm", async ({ config, log }) => {
     fs.appendFileSync(path.join(OUT_DIR, `${kind}.${day()}.jsonl`), JSON.stringify(obj) + "\n");
 
   // ── pool state ──────────────────────────────────────────────────────────────
-  async function readPools(pools: string[]): Promise<Map<string, { activeId: number; binStep: number }>> {
-    const out = new Map<string, { activeId: number; binStep: number }>();
+  async function readPools(pools: string[]): Promise<Map<string, { activeId: number; binStep: number; slot: number }>> {
+    const out = new Map<string, { activeId: number; binStep: number; slot: number }>();
     for (let i = 0; i < pools.length; i += 100) {
       const chunk = pools.slice(i, i + 100);
-      const res = await rpc.call<{ value: Array<{ data: [string, string] } | null> }>("getMultipleAccounts", [
+      const res = await rpc.call<{ context: { slot: number }; value: Array<{ data: [string, string] } | null> }>("getMultipleAccounts", [
         chunk,
         { encoding: "base64", commitment: COMMITMENT },
       ]);
@@ -85,7 +85,7 @@ await runService("mm", async ({ config, log }) => {
         if (!acc) return;
         try {
           const s = decodeLbPair(Buffer.from(acc.data[0], "base64"));
-          out.set(chunk[j]!, s);
+          out.set(chunk[j]!, { ...s, slot: res.context.slot });
           binSteps.set(chunk[j]!, s.binStep);
         } catch (err) {
           log.debug({ err, pool: chunk[j] }, "lb pair decode failed");
@@ -123,7 +123,7 @@ await runService("mm", async ({ config, log }) => {
         const bs = await binStepOf(pool);
         if (!bs) continue;
         const next: MmRange = { lower: Number(d.new_min_id), upper: Number(d.new_max_id), side: big(d.x_added_amount) > 0n ? "token" : "sol" };
-        const cmp = book.onLeaderRebalance({ position, pool, binStep: bs, t, active: Number(d.active_bin_id), old: { lower: Number(d.old_min_id), upper: Number(d.old_max_id) }, next });
+        const cmp = book.onLeaderRebalance({ position, pool, binStep: bs, t, slot: tx.slot, active: Number(d.active_bin_id), old: { lower: Number(d.old_min_id), upper: Number(d.old_max_id) }, next });
         write("compare", { sig: tx.signature, ...cmp });
       } else if (e.name === "PositionClose") {
         const position = str(e.data.position);
@@ -208,12 +208,12 @@ await runService("mm", async ({ config, log }) => {
 
   // Push path: every pool change (a swap moving the active bin) runs the engine at once.
   const watcher = USE_WS
-    ? new AccountWatcher(config.SOLANA_WS_URL ?? wsUrlFromHttp(config.SOLANA_RPC_URL), log, (pool, data) => {
+    ? new AccountWatcher(config.SOLANA_WS_URL ?? wsUrlFromHttp(config.SOLANA_RPC_URL), log, (pool, data, slot) => {
         try {
           const s = decodeLbPair(Buffer.from(data, "base64"));
           binSteps.set(pool, s.binStep);
           const now = Math.floor(Date.now() / 1000);
-          for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "ws", ...d });
+          for (const d of book.onTick(pool, s.activeId, now, slot || undefined)) write("ours", { t: now, slot, pool, active: s.activeId, via: "ws", ...d });
           live?.onTick(pool, s.activeId);
           lastTickOk = Date.now();
         } catch (err) {
@@ -231,7 +231,7 @@ await runService("mm", async ({ config, log }) => {
     const states = await readPools(pools);
     const now = Math.floor(Date.now() / 1000);
     for (const [pool, s] of states) {
-      for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "poll", ...d });
+      for (const d of book.onTick(pool, s.activeId, now, s.slot)) write("ours", { t: now, slot: s.slot, pool, active: s.activeId, via: "poll", ...d });
       live?.onTick(pool, s.activeId);
     }
     for (const p of book.checkExits(now)) write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });

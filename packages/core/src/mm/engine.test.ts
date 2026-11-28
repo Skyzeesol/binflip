@@ -192,3 +192,70 @@ describe("mmAddsAt: putting holdings back next to the active bin", () => {
     expect(mmRangeAfter(a, 0)).toMatchObject({ lower: -1, upper: 1 });
   });
 });
+
+import { mmTiming } from "./shadow.js";
+
+describe("shadow timing by slot (exact range ≠ on time)", () => {
+  const open = () => {
+    const b = new ShadowBook();
+    b.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
+    return b;
+  };
+  const leaderMove = (b: ShadowBook, slot: number | undefined) =>
+    b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 100, slot, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
+
+  it("mmTiming", () => {
+    expect(mmTiming(10, 11)).toBe("before");
+    expect(mmTiming(11, 11)).toBe("same_slot");
+    expect(mmTiming(12, 11)).toBe("after");
+    expect(mmTiming(undefined, 11)).toBe("unknown");
+    expect(mmTiming(10, undefined)).toBe("unknown");
+  });
+
+  it("early: decided on an observation from an earlier slot", () => {
+    const b = open();
+    b.onTick("L", -570, 99, 1000);
+    const c = leaderMove(b, 1001);
+    expect(c.outcome).toBe("match");
+    expect(c.timing).toBe("before");
+    expect(c.ours?.slot).toBe(1000);
+    expect(b.summary().matchBeforePct).toBe(100);
+  });
+
+  it("late: same range, but we only saw it after the leader's slot → match, timing after", () => {
+    const b = open();
+    b.onTick("L", -570, 101, 1003);
+    const c = leaderMove(b, 1001);
+    expect(c.outcome).toBe("match");
+    expect(c.timing).toBe("after");
+    expect(b.summary().matchBeforePct).toBe(0);
+    expect(b.summary().matchAfterPct).toBe(100);
+  });
+
+  it("same slot: order cannot be told → same_slot (not counted as on time)", () => {
+    const b = open();
+    b.onTick("L", -570, 100, 1001);
+    const c = leaderMove(b, 1001);
+    expect(c.timing).toBe("same_slot");
+    expect(b.summary().matchSameSlotPct).toBe(100);
+    expect(b.summary().matchBeforePct).toBe(0);
+  });
+
+  it("no slots (old records) → unknown", () => {
+    const b = open();
+    b.onTick("L", -570, 99);
+    expect(leaderMove(b, 1001).timing).toBe("unknown");
+  });
+
+  it("not_seen vs missed uses slots when both sides have them", () => {
+    // A trigger read in the leader's own slot does not count as seen before it.
+    const b = new ShadowBook(3);
+    b.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
+    b.onTick("L", -570, 100, 1001); // distance 2, our trigger is 3 → hold; same slot as the leader
+    expect(leaderMove(b, 1001).outcome).toBe("not_seen");
+    const b2 = new ShadowBook(3);
+    b2.onOpen({ position: "P", pool: "L", binStep: 80, range: { lower: -572, upper: -572, side: "sol" }, t: 0 });
+    b2.onTick("L", -570, 100, 1000); // seen one slot earlier
+    expect(leaderMove(b2, 1001).outcome).toBe("missed");
+  });
+});

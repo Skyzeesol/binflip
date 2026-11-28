@@ -5,14 +5,23 @@
 // is Y raw units (lamports) per X raw unit, so no decimals are needed.
 // Output: data/pnl.jsonl (one line per closed position) + a report of what the wallet saw at close.
 import fs from "node:fs";
+const DATA = process.env.DATA_DIR ?? "data";
 
-const rows = fs.readFileSync("data/rows.jsonl", "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => !r.err && r.position).sort((a, b) => a.slot - b.slot);
-const pools = JSON.parse(fs.readFileSync("data/pools.json", "utf8"));
+const rows = fs.readFileSync(`${DATA}/rows.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((r) => !r.err && r.position).sort((a, b) => a.slot - b.slot);
+const pools = JSON.parse(fs.readFileSync(`${DATA}/pools.json`, "utf8"));
 const B = (v) => Number(BigInt(v ?? 0));
 const px = (bs, bin) => Math.pow(1 + bs / 1e4, bin); // lamports per raw token unit
 
 const pos = new Map();
 const closed = [];
+// Positions where some token amount had to be valued but the active bin (price) was missing:
+// treating those tokens as worth 0 swings a position from e.g. +10% to −100%, so they are
+// reported separately and never enter the totals.
+const unpriced = [];
+const unpricedWhere = new Map();
+const needPrice = (p, where, tokens, price) => {
+  if (tokens > 0 && price == null) { p.unpriced = true; unpricedWhere.set(where, (unpricedWhere.get(where) ?? 0) + 1); }
+};
 let skippedNoLot = 0; // opened with tokens or empty: no SOL lot to measure against
 for (const r of rows) {
   const bs = pools[r.pool]?.binStep;
@@ -25,23 +34,27 @@ for (const r of rows) {
   if (!p) continue; // opened before our data window
   const price = r.active != null ? px(bs, r.active) : null;
   if (r.created) {
+    needPrice(p, "open: token deposited", B(r.addX), price);
     p.solIn += B(r.addY); p.tokIn += B(r.addX); // tokIn: raw token units, valued at the price of the moment
     p.tokInSol = (p.tokInSol ?? 0) + (price ? B(r.addX) * price : 0);
     p.x = B(r.addX); p.y = B(r.addY);
   } else if (r.kind === "rebalance_liquidity" && r.newMin != null) {
     p.lastMove = r.t;
+    needPrice(p, "rebalance: token moved", B(r.xA) + B(r.xW) + B(r.xF), price);
     // wallet → position (positive) or position → wallet (negative), each side separately
     p.solIn += B(r.yA) - B(r.yW);
-    p.tokInSol = (p.tokInSol ?? 0) + (B(r.xA) - B(r.xW)) * price;
-    p.fees += B(r.yF) + B(r.xF) * price;
+    p.tokInSol = (p.tokInSol ?? 0) + (B(r.xA) - B(r.xW)) * (price ?? 0);
+    p.fees += B(r.yF) + B(r.xF) * (price ?? 0);
     p.x = B(r.xA); p.y = B(r.yA);
     p.n++;
   } else if (r.closed) {
+    needPrice(p, "close: token withdrawn / token fee", B(r.remX) + B(r.feeX), price);
     p.solIn -= B(r.remY);
     p.tokInSol = (p.tokInSol ?? 0) - B(r.remX) * (price ?? 0);
     p.fees += B(r.feeY) + B(r.feeX) * (price ?? 0);
     p.x = 0; p.y = 0;
   } else continue;
+  if (!r.closed) needPrice(p, "mark-to-market: token held", p.x, price);
   const value = p.y + (price ? p.x * price : 0);
   const pnl = value + p.fees - p.solIn - (p.tokInSol ?? 0);
   const pct = p.lot > 0 ? (pnl / p.lot) * 100 : null;
@@ -49,6 +62,11 @@ for (const r of rows) {
   if (pct != null && pct > p.maxPnl) { p.maxPnl = pct; p.tMax = r.t; }
   if (pct != null && pct < p.minPnl) p.minPnl = pct;
   if (r.closed && !(p.lot > 0)) { skippedNoLot++; pos.delete(r.position); continue; }
+  if (r.closed && p.unpriced) {
+    unpriced.push({ position: p.position, pool: p.pool, name: p.name, lotSol: p.lot / 1e9, naivePnlPct: pct == null ? null : +pct.toFixed(2), tokenAtClose: B(r.remX) > 0 });
+    pos.delete(r.position);
+    continue;
+  }
   if (r.closed) {
     const fees = (p.fees / p.lot) * 100;
     // fee earned in the last 10 / 30 minutes before close, % of lot
@@ -66,11 +84,16 @@ for (const r of rows) {
     pos.delete(r.position);
   }
 }
-fs.writeFileSync("data/pnl.jsonl", closed.map((c) => JSON.stringify(c)).join("\n") + "\n");
+fs.writeFileSync(`${DATA}/pnl.jsonl`, closed.map((c) => JSON.stringify(c)).join("\n") + "\n");
+fs.writeFileSync(`${DATA}/pnl-unpriced.jsonl`, unpriced.map((c) => JSON.stringify(c)).join("\n") + (unpriced.length ? "\n" : ""));
 
 const q = (a, ps = [0.1, 0.25, 0.5, 0.75, 0.9]) => { const s = a.filter((x) => x != null && Number.isFinite(x)).sort((x, y) => x - y); if (!s.length) return "-"; return ps.map((p) => s[Math.min(s.length - 1, Math.floor(p * s.length))]).join(" | "); };
 const show = (label, key, set = closed) => console.log(label.padEnd(44), q(set.map((c) => c[key])));
-console.log(`kapanan pozisyon: ${closed.length} (+${skippedNoLot} SOL lotsuz, dışarıda)   (q10 | q25 | medyan | q75 | q90, % = lotun yüzdesi)`);
+const totalClosed = closed.length + unpriced.length;
+console.log(`fiyatsız (değerlendirilemeyen) pozisyon: ${unpriced.length} / ${totalClosed} (%${totalClosed ? ((unpriced.length / totalClosed) * 100).toFixed(2) : 0}); ${unpriced.filter((u) => u.tokenAtClose).length} tanesinde kapanışta token vardı`);
+console.log("  eksik fiyatın yeri:", [...unpricedWhere].map(([k, v]) => `${k}: ${v}`).join(" · ") || "yok");
+if (unpriced.length) console.log("  fiyat 0 sayılsaydı bu pozisyonların toplam etkisi:", unpriced.reduce((s, u) => s + ((u.naivePnlPct ?? 0) * u.lotSol) / 100, 0).toFixed(2), "SOL (toplama KATILMADI)");
+console.log(`kapanan pozisyon: ${closed.length} (+${skippedNoLot} SOL lotsuz, +${unpriced.length} fiyatsız, dışarıda)   (q10 | q25 | medyan | q75 | q90, % = lotun yüzdesi)`);
 show("kâr/zarar % (fee dahil)", "pnlPct");
 show("toplanan fee %", "feePct");
 show("envanter sonucu % (kâr/zarar − fee)", "invPct");
