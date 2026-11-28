@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import { LiveMm } from "../src/live.js";
-import { Readiness, closeAllMtime, runningRunId, stopSafe, writeStatus, type LiveStatus } from "../src/status.js";
+import { Readiness, closeAllMtime, ourPoolAges, runningRunId, stopSafe, writeStatus, type LiveStatus } from "../src/status.js";
 import { WriterLock } from "../src/writerLock.js";
 import { FakeChain, OWNER } from "./fakeChain.js";
 
@@ -86,6 +86,21 @@ describe("the running run is read from the lock heartbeat", () => {
     expect(runningRunId(path.join(dir, "mm.lock"), Date.now() + 60_000)).toBeNull();
     lock.release();
     expect(runningRunId(path.join(dir, "mm.lock"))).toBeNull();
+  });
+});
+
+describe("which pools gate a new open (pilot bug: every open was 'stale')", () => {
+  it("the leader's brand-new pool (in the shadow book, never read yet) does not make the service stale", () => {
+    const r = new Readiness(30_000, 0);
+    r.leaderOk(1000); r.tickOk(1000);
+    const ages = new Map([["OURS", 2000]]); // the new pool NEWPOOL has never been observed (Infinity)
+    const ageMs = (p: string) => ages.get(p) ?? Infinity;
+    // we hold nothing yet: only our pools count, the new pool is read by the open itself
+    expect(r.staleness(ourPoolAges([], ageMs), 5000)).toBeNull();
+    // a position of ours whose pool has gone quiet still blocks
+    expect(r.staleness(ourPoolAges(["OURS"], () => 60_000), 5000)).toMatch(/1 pool/);
+    // the old selection (shadow book pools incl. the new one) refused it:
+    expect(r.staleness([...new Set(["NEWPOOL"])].map(ageMs), 5000)).toMatch(/1 pool/);
   });
 });
 

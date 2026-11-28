@@ -25,7 +25,7 @@ import { LeaderFeed } from "./leaderFeed.js";
 import { SlotGate } from "./slotGate.js";
 import { parseMmConfig, type MmConfig } from "./config.js";
 import { WriterLock, pruneJsonl } from "./writerLock.js";
-import { Readiness, closeAllMtime, writeStatus } from "./status.js";
+import { Readiness, closeAllMtime, ourPoolAges, writeStatus } from "./status.js";
 import { randomUUID } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
 
@@ -63,7 +63,7 @@ await runService("mm", async ({ config, log }) => {
   // No NEW opens while data is stale, and none before the first successful leader read: the health
   // check gives a 60 s start-up grace, the opens gate does not.
   const readiness = new Readiness(cfg.staleMs);
-  const trackedPoolAges = (): number[] => [...new Set([...book.pools(), ...(live?.pools() ?? [])])].map((p) => gate.ageMs(p));
+  const trackedPoolAges = (): number[] => ourPoolAges(live?.pools() ?? [], (p) => gate.ageMs(p));
   const staleNow = (): string | null => readiness.staleness(trackedPoolAges()); // evaluated at each open, not cached
   if (config.mode === "live" && !wantLive) throw new Error("live mode without MM_LIVE=1: refusing (set MM_LIVE=1 to trade, or DRY_RUN=1 for shadow only)");
   if (wantLive && config.mode !== "live") throw new Error("MM_LIVE=1 needs DRY_RUN=0 and LIVE_CONFIRMED=1");

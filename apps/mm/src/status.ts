@@ -58,6 +58,15 @@ export function stopSafe(st: LiveStatus | null, requestMtime: number | null, run
 }
 
 /**
+ * Which pools' freshness gates a NEW open: only the pools of positions WE hold. Not the shadow
+ * book's (they include the leader's brand-new pool, never read yet: every open was refused as
+ * "stale"), and not the pool being opened (the open reads it itself, fresh, before building).
+ */
+export function ourPoolAges(livePools: string[], ageMs: (pool: string) => number): number[] {
+  return [...new Set(livePools)].map(ageMs);
+}
+
+/**
  * Running is not ready: the service is READY for new opens only after its first successful leader
  * read, and only while the leader feed, the pool reads and every tracked pool are fresh. Recovery
  * and closes do not depend on this.
