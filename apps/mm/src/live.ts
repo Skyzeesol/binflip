@@ -162,6 +162,8 @@ function upgradeSale(x: PendingSale): PendingSale {
 interface OpeningRecord extends OurPosition {
   sigs: SentSig[];
   sentAt: number;
+  /** The simulated SOL spend (lot + rent + fees + priority) reserved for it: survives a restart. */
+  spend?: string;
 }
 
 
@@ -337,7 +339,7 @@ export class LiveMm {
       if (slot.closeRequested) return skip("leader_closed_before_open");
       if (this.stopped()) return skip("kill_file_before_send");
       const now = Math.floor(Date.now() / 1000);
-      const rec: OpeningRecord = { leaderPosition: e.leaderPosition, pool: e.pool, position: built.position!, mintX: info.mintX, binStep: info.binStep, range, openedAt: now, lastMoveAt: now, sigs: [], sentAt: now };
+      const rec: OpeningRecord = { leaderPosition: e.leaderPosition, pool: e.pool, position: built.position!, mintX: info.mintX, binStep: info.binStep, range, openedAt: now, lastMoveAt: now, sigs: [], sentAt: now, spend: spend.toString() };
       this.opening.set(e.leaderPosition, rec);
       this.save(); // position address persisted before the first broadcast
       slot.sent = true;
@@ -380,7 +382,8 @@ export class LiveMm {
   private reservedTotal(): bigint {
     let sum = 0n;
     for (const v of this.reservations.values()) sum += v;
-    for (const k of this.opening.keys()) if (!this.reservations.has(k)) sum += this.opts.lotLamports;
+    // opens restored from the state file: their persisted simulated spend (older files: the lot)
+    for (const [k, o] of this.opening) if (!this.reservations.has(k)) sum += o.spend !== undefined ? BigInt(o.spend) : this.opts.lotLamports;
     return sum;
   }
 
@@ -398,7 +401,7 @@ export class LiveMm {
     }
     const now = Math.floor(Date.now() / 1000);
     if (exists) {
-      const { sigs, sentAt, ...p } = rec; // p keeps closeRequested: persisted with the position
+      const { sigs, sentAt, spend: _spend, ...p } = rec; // p keeps closeRequested: persisted with the position
       this.opening.delete(rec.leaderPosition);
       this.reservations.delete(rec.leaderPosition);
       this.ours.set(rec.leaderPosition, p);

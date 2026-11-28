@@ -16,9 +16,18 @@ export interface FeedState {
   cursor?: string;
   /** Recently handled signatures (replay guard after a crash between handle and save). */
   seen: string[];
-  /** Signatures that could not be read yet: retried on later polls, never blocking newer ones. */
-  retry: Array<{ signature: string; slot: number; tries: number }>;
+  /** Signatures that could not be read or handled yet: retried on later polls, never blocking newer ones. */
+  retry: Array<{ signature: string; slot: number; tries: number; error?: string }>;
+  /**
+   * A history scan that needed more pages than one poll may fetch: what was collected so far
+   * (newest first) and where paging continues. The cursor does NOT move until the scan has
+   * reached it, so nothing between the cursor and the newest signature can be skipped.
+   */
+  scan?: { collected: SigInfo[]; before: string };
 }
+
+/** Raised when the provider itself fails (not one tx): the poll stops, nothing is parked. */
+export class ProviderError extends Error {}
 
 /**
  * The leader's transactions, oldest first, without losing any:
@@ -33,17 +42,19 @@ export interface FeedState {
  */
 export class LeaderFeed {
   state: FeedState = { seen: [], retry: [] };
+  /** Consecutive polls that failed because of the provider (health: feed stalled, not one bad tx). */
+  providerErrors = 0;
 
   constructor(
     private readonly rpc: FeedRpc,
     private readonly leader: string,
     private readonly stateFile: string,
     private readonly handle: (tx: NonNullable<Awaited<ReturnType<FeedRpc["getTransaction"]>>>, info: { signature: string; slot: number; late: boolean }) => Promise<void>,
-    private readonly opts: { pageSize?: number; maxPages?: number; maxTries?: number; onUnreadable?: (signature: string, tries: number) => void; onGap?: (fetched: number) => void } = {},
+    private readonly opts: { pageSize?: number; maxPages?: number; maxTries?: number; outageAfter?: number; onUnreadable?: (signature: string, tries: number) => void; onGap?: (fetched: number) => void } = {},
   ) {
     if (fs.existsSync(stateFile)) {
       const s = JSON.parse(fs.readFileSync(stateFile, "utf8")) as Partial<FeedState>;
-      this.state = { cursor: s.cursor, seen: s.seen ?? [], retry: s.retry ?? [] };
+      this.state = { cursor: s.cursor, seen: s.seen ?? [], retry: s.retry ?? [], scan: s.scan };
     }
   }
 
@@ -64,22 +75,70 @@ export class LeaderFeed {
       }
       return;
     }
-    // 1) everything after the cursor, all pages (newest first from the RPC)
-    const all: SigInfo[] = [];
-    let before: string | undefined;
-    for (let page = 0; page < (this.opts.maxPages ?? 100); page++) {
-      const sigs = await this.rpc.getSignaturesForAddress(this.leader, { limit: pageSize, until: this.state.cursor, ...(before ? { before } : {}) });
+    // 1) everything after the cursor, all pages (newest first from the RPC). A scan that needs
+    //    more than maxPages continues on the next poll (and after a restart) from where it stopped.
+    const maxPages = this.opts.maxPages ?? 100;
+    const all: SigInfo[] = this.state.scan ? [...this.state.scan.collected] : [];
+    let before: string | undefined = this.state.scan?.before;
+    let complete = false;
+    for (let page = 0; page < maxPages; page++) {
+      let sigs: SigInfo[];
+      try {
+        sigs = await this.rpc.getSignaturesForAddress(this.leader, { limit: pageSize, until: this.state.cursor, ...(before ? { before } : {}) });
+      } catch (err) {
+        this.providerErrors++;
+        throw new ProviderError(`signature list: ${(err as Error).message}`);
+      }
       all.push(...sigs);
-      if (sigs.length < pageSize) break;
+      if (sigs.length < pageSize) { complete = true; break; }
       before = sigs.at(-1)!.signature;
-      if (page === (this.opts.maxPages ?? 100) - 1) this.opts.onGap?.(all.length); // more than we page through: say so
     }
+    this.providerErrors = 0;
+    if (!complete) {
+      // not at the cursor yet: keep what we have, continue next poll; the cursor stays put
+      this.state.scan = { collected: all, before: before! };
+      this.save();
+      this.opts.onGap?.(all.length);
+      return;
+    }
+    this.state.scan = undefined;
     const seen = new Set(this.state.seen);
+    // A single tx that fails to read or to handle is parked (retried later, never blocking). Several
+    // in a row with no success in between look like the PROVIDER failing: those are un-parked, the
+    // cursor goes back before them and the poll stops (the health check shows the stalled feed).
+    let streak: Array<{ signature: string; cursorBefore?: string }> = [];
     for (const s of all.reverse()) {
       if (!seen.has(s.signature) && !s.err && !this.state.retry.some((r) => r.signature === s.signature)) {
-        const tx = await this.rpc.getTransaction(s.signature); // throws → cursor stays, retried next poll
-        if (!tx || tx.meta === null || tx.meta === undefined) this.state.retry.push({ signature: s.signature, slot: s.slot, tries: 1 });
-        else await this.handle(tx, { signature: s.signature, slot: s.slot, late: false });
+        let failed: string | null = null;
+        let tx: Awaited<ReturnType<FeedRpc["getTransaction"]>> = null;
+        try {
+          tx = await this.rpc.getTransaction(s.signature);
+          streak = []; // the provider answered
+        } catch (err) {
+          failed = `rpc: ${(err as Error).message}`;
+          streak.push({ signature: s.signature, cursorBefore: this.state.cursor });
+          if (streak.length >= (this.opts.outageAfter ?? 3)) {
+            const first = streak[0]!;
+            const back = new Set(streak.map((x) => x.signature));
+            this.state.retry = this.state.retry.filter((r) => !back.has(r.signature));
+            this.state.seen = this.state.seen.filter((x) => !back.has(x));
+            this.state.cursor = first.cursorBefore;
+            this.save();
+            this.providerErrors++;
+            throw new ProviderError(`${streak.length} transactions in a row failed: ${failed}`);
+          }
+        }
+        if (failed === null) {
+          if (!tx || tx.meta === null || tx.meta === undefined) failed = "not readable yet";
+          else {
+            try {
+              await this.handle(tx, { signature: s.signature, slot: s.slot, late: false });
+            } catch (err) {
+              failed = `handler: ${(err as Error).message}`; // e.g. a decoder error on this one tx: parked, not an outage
+            }
+          }
+        }
+        if (failed !== null) this.state.retry.push({ signature: s.signature, slot: s.slot, tries: 1, error: failed.slice(0, 200) });
       }
       this.state.cursor = s.signature;
       this.state.seen.push(s.signature);
@@ -88,9 +147,24 @@ export class LeaderFeed {
     }
     // 2) parked ones, oldest first
     for (const r of [...this.state.retry].sort((a, b) => a.slot - b.slot)) {
-      const tx = await this.rpc.getTransaction(r.signature).catch(() => null);
+      let ok = false;
+      let tx: Awaited<ReturnType<FeedRpc["getTransaction"]>> = null;
+      let rpcFailed = false;
+      try {
+        tx = await this.rpc.getTransaction(r.signature);
+      } catch (err) {
+        rpcFailed = true;
+        r.error = `rpc: ${(err as Error).message}`.slice(0, 200);
+      }
       if (tx && tx.meta !== null && tx.meta !== undefined) {
-        await this.handle(tx, { signature: r.signature, slot: r.slot, late: true });
+        try {
+          await this.handle(tx, { signature: r.signature, slot: r.slot, late: true });
+          ok = true;
+        } catch (err) {
+          r.error = `handler: ${(err as Error).message}`.slice(0, 200); // same queue as RPC errors
+        }
+      } else if (!rpcFailed) r.error = "not readable yet";
+      if (ok) {
         this.state.retry = this.state.retry.filter((x) => x.signature !== r.signature);
       } else if (++r.tries >= (this.opts.maxTries ?? 10)) {
         this.state.retry = this.state.retry.filter((x) => x.signature !== r.signature);

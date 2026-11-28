@@ -56,7 +56,38 @@ for (const per of ["train", "holdout"]) {
 }
 out.H2.cutsFromTrain = { "7|2": cut72, "2|1": cut21 };
 
-// H3 (by the position's open time t0, written by pnl.mjs)
+// H3 as an EXIT RULE: every moment a position sat 55 min without a move is a trigger. Matched = the
+// leader closed within 55–65 min of the last move; kept open = the leader moved again or closed
+// later than 65 min (the rule would have closed a position the leader kept). From rows.jsonl.
+const rowsFile = `${DATA}/rows.jsonl`;
+const rows = fs.existsSync(rowsFile) ? fs.readFileSync(rowsFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => !r.err && r.position) : [];
+const evByPos = new Map();
+for (const r of rows) {
+  const ev = r.created ? "open" : r.closed ? "close" : r.newMin != null ? "move" : null;
+  if (!ev) continue;
+  const a = evByPos.get(r.position) ?? [];
+  a.push([r.t, ev]);
+  evByPos.set(r.position, a);
+}
+const rule = { train: { triggers: 0, matched: 0, keptOpen: 0, closesActive: 0 }, holdout: { triggers: 0, matched: 0, keptOpen: 0, closesActive: 0 } };
+for (const evs of evByPos.values()) {
+  evs.sort((a, b) => a[0] - b[0]);
+  if (!evs.some((e) => e[1] === "close")) continue; // only positions we saw close
+  for (let i = 1; i < evs.length; i++) {
+    const gap = evs[i][0] - evs[i - 1][0];
+    const per = period(evs[i - 1][0] + 55 * 60);
+    if (gap >= 55 * 60) {
+      rule[per].triggers++;
+      if (evs[i][1] === "close" && gap <= 65 * 60) rule[per].matched++;
+      else rule[per].keptOpen++;
+    } else if (evs[i][1] === "close") rule[per].closesActive++; // closed before 55 min idle: another reason
+  }
+}
+for (const per of ["train", "holdout"]) {
+  const r = rule[per];
+  out.H3[per + "Rule"] = { ...r, precision: r.triggers ? +(r.matched / r.triggers).toFixed(3) : null };
+}
+// H3 descriptive (by the position's open time t0, written by pnl.mjs)
 for (const per of ["train", "holdout"]) {
   const passive = pnl.filter((c) => c.t0 !== undefined && period(c.t0) === per && c.minSinceMove >= 5);
   out.H3[per] = { passive: passive.length, share50to65: passive.length ? +(passive.filter((c) => c.minSinceMove >= 50 && c.minSinceMove <= 65).length / passive.length).toFixed(3) : null };

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LeaderFeed, type SigInfo } from "../src/leaderFeed.js";
+import { LeaderFeed, ProviderError, type SigInfo } from "../src/leaderFeed.js";
 import { leaderEvents, liveOpenAllowed } from "../src/leaderEvents.js";
 import { SlotGate } from "../src/slotGate.js";
 import { serviceTick } from "../src/tick.js";
@@ -15,6 +15,7 @@ class FakeHistory {
   sigs: SigInfo[] = []; // oldest first internally
   unreadable = new Set<string>();
   throwOn = new Set<string>(); // getTransaction throws (RPC error)
+  down = false; // the whole provider fails
   push(n: number, tag = "tx") {
     for (let i = 0; i < n; i++) {
       const slot = 1000 + this.sigs.length;
@@ -30,7 +31,7 @@ class FakeHistory {
         return list.slice(0, o.limit);
       },
       getTransaction: async (sig: string) => {
-        if (this.throwOn.has(sig)) throw new Error("503");
+        if (this.down || this.throwOn.has(sig)) throw new Error("503");
         const s = this.sigs.find((x) => x.signature === sig)!;
         return { meta: this.unreadable.has(sig) ? null : {}, slot: s.slot, blockTime: s.blockTime, sig };
       },
@@ -48,7 +49,7 @@ describe("B3 leader feed: downtime, >200 events, a broken tx and replay, in one 
     const mk = (crashOn?: string) =>
       new LeaderFeed(h.rpc(), LEADER, file, async (tx, info) => {
         handled.push({ sig: info.signature, late: info.late });
-        if (info.signature === crashOn) throw new Error("process crash after handling, before saving progress");
+        if (info.signature === crashOn) await new Promise(() => {}); // the process dies here: handled, progress not saved
       }, { pageSize: 50, maxTries: 3, onUnreadable: (s) => unreadable.push(s) });
     const unreadable: string[] = [];
 
@@ -64,7 +65,8 @@ describe("B3 leader feed: downtime, >200 events, a broken tx and replay, in one 
     // restart from the persisted cursor; a crash right after handling tx #30 (before progress saved)
     const crashSig = h.sigs[5 + 30]!.signature;
     f = mk(crashSig);
-    await expect(f.poll()).rejects.toThrow("process crash");
+    void f.poll();
+    for (let i = 0; i < 400 && !handled.some((x) => x.sig === crashSig); i++) await new Promise((r) => setImmediate(r));
     // restart again: replays #30 (at-least-once), continues to the end
     f = mk();
     await f.poll();
@@ -95,19 +97,78 @@ describe("B3 leader feed: downtime, >200 events, a broken tx and replay, in one 
     expect(f.state.retry).toHaveLength(0);
   });
 
-  it("an RPC error on getTransaction keeps the cursor: the tx is read on the next poll", async () => {
+  it("one old tx whose read keeps failing does not stop the newer ones (parked, retried late)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
+    const h = new FakeHistory();
+    h.push(1);
+    const seen: Array<[string, boolean]> = [];
+    const f = new LeaderFeed(h.rpc(), LEADER, path.join(dir, "f.json"), async (_tx, i) => { seen.push([i.signature, i.late]); }, { maxTries: 10 });
+    await f.poll();
+    h.push(2);
+    const bad = h.sigs[1]!.signature, good = h.sigs[2]!.signature;
+    h.throwOn.add(bad);
+    for (let i = 0; i < 3; i++) await f.poll(); // three polls in a row, the oldest keeps failing
+    expect(seen).toEqual([[good, false]]);
+    expect(f.state.retry.map((r) => r.signature)).toEqual([bad]);
+    h.throwOn.clear();
+    await f.poll();
+    expect(seen.at(-1)).toEqual([bad, true]);
+  });
+
+  it("a handler (decoder) error on one tx parks it instead of stopping the feed", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
+    const h = new FakeHistory();
+    h.push(1);
+    const seen: string[] = [];
+    let bad = "";
+    const f = new LeaderFeed(h.rpc(), LEADER, path.join(dir, "f.json"), async (_tx, i) => { if (i.signature === bad) throw new Error("decode failed"); seen.push(i.signature); }, {});
+    await f.poll();
+    h.push(4);
+    bad = h.sigs[1]!.signature;
+    await f.poll();
+    expect(seen).toEqual(h.sigs.slice(2).map((x) => x.signature));
+    expect(f.state.retry[0]).toMatchObject({ signature: bad, error: "handler: decode failed" });
+  });
+
+  it("a provider outage (every read fails) stops the poll without parking or skipping anything", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
     const h = new FakeHistory();
     h.push(1);
     const seen: string[] = [];
     const f = new LeaderFeed(h.rpc(), LEADER, path.join(dir, "f.json"), async (_tx, i) => { seen.push(i.signature); }, {});
     await f.poll();
-    h.push(2);
-    h.throwOn.add(h.sigs[1]!.signature);
-    await expect(f.poll()).rejects.toThrow("503");
-    h.throwOn.clear();
+    const cursor = f.state.cursor;
+    h.push(5);
+    h.down = true;
+    await expect(f.poll()).rejects.toBeInstanceOf(ProviderError);
+    expect(f.state.cursor).toBe(cursor);
+    expect(f.state.retry).toHaveLength(0);
+    expect(f.providerErrors).toBe(1);
+    h.down = false;
     await f.poll();
-    expect(seen).toEqual([h.sigs[1]!.signature, h.sigs[2]!.signature]);
+    expect(seen).toEqual(h.sigs.slice(1).map((x) => x.signature));
+    expect(f.providerErrors).toBe(0);
+  });
+
+  it("more history than one poll may page: the cursor stays until the scan reaches it; after a restart the oldest close is still handled", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feed-"));
+    const file = path.join(dir, "f.json");
+    const h = new FakeHistory();
+    h.push(1);
+    const seen: string[] = [];
+    const gaps: number[] = [];
+    const mk = () => new LeaderFeed(h.rpc(), LEADER, file, async (_tx, i) => { seen.push(i.signature); }, { pageSize: 10, maxPages: 2, onGap: (n) => gaps.push(n) });
+    await mk().poll();
+    const cursor = mk().state.cursor;
+    h.push(55); // the oldest of these is the leader's close
+    const oldestClose = h.sigs[1]!.signature;
+    await mk().poll(); // 20 of 55 collected, nothing handled, cursor unchanged
+    expect(seen).toEqual([]);
+    expect(mk().state.cursor).toBe(cursor);
+    expect(gaps).toEqual([20]);
+    for (let i = 0; i < 3; i++) await mk().poll(); // restarts in between (a new instance each time)
+    expect(seen[0]).toBe(oldestClose);
+    expect(seen).toEqual(h.sigs.slice(1).map((x) => x.signature));
   });
 });
 

@@ -234,4 +234,21 @@ describe("recovery and budget", () => {
     expect(c.broadcasts.filter((b) => b.kind === "open")).toHaveLength(2);
     expect(m.ours()).toHaveLength(1);
   });
+
+  it("restart with an unresolved open: its simulated spend (not just the lot) stays reserved; an open that would dip into the reserve is refused", async () => {
+    const c = new FakeChain();
+    // room for exactly ONE open (lot + 0.06 SOL rent/fees) above the reserve, plus a lot: the old
+    // restart accounting reserved only the lot and let a second open through
+    c.sol = RESERVE + 2n * LOT + 60_000_000n + 1n;
+    const m = make(c);
+    c.behaviours.open.push("hang"); // signed and broadcast, then the process dies (never landed)
+    void m.mm.onLeaderOpen({ leaderPosition: "L1", pool: "P", t: Math.floor(Date.now() / 1000) });
+    await flush(50);
+    expect(m.state().opening[0]).toMatchObject({ leaderPosition: "L1", spend: String(LOT + 60_000_000n) });
+    const r = make(c, { dir: m.dir });
+    await r.mm.onLeaderOpen({ leaderPosition: "L2", pool: "P", t: Math.floor(Date.now() / 1000) });
+    expect(r.kinds()).toEqual(["open_skipped:low_balance"]);
+    expect(c.broadcasts.filter((b) => b.kind === "open")).toHaveLength(1);
+  });
 });
+

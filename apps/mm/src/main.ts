@@ -236,7 +236,7 @@ await runService("mm", async ({ config, log }) => {
   const statsTimer = setInterval(() => {
     stale = staleness();
     const liveStatus = live?.status() ?? null;
-    const s = { ...book.summary(), liveOpen: live?.openCount ?? null, live: liveStatus, stale, writeErrors, leaderRetry: feed.state.retry.length, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
+    const s = { ...book.summary(), liveOpen: live?.openCount ?? null, live: liveStatus, stale, writeErrors, leaderRetry: feed.state.retry.length, leaderProviderErrors: feed.providerErrors, leaderScanPending: feed.state.scan?.collected.length ?? 0, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
     log.info(s, "mm stats");
     write("stats", { t: Math.floor(Date.now() / 1000), ...s });
     if (liveStatus) {
@@ -255,7 +255,10 @@ await runService("mm", async ({ config, log }) => {
         if ((book.pools().length || live?.pools().length) && Date.now() - lastTickOk > 60_000) throw new Error("no pool read for 60s");
       },
       leader: async () => {
+        // provider-wide failure (every read failing) is told apart from single parked txs
+        if (feed.providerErrors >= 3) throw new Error(`RPC provider failing: ${feed.providerErrors} polls in a row`);
         if (Date.now() - lastLeaderOk > 60_000) throw new Error(`leader feed stalled for ${Math.round((Date.now() - lastLeaderOk) / 1000)} s`);
+        if (feed.state.retry.length > 20) throw new Error(`${feed.state.retry.length} leader txs parked (unreadable)`);
       },
       pools: async () => {
         const old = [...new Set([...book.pools(), ...(live?.pools() ?? [])])].filter((p) => gate.ageMs(p) > 120_000);

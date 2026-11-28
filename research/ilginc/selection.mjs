@@ -1,7 +1,9 @@
 // H4 pool selection, from the recorder: at each leader SOL open, the chosen pool vs every OTHER
 // eligible pool in the SAME pre-decision universe snapshot (the newest snapshot taken before the
 // open's block time, at most 5 min old). Eligible = SOL is Y and the bin step is one the leader
-// uses. For each feature: the chosen pool's percentile among the eligible ones (0.5 = no signal,
+// used in an EARLIER open (fixed before the open is scored; the open's own pool never defines the
+// set it is scored against; opens before any bin step is known are a warm-up, not scored).
+// For each feature: the chosen pool's percentile among the eligible ones (0.5 = no signal,
 // 1 = always the top). TRAIN / HOLDOUT split at a fixed time.
 //
 //   node selection.mjs <recorder dir> [splitISO]
@@ -36,7 +38,7 @@ const feats = {
 };
 const bsUsed = new Set();
 const res = { train: [], holdout: [] };
-let noSnap = 0, notInUniverse = 0;
+let noSnap = 0, notInUniverse = 0, warmup = 0;
 let si = 0;
 for (const o of opens) {
   while (si + 1 < snaps.length && snaps[si + 1].t <= o.t) si++;
@@ -44,9 +46,11 @@ for (const o of opens) {
   if (!s || s.t > o.t || o.t - s.t > MAX_AGE_MS) { noSnap++; continue; }
   const chosen = s.pools.find((p) => p.a === o.pool);
   if (!chosen) { notInUniverse++; continue; }
-  if (chosen.bs) bsUsed.add(chosen.bs);
-  const eligible = s.pools.filter((p) => p.y === WSOL && p.a !== o.pool && (!bsUsed.size || bsUsed.has(p.bs)));
-  const row = { t: o.t, eligible: eligible.length };
+  if (!bsUsed.size) { warmup++; if (chosen.bs) bsUsed.add(chosen.bs); continue; }
+  const eligible = s.pools.filter((p) => p.y === WSOL && p.a !== o.pool && bsUsed.has(p.bs));
+  const chosenEligibleBs = bsUsed.has(chosen.bs);
+  if (chosen.bs) bsUsed.add(chosen.bs); // only AFTER this open is scored
+  const row = { t: o.t, eligible: eligible.length, newBinStep: !chosenEligibleBs };
   for (const [k, f] of Object.entries(feats)) {
     const v = f(chosen, o.t);
     const others = eligible.map((p) => f(p, o.t)).filter((x) => x != null && Number.isFinite(x));
@@ -56,9 +60,9 @@ for (const o of opens) {
 }
 const med = (a) => { const s = a.filter((x) => x != null).sort((x, y) => x - y); return s.length ? +s[Math.floor(s.length / 2)].toFixed(3) : null; };
 const top = (a, q) => { const s = a.filter((x) => x != null); return s.length ? +(s.filter((x) => x >= q).length / s.length).toFixed(3) : null; };
-const summary = { split: new Date(split).toISOString(), opens: opens.length, noRecentSnapshot: noSnap, chosenNotInUniverse: notInUniverse };
+const summary = { split: new Date(split).toISOString(), opens: opens.length, noRecentSnapshot: noSnap, chosenNotInUniverse: notInUniverse, warmup };
 for (const per of ["train", "holdout"]) {
-  summary[per] = { n: res[per].length, medianEligible: med(res[per].map((r) => r.eligible)) };
+  summary[per] = { n: res[per].length, medianEligible: med(res[per].map((r) => r.eligible)), chosenWithANewBinStep: res[per].filter((r) => r.newBinStep).length };
   for (const k of Object.keys(feats)) summary[per][k] = { medianPercentile: med(res[per].map((r) => r[k])), shareTop20: top(res[per].map((r) => r[k]), 0.8) };
 }
 console.log(JSON.stringify(summary, null, 1));
