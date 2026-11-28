@@ -207,7 +207,7 @@ export class ShadowBook {
     if (!p) {
       this.positions.set(e.position, { position: e.position, pool: e.pool, binStep: e.binStep, range: e.next, pending: [], openedAt: e.t, lastMoveAt: e.t, leaderMoveAt: e.t });
       this.stats.adopted++;
-      return { t: e.t, position: e.position, pool: e.pool, outcome: "adopted", leader, extra: 0 };
+      return { t: e.t, position: e.position, pool: e.pool, outcome: "adopted", leader, leaderSlot: e.slot, extra: 0 };
     }
 
     // The decision that answers this leader move is our first one since the last sync.

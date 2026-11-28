@@ -25,7 +25,7 @@ const getTx = (sig) => rpc("getTransaction", [sig, { encoding: "json", maxSuppor
 
 const OUTCOME = process.env.OUTCOME ?? "missed"; // OUTCOME=match: exercise the script on a control group
 const missed = compares.filter((c) => c.outcome === OUTCOME);
-console.log(`${dir}: ${compares.length} comparisons, ${missed.length} missed`);
+console.log(`${dir}: ${compares.length} comparisons, ${missed.length} ${OUTCOME}${OUTCOME === "missed" ? "" : " (control group: 'cause' labels only mean something for missed)"}`);
 const causes = {};
 for (const m of missed) {
   const prev = compares.filter((c) => c.position === m.position && c.t <= m.t && c.sig !== m.sig).at(-1);
@@ -40,7 +40,7 @@ for (const m of missed) {
   const sigs = (await rpc("getSignaturesForAddress", [m.position, { before: m.sig, limit: 15 }])) ?? [];
   const between = [];
   for (const s of sigs) {
-    if (s.slot <= fromSlot) break;
+    if (s.signature === prev?.sig || s.slot <= fromSlot) break; // reached our sync point
     const t2 = await getTx(s.signature);
     const names = t2 ? decodeMeteoraTx(t2).filter((d) => d.protocol === "dlmm").map((d) => d.name) : ["?"];
     between.push(`${s.signature.slice(0, 8)}${s.err ? "(FAILED)" : ""}:${[...new Set(names)].join("+")}`);
