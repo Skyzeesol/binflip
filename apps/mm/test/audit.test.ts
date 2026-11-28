@@ -269,5 +269,19 @@ describe("recovery and budget", () => {
     expect(c.broadcasts.filter((b) => b.kind === "close")).toHaveLength(2);
     expect(m.state().sales.map((x: { leaderPosition: string }) => x.leaderPosition)).toContain("L1");
   });
+
+  it("CLOSE_ALL while the service tick's price read hangs: started from serviceTick, the close intent reaches disk and the close goes on", async () => {
+    const c = new FakeChain();
+    const m = make(c);
+    await openOne(c, m);
+    fs.writeFileSync(path.join(m.dir, "CLOSE_ALL"), "");
+    const hangingRead = () => new Promise<Map<string, { activeId: number; slot?: number }>>(() => {});
+    void serviceTick({ book: { pools: () => [], onTick: () => [], checkExits: () => [] }, live: m.mm, watcher: null, readPools: hangingRead, write: () => {} });
+    await flush(60);
+    // the price read never answered, yet the close intent was persisted and the close was sent
+    const pos = m.state().positions as Array<{ closeRequested?: boolean }>;
+    expect(pos.length === 0 || pos.every((p) => p.closeRequested === true)).toBe(true);
+    expect(c.broadcasts.filter((b) => b.kind === "close")).toHaveLength(1);
+  });
 });
 

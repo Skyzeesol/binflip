@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { closeAllMtime, stopSafe, type LiveStatus } from "./status.js";
+import { closeAllMtime, runningRunId, stopSafe, type LiveStatus } from "./status.js";
 
 /**
  * Wait until it is safe to stop after CLOSE_ALL (run inside the service container):
@@ -18,7 +18,7 @@ for (;;) {
   } catch {
     st = null;
   }
-  const r = stopSafe(st, closeAllMtime(closeAllFile));
+  const r = stopSafe(st, closeAllMtime(closeAllFile), runningRunId(path.join(dir, "mm.lock")));
   if (r.why !== last) console.log(new Date().toISOString(), r.why);
   last = r.why;
   if (r.ok) process.exit(0);

@@ -55,10 +55,10 @@ const COMMITMENT = cfg.commitment;
 await runService("mm", async ({ config, log }) => {
   // Live needs BOTH Binflip's live gates (DRY_RUN=0 + LIVE_CONFIRMED=1) AND MM_LIVE=1.
   const wantLive = cfg.live;
-  const runId = randomUUID(), startedAt = Date.now();
   const closeAllPath = process.env.MM_CLOSE_ALL_FILE ?? path.join(OUT_DIR, "CLOSE_ALL");
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const lock = new WriterLock(OUT_DIR);
+  const runId = randomUUID(), startedAt = Date.now();
+  const lock = new WriterLock(OUT_DIR, 30_000, runId); // the lock heartbeat names the running run (stopwait checks it)
   lock.acquire(); // one writer per data directory, before any state is read
   // No NEW opens while data is stale, and none before the first successful leader read: the health
   // check gives a 60 s start-up grace, the opens gate does not.

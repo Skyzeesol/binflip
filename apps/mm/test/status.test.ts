@@ -5,7 +5,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import { LiveMm } from "../src/live.js";
-import { Readiness, closeAllMtime, stopSafe, writeStatus, type LiveStatus } from "../src/status.js";
+import { Readiness, closeAllMtime, runningRunId, stopSafe, writeStatus, type LiveStatus } from "../src/status.js";
+import { WriterLock } from "../src/writerLock.js";
 import { FakeChain, OWNER } from "./fakeChain.js";
 
 const st = (o: Partial<LiveStatus>): LiveStatus => ({ runId: "r", startedAt: 0, t: 0, closeAll: false, closeAllRequestedAt: null, idle: true, ...o });
@@ -17,17 +18,20 @@ describe("stop only on a fresh record that saw THIS CLOSE_ALL", () => {
     writeStatus(status, st({ runId: "previous", t: Date.now() - 3_600_000, idle: true, closeAll: false }));
     fs.writeFileSync(req, "");
     const old = JSON.parse(fs.readFileSync(status, "utf8"));
-    expect(stopSafe(old, closeAllMtime(req)).ok).toBe(false);
+    expect(stopSafe(old, closeAllMtime(req), "current").ok).toBe(false);
   });
 
   it("idle for an EARLIER request, or written before this one, does not count; only after this request does", () => {
     const now = 2_000_000;
     const reqAt = 1_990_000;
-    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt - 60_000, idle: true }), reqAt, now).ok).toBe(false); // earlier request
-    expect(stopSafe(st({ t: reqAt - 10, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, now, 60_000).ok).toBe(false); // before the request
-    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: false }), reqAt, now).ok).toBe(false); // still busy
-    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, now).ok).toBe(true);
-    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), null, now).ok).toBe(false); // no request
+    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt - 60_000, idle: true }), reqAt, "r", now).ok).toBe(false); // earlier request
+    expect(stopSafe(st({ t: reqAt - 10, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, "r", now, 60_000).ok).toBe(false); // before the request
+    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: false }), reqAt, "r", now).ok).toBe(false); // still busy
+    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, "r", now).ok).toBe(true);
+    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), null, "r", now).ok).toBe(false); // no request
+    // the SAME request, but the record comes from a previous run (the CLOSE_ALL file outlived a restart)
+    expect(stopSafe(st({ runId: "previous", t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, "current", now)).toMatchObject({ ok: false, why: "status record is from another run" });
+    expect(stopSafe(st({ t: now - 1000, closeAll: true, closeAllRequestedAt: reqAt, idle: true }), reqAt, null, now).ok).toBe(false); // no running service
   });
 
   it("the status file is replaced atomically (no partial JSON)", () => {
@@ -72,3 +76,16 @@ describe("readiness", () => {
     expect(r.staleness([45_000], 40_000)).toMatch(/1 pool/);
   });
 });
+
+describe("the running run is read from the lock heartbeat", () => {
+  it("fresh lock → its runId; stale or missing → none", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "run-"));
+    const lock = new WriterLock(dir, 30_000, "run-A");
+    lock.acquire();
+    expect(runningRunId(path.join(dir, "mm.lock"))).toBe("run-A");
+    expect(runningRunId(path.join(dir, "mm.lock"), Date.now() + 60_000)).toBeNull();
+    lock.release();
+    expect(runningRunId(path.join(dir, "mm.lock"))).toBeNull();
+  });
+});
+

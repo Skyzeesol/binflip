@@ -11,7 +11,7 @@ export class WriterLock {
   private timer: ReturnType<typeof setInterval> | null = null;
   readonly file: string;
 
-  constructor(dir: string, private readonly staleMs = 30_000) {
+  constructor(dir: string, private readonly staleMs = 30_000, readonly runId?: string) {
     this.file = path.join(dir, "mm.lock");
   }
 
@@ -30,7 +30,7 @@ export class WriterLock {
   }
 
   private beat(now = Date.now()): void {
-    fs.writeFileSync(this.file + ".tmp", JSON.stringify({ pid: process.pid, host: os.hostname(), heartbeat: now }));
+    fs.writeFileSync(this.file + ".tmp", JSON.stringify({ pid: process.pid, host: os.hostname(), heartbeat: now, runId: this.runId }));
     fs.renameSync(this.file + ".tmp", this.file);
   }
 

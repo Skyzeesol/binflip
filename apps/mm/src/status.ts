@@ -21,6 +21,16 @@ export function writeStatus(file: string, st: LiveStatus): void {
   fs.renameSync(file + ".tmp", file);
 }
 
+/** runId of the service holding the data directory now: from mm.lock with a fresh heartbeat. */
+export function runningRunId(lockFile: string, now = Date.now(), staleMs = 30_000): string | null {
+  try {
+    const l = JSON.parse(fs.readFileSync(lockFile, "utf8")) as { heartbeat: number; runId?: string };
+    return now - l.heartbeat < staleMs && l.runId ? l.runId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function closeAllMtime(file: string): number | null {
   try {
     return Math.floor(fs.statSync(file).mtimeMs);
@@ -33,9 +43,12 @@ export function closeAllMtime(file: string): number | null {
  * Is it safe to stop now? Only on a record written by the running service AFTER it saw the current
  * CLOSE_ALL request, fresh, with closeAll and idle both true.
  */
-export function stopSafe(st: LiveStatus | null, requestMtime: number | null, now = Date.now(), maxAgeMs = 30_000): { ok: boolean; why: string } {
+export function stopSafe(st: LiveStatus | null, requestMtime: number | null, runningRunId: string | null, now = Date.now(), maxAgeMs = 30_000): { ok: boolean; why: string } {
   if (requestMtime === null) return { ok: false, why: "no CLOSE_ALL request" };
   if (!st) return { ok: false, why: "no status record" };
+  // the record must come from the service that is running NOW (same CLOSE_ALL file can outlive a restart)
+  if (!runningRunId) return { ok: false, why: "no running service (lock heartbeat missing or stale)" };
+  if (st.runId !== runningRunId) return { ok: false, why: "status record is from another run" };
   if (now - st.t > maxAgeMs) return { ok: false, why: `status record is ${Math.round((now - st.t) / 1000)} s old (service not writing?)` };
   if (st.closeAllRequestedAt !== requestMtime) return { ok: false, why: "the service has not seen this CLOSE_ALL request yet" };
   if (st.t < requestMtime) return { ok: false, why: "record written before the request" };

@@ -10,6 +10,8 @@ export interface TickDeps {
   write(kind: string, obj: Record<string, unknown>): void;
   /** Shared with the WebSocket path: stale observations (older slot than already seen) are dropped. */
   gate?: SlotGate;
+  /** Bound on the pool read (default 20 s): a read that never answers must not stall the loop. */
+  readTimeoutMs?: number;
 }
 
 /**
@@ -21,10 +23,17 @@ export interface TickDeps {
 export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 1000)): Promise<void> {
   const pools = [...new Set([...d.book.pools(), ...(d.live?.pools() ?? [])])];
   d.watcher?.setAddresses(pools);
+  // Live housekeeping starts FIRST and runs alongside the pool read: CLOSE_ALL intents are persisted
+  // at its very start, so neither a slow nor a hung price read can keep them from disk.
+  const housekeeping = d.live ? d.live.checkIdle(now) : Promise.resolve();
   let readError: unknown;
   if (pools.length) {
     try {
-      const states = await d.readPools(pools);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const states = await Promise.race([
+        d.readPools(pools),
+        new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`pool read took longer than ${d.readTimeoutMs ?? 20_000} ms`)), d.readTimeoutMs ?? 20_000); }),
+      ]).finally(() => clearTimeout(timer));
       if (states.size === 0) throw new Error(`pool read returned no accounts for ${pools.length} pools`); // empty ≠ fresh
       for (const [pool, s] of states) {
         if (d.gate && !d.gate.accept(pool, s.slot)) continue; // older than what we already acted on
@@ -36,6 +45,6 @@ export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 100
     }
   }
   for (const p of d.book.checkExits(now)) d.write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });
-  await d.live?.checkIdle(now);
+  await housekeeping;
   if (readError) throw readError;
 }
