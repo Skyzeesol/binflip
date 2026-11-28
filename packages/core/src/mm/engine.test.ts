@@ -159,3 +159,36 @@ describe("idle exit (55 min without a rebalance)", () => {
     expect(b.summary().exitOtherPct).toBe(100);
   });
 });
+
+import { mmAddsAt, mmRangeAfter, mmTokensDeposited } from "./plan.js";
+
+describe("mmAddsAt: putting holdings back next to the active bin", () => {
+  it("SOL: y0 = y / w below the active bin", () => {
+    const a = mmAddsAt(0n, 1_000_000_000n, 10, 192, 1);
+    expect(a).toEqual([{ minDeltaId: -10, maxDeltaId: -1, x0: 0n, y0: 100_000_000n, deltaX: 0n, deltaY: 0n }]);
+    expect(mmAddsAt(0n, 1_000_000_000n, 10, 192)[0]!.y0).toBe(99_900_000n); // default keeps 0.1% back
+    expect(mmRangeAfter(a, 192)).toEqual({ lower: 182, upper: 191, side: "sol" });
+  });
+  it("token: spends (almost) all tokens, never more", () => {
+    for (const [bs, active, x] of [[100, -570, 95_391_926_624n], [20, 682, 1_000_000_000n], [8, -6340, 7_000_000n], [10, 3059, 123_456_789_012n]] as const) {
+      const a = mmAddsAt(x, 0n, bs, active, 1);
+      const dep = mmTokensDeposited(a, bs, active);
+      expect(dep).toBeLessThanOrEqual(Number(x));
+      expect(dep / Number(x)).toBeGreaterThan(0.999); // integer x0 rounding leaves a sliver in the wallet (sold on close)
+      expect(mmRangeAfter(a, active).side).toBe("token");
+      expect(mmRangeAfter(a, active).lower).toBe(active + 1);
+    }
+  });
+  it("matches a real BviQ token move: x0 ≈ xA × price, 1 bin", () => {
+    // JIMMY-SOL style 1-bin move (bin step 80): BviQ deposited xA tokens with x0 ≈ xA·price(active+1)
+    const bs = 80, active = -600, x = 1_000_000_000_000n;
+    const [a] = mmAddsAt(x, 0n, bs, active, 1);
+    const expected = Number(x) * Math.pow(1.008, active + 1);
+    expect(Math.abs(Number(a!.x0) - expected) / expected).toBeLessThan(2e-6); // the 1e-6 safety haircut
+  });
+  it("mixed holdings: both sides", () => {
+    const a = mmAddsAt(5_000n, 2_000n, 100, 0);
+    expect(a).toHaveLength(2);
+    expect(mmRangeAfter(a, 0)).toMatchObject({ lower: -1, upper: 1 });
+  });
+});

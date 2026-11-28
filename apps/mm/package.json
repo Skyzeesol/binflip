@@ -12,7 +12,11 @@
   "dependencies": {
     "@binflip/core": "workspace:*",
     "https-proxy-agent": "^9.1.0",
-    "ws": "^8.23.0"
+    "ws": "^8.23.0",
+    "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
+    "@coral-xyz/anchor": "^0.32.1",
+    "@meteora-ag/dlmm": "1.9.14"
   },
   "devDependencies": {
     "@types/ws": "^8.18.2"

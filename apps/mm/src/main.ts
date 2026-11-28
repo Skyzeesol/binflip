@@ -11,8 +11,15 @@ import {
   type MmRange,
   type RawTransaction,
   wsUrlFromHttp,
+  DlmmTxBuilder,
+  KeystoreSigner,
+  TxSender,
+  createConnection,
+  readPassphraseFile,
 } from "@binflip/core";
 import { AccountWatcher } from "./accountWatcher.js";
+import { LiveMm } from "./live.js";
+import { PublicKey } from "@solana/web3.js";
 
 /**
  * mm — İlginç (BviQ) market-making engine, SHADOW mode.
@@ -31,9 +38,33 @@ const USE_WS = (process.env.MM_WS ?? "1") !== "0";
 const COMMITMENT = (process.env.MM_COMMITMENT ?? "processed") as "processed" | "confirmed";
 
 await runService("mm", async ({ config, log }) => {
-  if (config.mode === "live") throw new Error("mm has no live mode yet: run it with DRY_RUN=1 (shadow only)");
+  // Live needs BOTH Binflip's live gates (DRY_RUN=0 + LIVE_CONFIRMED=1) AND MM_LIVE=1.
+  const wantLive = process.env.MM_LIVE === "1";
+  if (config.mode === "live" && !wantLive) throw new Error("live mode without MM_LIVE=1: refusing (set MM_LIVE=1 to trade, or DRY_RUN=1 for shadow only)");
+  if (wantLive && config.mode !== "live") throw new Error("MM_LIVE=1 needs DRY_RUN=0 and LIVE_CONFIRMED=1");
   const rpc = new SolanaRpc(config.SOLANA_RPC_URL, { retries: 6, timeoutMs: 20_000 });
   const book = new ShadowBook();
+  let live: LiveMm | null = null;
+  if (wantLive) {
+    if (!config.KEYSTORE_PATH || !config.KEYSTORE_PASSPHRASE_FILE) throw new Error("MM_LIVE=1 needs KEYSTORE_PATH and KEYSTORE_PASSPHRASE_FILE");
+    const signer = KeystoreSigner.fromFile(config.KEYSTORE_PATH, readPassphraseFile(config.KEYSTORE_PASSPHRASE_FILE));
+    await signer.selfTest();
+    const conn = createConnection(config.SOLANA_RPC_URL, config.SOLANA_WS_URL);
+    const owner = new PublicKey(signer.publicKey);
+    const sol = (v: string | undefined, d: number) => BigInt(Math.round(Number(v ?? d) * 1e9));
+    live = new LiveMm(new DlmmTxBuilder(conn, owner), new TxSender(conn, signer), owner, {
+      lotLamports: sol(process.env.MM_LOT_SOL, 0.1),
+      maxPositions: Number(process.env.MM_MAX_POSITIONS ?? 3),
+      reserveLamports: sol(process.env.MM_RESERVE_SOL, 0.15),
+      slippageBins: Number(process.env.MM_SLIPPAGE_BINS ?? 0),
+      priorityMicroLamports: Number(process.env.MM_PRIORITY_MICROLAMPORTS ?? 10_000),
+      stateFile: path.join(OUT_DIR, "live-state.json"),
+      killFile: process.env.MM_KILL_FILE ?? path.join(OUT_DIR, "STOP"),
+      closeAllFile: process.env.MM_CLOSE_ALL_FILE ?? path.join(OUT_DIR, "CLOSE_ALL"),
+    }, log, (kind, obj) => write(kind, obj));
+    const balance = await conn.getBalance(owner);
+    log.warn({ wallet: signer.publicKey, balanceSol: balance / 1e9, lotSol: Number(process.env.MM_LOT_SOL ?? 0.1), maxPositions: Number(process.env.MM_MAX_POSITIONS ?? 3) }, "LIVE: mm will send transactions");
+  }
   const binSteps = new Map<string, number>();
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -96,6 +127,7 @@ await runService("mm", async ({ config, log }) => {
         write("compare", { sig: tx.signature, ...cmp });
       } else if (e.name === "PositionClose") {
         const position = str(e.data.position);
+        void live?.onLeaderClose(position);
         const closed = book.onClose(position, t);
         if (closed) {
           write("leader", { t, sig: tx.signature, kind: "close", position });
@@ -116,6 +148,7 @@ await runService("mm", async ({ config, log }) => {
         const side = big(amounts[0]) > 0n && big(amounts[1]) === 0n ? "token" : "sol";
         if (bs && Number.isFinite(lower) && width > 0) {
           book.onOpen({ position, pool, binStep: bs, range: { lower, upper: lower + width - 1, side }, t });
+          if (side === "sol" && Date.now() / 1000 - t < 120) void live?.onLeaderOpen({ leaderPosition: position, pool, t });
           write("leader", { t, sig: tx.signature, kind: "open", position, pool, binStep: bs, lower, width, side, amountY: String(amounts[1] ?? "0") });
         }
       }
@@ -181,6 +214,7 @@ await runService("mm", async ({ config, log }) => {
           binSteps.set(pool, s.binStep);
           const now = Math.floor(Date.now() / 1000);
           for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "ws", ...d });
+          live?.onTick(pool, s.activeId);
           lastTickOk = Date.now();
         } catch (err) {
           log.debug({ err, pool }, "ws decode failed");
@@ -191,19 +225,21 @@ await runService("mm", async ({ config, log }) => {
 
   loop("leader", TX_POLL_MS, pollLeader);
   loop("tick", TICK_MS, async () => {
-    const pools = book.pools();
+    const pools = [...new Set([...book.pools(), ...(live?.pools() ?? [])])];
     watcher?.setAddresses(pools);
     if (!pools.length) return;
     const states = await readPools(pools);
     const now = Math.floor(Date.now() / 1000);
     for (const [pool, s] of states) {
       for (const d of book.onTick(pool, s.activeId, now)) write("ours", { t: now, pool, active: s.activeId, via: "poll", ...d });
+      live?.onTick(pool, s.activeId);
     }
     for (const p of book.checkExits(now)) write("ours", { t: now, pool: p.pool, position: p.position, kind: "idle_exit", lastMoveAt: p.lastMoveAt });
+    await live?.checkIdle(now);
     lastTickOk = Date.now();
   });
   const statsTimer = setInterval(() => {
-    const s = { ...book.summary(), wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
+    const s = { ...book.summary(), liveOpen: live?.openCount ?? null, wsConnected: watcher?.connected ?? null, wsNotifications: watcher?.notifications ?? null };
     log.info(s, "shadow stats");
     write("stats", { t: Math.floor(Date.now() / 1000), ...s });
   }, STATS_MS);

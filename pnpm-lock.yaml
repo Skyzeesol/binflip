@@ -135,6 +135,18 @@ importers:
       '@binflip/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@coral-xyz/anchor':
+        specifier: ^0.32.1
+        version: 0.32.1(bufferutil@4.2.0)(typescript@7.0.2)
+      '@meteora-ag/dlmm':
+        specifier: 1.9.14
+        version: 1.9.14(bufferutil@4.2.0)(fastestsmallesttextencoderdecoder@1.0.22)(typescript@7.0.2)
+      '@solana/web3.js':
+        specifier: ^1.99.0
+        version: 1.99.0(bufferutil@4.2.0)(typescript@7.0.2)(utf-8-validate@6.1.0)
+      bs58:
+        specifier: ^6.0.0
+        version: 6.0.0
       https-proxy-agent:
         specifier: ^9.1.0
         version: 9.1.0

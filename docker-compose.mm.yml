@@ -1,0 +1,49 @@
+# İlginç market-making engine (apps/mm), standalone: does NOT touch the Binflip stack
+# (no postgres/redis/migrate, own compose project). See deploy/MM_LIVE.md.
+#
+#   Shadow only (default):  docker compose -f docker-compose.mm.yml up -d --build
+#   Live (small lot):       MM_LIVE=1 in .env.mm + keystore + passphrase file, then the same command
+name: binflip-mm
+
+services:
+  mm:
+    image: binflip-mm:local
+    build: .
+    restart: unless-stopped
+    command: ["node", "apps/mm/dist/main.js"]
+    env_file:
+      - path: .env.mm
+        required: true
+    environment:
+      # Config validation needs these; mm never connects to them.
+      DATABASE_URL: postgres://unused:unused@127.0.0.1:5432/unused
+      REDIS_URL: redis://127.0.0.1:6379
+      HEALTH_HOST: 127.0.0.1
+      HEALTH_PORT: "8080"
+      MM_OUT_DIR: /data/mm
+      KEYSTORE_PATH: /keystore/mm.json
+      KEYSTORE_PASSPHRASE_FILE: /run/secrets/mm_passphrase
+    volumes:
+      - ./keystore-mm:/keystore:ro
+      - ./mm-data:/data/mm
+    secrets:
+      - mm_passphrase
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # One-off: create the bot wallet (prompts for the passphrase twice, prints the public key).
+  #   docker compose -f docker-compose.mm.yml run --rm -it wallet
+  wallet:
+    image: binflip-mm:local
+    profiles: ["tools"]
+    command: ["node", "apps/mm/dist/wallet.js", "create", "--out", "/keystore/mm.json"]
+    volumes:
+      - ./keystore-mm:/keystore
+
+secrets:
+  mm_passphrase:
+    file: ./secrets/mm_passphrase
