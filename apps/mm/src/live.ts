@@ -41,6 +41,8 @@ export interface LiveOptions {
   idleSec?: number;
   /** Min spacing of outcome lookups for a rebalance in flight, from ticks (default 2000 ms). */
   settleEveryMs?: number;
+  /** How often copied leader positions are checked on chain (missed-close backstop, default 60 s). */
+  leaderCheckMs?: number;
 }
 
 interface OurPosition {
@@ -540,6 +542,23 @@ export class LiveMm {
   }
 
   /** Idle exit as a backstop (e.g. if we missed the leader's close). */
+  /**
+   * Backstop for a missed leader close (unreadable tx, downtime gap): every leader position we
+   * copy (open or opening) is checked on chain; gone → treated as the leader's close.
+   */
+  async reconcileLeaderPositions(why = "periodic"): Promise<void> {
+    const leaderPositions = [...new Set([...this.ours.keys(), ...this.opening.keys()])];
+    if (!leaderPositions.length) return;
+    const infos = await this.builder.connection.getMultipleAccountsInfo(leaderPositions.map((k) => new PublicKey(k)), "confirmed");
+    for (const [i, lp] of leaderPositions.entries()) {
+      if (infos[i] !== null) continue;
+      this.record("live", { t: Math.floor(Date.now() / 1000), kind: "leader_position_gone", why, leaderPosition: lp });
+      await this.onLeaderClose(lp, "leader_position_gone");
+    }
+  }
+
+  private lastLeaderCheck = Date.now(); // main calls reconcileLeaderPositions("startup") itself
+
   /** Sales owed after a close; true while any is still pending. */
   get pendingSales(): number {
     return this.sales.size;
@@ -547,6 +566,10 @@ export class LiveMm {
 
   async checkIdle(now: number): Promise<void> {
     await this.recoverOpening();
+    if (Date.now() - this.lastLeaderCheck >= (this.opts.leaderCheckMs ?? 60_000)) {
+      this.lastLeaderCheck = Date.now();
+      await this.reconcileLeaderPositions().catch((err) => this.log.warn({ err: (err as Error).message }, "live: leader position check failed"));
+    }
     await this.retrySales(now);
     const closeAll = fs.existsSync(this.opts.closeAllFile);
     for (const p of [...this.ours.values()]) {

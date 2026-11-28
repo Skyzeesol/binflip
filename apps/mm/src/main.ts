@@ -20,6 +20,9 @@ import {
 import { AccountWatcher } from "./accountWatcher.js";
 import { LiveMm } from "./live.js";
 import { serviceTick } from "./tick.js";
+import { leaderEvents, liveOpenAllowed } from "./leaderEvents.js";
+import { LeaderFeed } from "./leaderFeed.js";
+import { SlotGate } from "./slotGate.js";
 import { PublicKey } from "@solana/web3.js";
 
 /**
@@ -102,97 +105,66 @@ await runService("mm", async ({ config, log }) => {
   }
 
   // ── leader transactions ─────────────────────────────────────────────────────
-  let cursor: string | undefined;
-  const seen = new Set<string>();
-  const nullTries = new Map<string, number>();
-  const MAX_NULL_TRIES = 10; // ~30 s at the default poll interval
-
-  async function handleTx(tx: RawTransaction): Promise<void> {
-    if ((tx.meta as { err?: unknown }).err) return;
-    const t = (tx as { blockTime?: number }).blockTime ?? Math.floor(Date.now() / 1000);
-    const decoded = decodeMeteoraTx(tx).filter((d) => d.protocol === "dlmm");
-    const ixs = decoded.filter((d): d is DecodedIx => d.kind === "ix");
-    const evs = decoded.filter((d): d is DecodedEvent => d.kind === "event");
-    const str = (v: unknown) => (v && typeof (v as { toBase58?: () => string }).toBase58 === "function" ? (v as { toBase58: () => string }).toBase58() : String(v));
-    const big = (v: unknown) => BigInt(String(v ?? 0));
-
-    for (const e of evs) {
-      if (e.name === "Rebalancing") {
-        const d = e.data;
-        const position = str(d.position), pool = str(d.lb_pair);
-        if (str(d.owner) !== LEADER) continue;
-        const bs = await binStepOf(pool);
+  // Durable feed (cursor + replay guard persisted; paged history; unreadable txs parked and
+  // retried without blocking) → leaderEvents (strict open matching) → shadow book + live.
+  async function handleTx(tx: RawTransaction, info: { signature: string; slot: number; late: boolean }): Promise<void> {
+    if ((tx.meta as { err?: unknown } | null)?.err) return;
+    const blockTime = (tx as { blockTime?: number | null }).blockTime ?? undefined;
+    const t = blockTime ?? Math.floor(Date.now() / 1000); // shadow scoring only; live opens need a real block time
+    for (const ev of leaderEvents(decodeMeteoraTx(tx), LEADER)) {
+      if (ev.kind === "rebalance") {
+        const bs = await binStepOf(ev.pool);
         if (!bs) continue;
-        const next: MmRange = { lower: Number(d.new_min_id), upper: Number(d.new_max_id), side: big(d.x_added_amount) > 0n ? "token" : "sol" };
-        const cmp = book.onLeaderRebalance({ position, pool, binStep: bs, t, slot: tx.slot, active: Number(d.active_bin_id), old: { lower: Number(d.old_min_id), upper: Number(d.old_max_id) }, next });
-        write("compare", { sig: tx.signature, ...cmp });
-      } else if (e.name === "PositionClose") {
-        const position = str(e.data.position);
-        void live?.onLeaderClose(position);
-        const closed = book.onClose(position, t);
+        const cmp = book.onLeaderRebalance({ position: ev.position, pool: ev.pool, binStep: bs, t, slot: tx.slot, active: ev.active, old: ev.old, next: ev.next });
+        write("compare", { sig: info.signature, late: info.late || undefined, ...cmp });
+      } else if (ev.kind === "close") {
+        await live?.onLeaderClose(ev.position); // persists the close intent before returning
+        const closed = book.onClose(ev.position, t);
         if (closed) {
-          write("leader", { t, sig: tx.signature, kind: "close", position });
-          write("exits", { sig: tx.signature, ...closed.exit });
+          write("leader", { t, sig: info.signature, kind: "close", position: ev.position });
+          write("exits", { sig: info.signature, ...closed.exit });
         }
-      }
-    }
-
-    // Opens: initialize_position* gives the range, AddLiquidity tells the side.
-    const init = ixs.find((d) => d.name.startsWith("initialize_position"));
-    if (init) {
-      const position = init.accounts.position, pool = init.accounts.lb_pair;
-      if (position && pool && !book.has(position)) {
-        const bs = await binStepOf(pool);
-        const lower = Number(init.args.lower_bin_id), width = Number(init.args.width);
-        const add = evs.find((e) => e.name === "AddLiquidity");
-        const amounts = (add?.data.amounts as unknown[] | undefined) ?? [];
-        const side = big(amounts[0]) > 0n && big(amounts[1]) === 0n ? "token" : "sol";
-        if (bs && Number.isFinite(lower) && width > 0) {
-          book.onOpen({ position, pool, binStep: bs, range: { lower, upper: lower + width - 1, side }, t });
-          if (side === "sol" && Date.now() / 1000 - t < 120) void live?.onLeaderOpen({ leaderPosition: position, pool, t });
-          write("leader", { t, sig: tx.signature, kind: "open", position, pool, binStep: bs, lower, width, side, amountY: String(amounts[1] ?? "0") });
-        }
+      } else if (!book.has(ev.position)) {
+        const bs = await binStepOf(ev.pool);
+        if (!bs) continue;
+        write("leader", { t, sig: info.signature, kind: "open", position: ev.position, pool: ev.pool, binStep: bs, lower: ev.lower, width: ev.width, side: ev.side, amountX: ev.amountX.toString(), amountY: ev.amountY.toString(), blockTime: blockTime ?? null, late: info.late || undefined });
+        if (ev.side === "sol" || ev.side === "token") book.onOpen({ position: ev.position, pool: ev.pool, binStep: bs, range: { lower: ev.lower, upper: ev.lower + ev.width - 1, side: ev.side }, t });
+        if (live && liveOpenAllowed(ev, blockTime, Math.floor(Date.now() / 1000), info.late)) void live.onLeaderOpen({ leaderPosition: ev.position, pool: ev.pool, t: blockTime! });
       }
     }
   }
 
-  /**
-   * Leader transactions, oldest first. `cursor` only moves past a signature once that
-   * transaction is fully handled, so an RPC failure mid-batch is retried next poll
-   * instead of silently dropping the rest of the batch.
-   */
-  async function pollLeader(): Promise<void> {
-    const sigs = await rpc.getSignaturesForAddress(LEADER, { limit: 200, ...(cursor ? { until: cursor } : {}) });
-    if (!sigs.length) return;
-    if (!cursor) {
-      cursor = sigs[0]!.signature; // start from "now"; earlier positions are adopted on their next rebalance
-      return;
-    }
-    for (const s of sigs.reverse()) {
-      if (!seen.has(s.signature) && !s.err) {
-        const tx = await rpc.getTransaction(s.signature); // throws → cursor stays, batch retried
-        if (!tx) {
-          // Not yet visible at this commitment: retry next poll, but never let one
-          // signature block everything newer than it.
-          const n = (nullTries.get(s.signature) ?? 0) + 1;
-          nullTries.set(s.signature, n);
-          if (n < MAX_NULL_TRIES) return;
-          log.warn({ signature: s.signature, tries: n }, "leader tx never resolved; skipping it");
-          write("skipped", { t: Math.floor(Date.now() / 1000), signature: s.signature, tries: n });
-        } else {
-          await handleTx(tx);
-        }
-        nullTries.delete(s.signature);
-        seen.add(s.signature);
-      }
-      cursor = s.signature;
-    }
-    if (seen.size > 50_000) seen.clear();
-  }
+  const feed = new LeaderFeed(
+    {
+      getSignaturesForAddress: (a, o) => rpc.getSignaturesForAddress(a, o) as never,
+      getTransaction: (sig) => rpc.getTransaction(sig) as never,
+    },
+    LEADER,
+    path.join(OUT_DIR, "leader-feed.json"),
+    (tx, info) => handleTx(tx as unknown as RawTransaction, info),
+    {
+      onUnreadable: (signature, tries) => {
+        log.warn({ signature, tries }, "leader tx never became readable; reconciling copied positions from chain");
+        write("skipped", { t: Math.floor(Date.now() / 1000), signature, tries });
+        void live?.reconcileLeaderPositions("unreadable_tx");
+      },
+      onGap: (fetched) => {
+        log.warn({ fetched }, "leader history longer than the page limit; reconciling copied positions from chain");
+        void live?.reconcileLeaderPositions("history_gap");
+      },
+    },
+  );
+  const pollLeader = async () => {
+    await feed.poll();
+    lastLeaderOk = Date.now();
+  };
+  await live?.reconcileLeaderPositions("startup");
 
   // ── loops ───────────────────────────────────────────────────────────────────
   let stopped = false;
   let lastTickOk = Date.now();
+  let lastLeaderOk = Date.now();
+  const gate = new SlotGate(); // one slot order for WS pushes and RPC polls
   const loop = (name: string, ms: number, fn: () => Promise<void>) => {
     (async () => {
       while (!stopped) {
@@ -214,7 +186,8 @@ await runService("mm", async ({ config, log }) => {
           const s = decodeLbPair(Buffer.from(data, "base64"));
           binSteps.set(pool, s.binStep);
           const now = Math.floor(Date.now() / 1000);
-          for (const d of book.onTick(pool, s.activeId, now, slot || undefined)) write("ours", { t: now, slot, pool, active: s.activeId, via: "ws", ...d });
+          if (!gate.accept(pool, slot || undefined)) return; // older than what we already acted on
+          for (const d of book.onTick(pool, s.activeId, now, slot)) write("ours", { t: now, slot, pool, active: s.activeId, via: "ws", ...d });
           live?.onTick(pool, s.activeId);
           lastTickOk = Date.now();
         } catch (err) {
@@ -226,7 +199,7 @@ await runService("mm", async ({ config, log }) => {
 
   loop("leader", TX_POLL_MS, pollLeader);
   loop("tick", TICK_MS, async () => {
-    await serviceTick({ book, live, watcher, readPools, write });
+    await serviceTick({ book, live, watcher, readPools, write, gate });
     lastTickOk = Date.now();
   });
   const statsTimer = setInterval(() => {

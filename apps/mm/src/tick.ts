@@ -1,4 +1,5 @@
 import type { ShadowBook } from "@binflip/core";
+import type { SlotGate } from "./slotGate.js";
 
 /** What one service tick needs; main.ts wires the real ones, tests pass fakes. */
 export interface TickDeps {
@@ -7,6 +8,8 @@ export interface TickDeps {
   watcher: { setAddresses(pools: string[]): void } | null;
   readPools(pools: string[]): Promise<Map<string, { activeId: number; slot?: number }>>;
   write(kind: string, obj: Record<string, unknown>): void;
+  /** Shared with the WebSocket path: stale observations (older slot than already seen) are dropped. */
+  gate?: SlotGate;
 }
 
 /**
@@ -23,6 +26,7 @@ export async function serviceTick(d: TickDeps, now = Math.floor(Date.now() / 100
     try {
       const states = await d.readPools(pools);
       for (const [pool, s] of states) {
+        if (d.gate && !d.gate.accept(pool, s.slot)) continue; // older than what we already acted on
         for (const x of d.book.onTick(pool, s.activeId, now, s.slot)) d.write("ours", { t: now, slot: s.slot, pool, active: s.activeId, via: "poll", ...x });
         d.live?.onTick(pool, s.activeId);
       }
