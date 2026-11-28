@@ -212,7 +212,14 @@ export class ShadowBook {
 
     // The decision that answers this leader move is our first one since the last sync.
     const ours = p.pending[0];
-    const extra = Math.max(0, p.pending.length - 1);
+    // Decisions taken AFTER the leader's tx (by slot) answer the leader's NEXT move, which we may
+    // see only later (leader txs are polled). They were derived from our predicted range, so they
+    // stay valid only if our answer to this move landed exactly where the leader did.
+    const carry =
+      ours && e.slot !== undefined && sameRange(ours.next, e.next)
+        ? p.pending.slice(1).filter((d) => d.slot !== undefined && d.slot > e.slot!)
+        : [];
+    const extra = Math.max(0, p.pending.length - 1 - carry.length);
     let outcome: ShadowOutcome;
     const ourRange = { lower: p.range.lower, upper: p.range.upper };
     if (!ours && !sameRange(p.range, e.old)) {
@@ -255,8 +262,8 @@ export class ShadowBook {
     }
     if (this.stats.lagSec.length > 20_000) this.stats.lagSec.splice(0, 10_000);
 
-    p.range = e.next;
-    p.pending = [];
+    p.range = carry.length ? carry.at(-1)!.next : e.next;
+    p.pending = carry;
     p.syncedAt = e.t;
     p.syncedSlot = e.slot;
     p.leaderMoveAt = e.t;

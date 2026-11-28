@@ -254,6 +254,31 @@ describe("shadow timing by slot (exact range ≠ on time)", () => {
     expect(b.summary().matchBeforePct).toBe(0);
   });
 
+  it("leader moves twice in a few slots, we decided both before it: two matches, not match + missed", () => {
+    // Server case (DtJHCYzv, 08:16): our decisions at slots 100 and 103, leader txs at 101 and 104,
+    // and the leader txs are only processed after both of our decisions.
+    const b = open(); // [-572, -572] sol, bin step 80 → width 1
+    expect(b.onTick("L", -570, 1, 100)).toHaveLength(1); // → [-571, -571]
+    expect(b.onTick("L", -569, 2, 103)).toHaveLength(1); // → [-570, -570], from our predicted range
+    const a1 = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 1, slot: 101, active: -570, old: { lower: -572, upper: -572 }, next: { lower: -571, upper: -571, side: "sol" } });
+    const a2 = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 2, slot: 104, active: -569, old: { lower: -571, upper: -571 }, next: { lower: -570, upper: -570, side: "sol" } });
+    expect([a1.outcome, a1.timing, a1.extra]).toEqual(["match", "before", 0]);
+    expect([a2.outcome, a2.timing, a2.extra]).toEqual(["match", "before", 0]);
+    expect(b.summary().missedPct).toBe(0);
+  });
+
+  it("carried decisions are dropped when our answer did not land where the leader did", () => {
+    const b = open();
+    b.onTick("L", -570, 1, 100); // → [-571, -571]
+    b.onTick("L", -569, 2, 103); // → [-570, -570] (derived from [-571, -571])
+    // the leader went elsewhere: our later decision was built on a range that never existed
+    const c = b.onLeaderRebalance({ position: "P", pool: "L", binStep: 80, t: 1, slot: 101, active: -568, old: { lower: -572, upper: -572 }, next: { lower: -569, upper: -569, side: "sol" } });
+    expect(c.outcome).toBe("match_other_bin");
+    expect(c.extra).toBe(1);
+    expect(b.open[0]!.range).toEqual({ lower: -569, upper: -569, side: "sol" });
+    expect(b.open[0]!.pending).toHaveLength(0);
+  });
+
   it("no slots (old records) → unknown", () => {
     const b = open();
     b.onTick("L", -570, 99);

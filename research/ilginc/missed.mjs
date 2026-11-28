@@ -18,7 +18,8 @@ const dir = process.argv[2] ?? "mm-data";
 const read = (prefix) =>
   fs.readdirSync(dir).filter((f) => f.startsWith(prefix + ".")).sort()
     .flatMap((f) => fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
-const compares = read("compare").sort((a, b) => a.t - b.t);
+// leader slot order (several leader moves can share one block second)
+const compares = read("compare").sort((a, b) => (a.leaderSlot ?? 0) - (b.leaderSlot ?? 0) || a.t - b.t);
 const opens = read("leader").filter((l) => l.kind === "open");
 const str = (v) => (v && typeof v.toBase58 === "function" ? v.toBase58() : String(v));
 const getTx = (sig) => rpc("getTransaction", [sig, { encoding: "json", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
@@ -28,7 +29,7 @@ const missed = compares.filter((c) => c.outcome === OUTCOME);
 console.log(`${dir}: ${compares.length} comparisons, ${missed.length} ${OUTCOME}${OUTCOME === "missed" ? "" : " (control group: 'cause' labels only mean something for missed)"}`);
 const causes = {};
 for (const m of missed) {
-  const prev = compares.filter((c) => c.position === m.position && c.t <= m.t && c.sig !== m.sig).at(-1);
+  const prev = compares.slice(0, compares.indexOf(m)).filter((c) => c.position === m.position).at(-1);
   const open = opens.find((o) => o.position === m.position);
   const ours = prev ? { lower: prev.leader.next.lower, upper: prev.leader.next.upper, from: `compare ${prev.outcome} ${prev.sig?.slice(0, 8)}` }
     : open ? { lower: open.lower, upper: open.lower + open.width - 1, from: `open ${open.sig.slice(0, 8)}` } : null;
